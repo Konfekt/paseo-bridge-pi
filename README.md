@@ -45,7 +45,11 @@ bundles it at `.../Paseo/resources/bin/paseo.cmd` on Windows).
   tokens; prompts sent from the app run in the TUI (which stays usable).
 - Extension slash commands, skill commands, and prompt templates sent from
   Paseo are dispatched by pi instead of becoming literal user prompts.
-- Model and effort changes sync both ways.
+- Model and effort changes sync both ways. Import/reconnect echoes of the
+  already-selected model preserve the live thinking level instead of restoring
+  Pi's saved startup default. Selecting a different model and explicitly changing
+  thinking still use Pi's normal semantics. WebSocket sync waits for Paseo's
+  `status.server_info` admission acknowledgment before sending session requests.
 - Foreground Pi `subagent` fan-outs appear as one structured Paseo task card per
   child. Each card keeps a stable identity across live updates/history replay.
   Task ID, attempt, and delivery outcome metadata are preserved separately from

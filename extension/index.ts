@@ -39,6 +39,8 @@ import { coordinateMirroredSelect } from "./mirrored-select.js";
 import { createProviderReconnectLoop } from "./provider-reconnect.js";
 import { unknownRpcCommandError } from "./rpc-compat.js";
 import { buildSessionStats } from "./session-stats.js";
+import { createPaseoWsConnection } from "./paseo-ws.js";
+import { applyRemoteModel } from "./model-sync.js";
 import { normalizePiEventForPaseo } from "./tool-result-normalization.js";
 import { SubagentTaskProjection, projectSubagentMessages } from "./subagent-task-projection.js";
 import { TurnVisibilityProjection } from "./turn-visibility.js";
@@ -453,77 +455,14 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     const password = readPaseoPassword();
     const protocols = password ? [`paseo.bearer.${password}`] : undefined;
     const ws = new WebSocketCtor(url, protocols);
-    const pending = new Map<string, (payload: any) => void>();
     debugLog(`paseo sync websocket connecting to ${url}`);
-    const opened = new Promise<void>((resolve, reject) => {
-      ws.onopen = () => {
-        debugLog("paseo sync websocket connected");
-        ws.send(
-          JSON.stringify({
-            type: "hello",
-            clientId: `pi-paseo-bridge-${process.pid}`,
-            clientType: "cli",
-            protocolVersion: 1,
-            appVersion: PASEO_CLIENT_APP_VERSION,
-          }),
-        );
-        resolve();
-      };
-      ws.onerror = (event: unknown) => {
-        debugLog(`paseo sync websocket error: ${String((event as any)?.message ?? "connection error")}`);
-        reject(new Error("connection error"));
-      };
-    });
-    opened.catch(() => {}); // avoid unhandled rejection when nothing awaits yet
-    ws.onclose = (event: { code?: unknown; reason?: unknown }) => {
-      debugLog(`paseo sync websocket closed (code=${String(event?.code ?? "unknown")}, reason=${String(event?.reason ?? "none")})`);
-    };
-    ws.onmessage = (event: { data: unknown }) => {
-      try {
-        const msg = JSON.parse(String(event.data));
-        const payload = msg?.type === "session" ? msg.message?.payload : undefined;
-        const resolver = payload?.requestId ? pending.get(payload.requestId) : undefined;
-        if (resolver) {
-          pending.delete(payload.requestId);
-          debugLog(`paseo sync response received for ${payload.requestId}`);
-          resolver(payload);
-        } else if (msg?.type === "session") {
-          debugLog(`paseo sync received uncorrelated session message (requestId=${String(payload?.requestId ?? "none")})`);
-        }
-      } catch {
-        // initial state snapshot or binary frame - ignore
-      }
-    };
-    async function requestWithId(requestId: string, message: Record<string, unknown>): Promise<any> {
-      await opened;
-      return await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          pending.delete(requestId);
-          debugLog(`paseo sync request timed out: ${requestId}`);
-          reject(new Error("timeout"));
-        }, 5000);
-        pending.set(requestId, (payload) => {
-          clearTimeout(timer);
-          resolve(payload);
-        });
-        debugLog(`paseo sync sending ${String(message.type ?? "unknown")} (requestId=${requestId})`);
-        ws.send(JSON.stringify({ type: "session", message }));
-      });
-    }
-    return {
-      request(build) {
-        const requestId = crypto.randomUUID();
-        return requestWithId(requestId, build(requestId));
-      },
-      requestWithId,
-      close() {
-        try {
-          ws.close();
-        } catch {
-          // already closed
-        }
-      },
-    };
+    return createPaseoWsConnection(ws, {
+      type: "hello",
+      clientId: `pi-paseo-bridge-${process.pid}`,
+      clientType: "cli",
+      protocolVersion: 1,
+      appVersion: PASEO_CLIENT_APP_VERSION,
+    }, { log: debugLog });
   }
 
   async function resolvePaseoSelect(requestId: string, value: string | undefined): Promise<unknown> {
@@ -798,8 +737,10 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
             send(failure(id, type, `Model not found: ${cmd.provider}/${cmd.modelId}`));
             return;
           }
-          remoteAppliedModel = modelToId(model);
-          const ok = await pi.setModel(model);
+          const ok = await applyRemoteModel(latestCtx?.model, model, async (nextModel) => {
+            remoteAppliedModel = modelToId(nextModel);
+            return pi.setModel(nextModel);
+          });
           if (!ok) {
             send(failure(id, type, `No API key available for ${cmd.provider}/${cmd.modelId}`));
             return;
