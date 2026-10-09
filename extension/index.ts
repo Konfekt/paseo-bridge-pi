@@ -38,6 +38,7 @@ import { dispatchPaseoPrompt } from "./prompt-dispatch.js";
 import { coordinateMirroredSelect } from "./mirrored-select.js";
 import { createProviderReconnectLoop } from "./provider-reconnect.js";
 import { unknownRpcCommandError } from "./rpc-compat.js";
+import { buildSessionStats } from "./session-stats.js";
 import { normalizePiEventForPaseo } from "./tool-result-normalization.js";
 import { SubagentTaskProjection, projectSubagentMessages } from "./subagent-task-projection.js";
 import { TurnVisibilityProjection } from "./turn-visibility.js";
@@ -812,7 +813,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
           send(success(id, type));
           return;
         case "get_session_stats":
-          send(success(id, type, { contextUsage: latestCtx?.getContextUsage() }));
+          send(success(id, type, buildSessionStats(latestCtx)));
           return;
         case "get_commands":
           send(success(id, type, { commands: pi.getCommands() }));
