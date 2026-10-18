@@ -33,7 +33,7 @@ export async function dispatchPaseoPrompt(
     ...(streaming ? { deliverAs: "followUp" as const } : {}),
     expandPromptTemplates: true,
   };
-  if (!command && pi.dispatchCancellablePrompt) {
+  if (!command && !streaming && pi.dispatchCancellablePrompt) {
     const submitted = await pi.dispatchCancellablePrompt(content, options);
     return submitted ? { agentInvoked: true } : { agentInvoked: false, cancelled: true };
   }

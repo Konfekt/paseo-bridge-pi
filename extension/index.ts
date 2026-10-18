@@ -689,13 +689,17 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       getCommands: () => pi.getCommands(),
       sendUserMessage: (promptContent: any, options: any) => pi.sendUserMessage(promptContent, options),
       dispatchCancellablePrompt: async (promptContent: any, options: any): Promise<boolean> => {
-        const state = { result: true };
-        const globals = globalThis as Record<string, unknown>;
+        const globals = globalThis as Record<string, any>;
         if (globals[REMOTE_IDLE_PROMPT_KEY]) throw new Error("Another Paseo prompt is awaiting pre-send confirmation.");
+        let resolve!: (approved: boolean) => void;
+        const result = new Promise<boolean>((settle) => { resolve = settle; });
+        const state = { resolve };
         globals[REMOTE_IDLE_PROMPT_KEY] = state;
         try {
-          await pi.sendUserMessage(promptContent, options);
-          return state.result;
+          // sendUserMessage is deliberately fire-and-forget in the ExtensionAPI.
+          // Wait for the input hook to approve or consume this exact prompt.
+          pi.sendUserMessage(promptContent, options);
+          return await result;
         } finally {
           if (globals[REMOTE_IDLE_PROMPT_KEY] === state) delete globals[REMOTE_IDLE_PROMPT_KEY];
         }

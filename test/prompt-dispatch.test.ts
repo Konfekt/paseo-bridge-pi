@@ -81,6 +81,21 @@ test("cancellable ordinary prompt preserves the draft on cancellation", async ()
   assert.deepEqual(received, { expandPromptTemplates: true });
 });
 
+test("cancellable ordinary prompt waits for the input-hook decision", async () => {
+  let decide!: (approved: boolean) => void;
+  const pi = {
+    getCommands: () => [],
+    sendUserMessage() {},
+    dispatchCancellablePrompt() { return new Promise<boolean>((resolve) => { decide = resolve; }); },
+  };
+  let settled = false;
+  const dispatch = dispatchPaseoPrompt(pi, "draft", "draft", false).then((value) => { settled = true; return value; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  decide(false);
+  assert.deepEqual(await dispatch, { agentInvoked: false, cancelled: true });
+});
+
 test("cancellable ordinary prompt submits exactly once on Ignore", async () => {
   let submissions = 0;
   const pi = {
