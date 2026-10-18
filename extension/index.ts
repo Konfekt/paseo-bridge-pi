@@ -34,7 +34,8 @@ import {
 import { foregroundTasksSocketPath, removeForegroundTasksDescriptor, writeForegroundTasksDescriptor } from "./foreground-task-operator.js";
 import { isRuntimeReloadCommand, requireIdleReload, validateReloadPrompt } from "./reload-command.js";
 import { abortAndWaitForIdle } from "./abort-dispatch.js";
-import { dispatchPaseoPrompt } from "./prompt-dispatch.js";
+import { dispatchPaseoPrompt, isExtensionCommand } from "./prompt-dispatch.js";
+import { dispatchAfterIdlePreflight, IDLE_PREFLIGHT_KEY } from "./idle-preflight.js";
 import { coordinateMirroredSelect } from "./mirrored-select.js";
 import { createProviderReconnectLoop } from "./provider-reconnect.js";
 import { unknownRpcCommandError } from "./rpc-compat.js";
@@ -64,7 +65,6 @@ type PendingRemoteUiRequest = {
 };
 
 const REMOTE_UI_BRIDGE_KEY = "__piPaseoRemoteUiV1";
-const REMOTE_IDLE_PROMPT_KEY = "__piPaseoIdlePromptV1";
 
 // Markers and command names must match Paseo's pi adapter
 // (@getpaseo/server dist/server/server/agent/providers/pi/agent.js).
@@ -284,6 +284,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   let reloadExecuting = false;
   let commandsInFlight = 0;
   let lifecycleClosed = false;
+  let preflightAbortController = new AbortController();
   let placementTimer: ReturnType<typeof setInterval> | undefined;
   let lastPlacement = "";
   let lastAgentTag = "";
@@ -644,6 +645,16 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     };
   }
 
+  async function preflightUserPrompt(id: string, commandType = "prompt"): Promise<boolean> {
+    const capability = (globalThis as Record<string, unknown>)[IDLE_PREFLIGHT_KEY];
+    const gated = await dispatchAfterIdlePreflight(capability, preflightAbortController.signal, async () => true);
+    if (gated.dispatched) return true;
+    const error = gated.outcome === "cancel" ? "Prompt cancelled; draft restored." :
+      "Prompt not sent: pre-send confirmation could not complete.";
+    send(failure(id, commandType, error));
+    return false;
+  }
+
   async function handlePrompt(cmd: any): Promise<void> {
     const message: string = typeof cmd.message === "string" ? cmd.message : "";
     if (/^\/reload(?:\s|$)/.test(message.trim())) {
@@ -685,35 +696,12 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       ? [{ type: "text", text: message }, ...cmd.images]
       : message;
     const streaming = latestCtx ? !latestCtx.isIdle() : false;
-    const dispatchApi = {
-      getCommands: () => pi.getCommands(),
-      sendUserMessage: (promptContent: any, options: any) => pi.sendUserMessage(promptContent, options),
-      dispatchCancellablePrompt: async (promptContent: any, options: any): Promise<boolean> => {
-        const globals = globalThis as Record<string, any>;
-        if (globals[REMOTE_IDLE_PROMPT_KEY]) throw new Error("Another Paseo prompt is awaiting pre-send confirmation.");
-        let resolve!: (approved: boolean) => void;
-        const result = new Promise<boolean>((settle) => { resolve = settle; });
-        const state = { resolve };
-        globals[REMOTE_IDLE_PROMPT_KEY] = state;
-        try {
-          // sendUserMessage is deliberately fire-and-forget in the ExtensionAPI.
-          // Wait for the input hook to approve or consume this exact prompt.
-          pi.sendUserMessage(promptContent, options);
-          return await result;
-        } finally {
-          if (globals[REMOTE_IDLE_PROMPT_KEY] === state) delete globals[REMOTE_IDLE_PROMPT_KEY];
-        }
-      },
-    };
-    const result = await dispatchPaseoPrompt(dispatchApi, content as any, message, streaming, (err) =>
+    if (!isExtensionCommand(pi, message) && !(await preflightUserPrompt(cmd.id))) return;
+    const dispatch = () => dispatchPaseoPrompt(pi, content as any, message, streaming, (err) =>
       debugLog(`prompt failed after acceptance: ${String(err)}`),
     );
-    if (result.cancelled) {
-      // A failed submit makes Paseo restore its composer draft and attachments;
-      // a successful no-turn acknowledgement would consume the submitted text.
-      send(failure(cmd.id, "prompt", "Prompt cancelled; draft restored."));
-      return;
-    }
+    let result: { agentInvoked: boolean };
+    result = await dispatch();
     send(success(cmd.id, "prompt", result));
   }
 
@@ -735,10 +723,12 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
           await handlePrompt(cmd);
           return;
         case "steer":
+          if (!isExtensionCommand(pi, cmd.message) && !(await preflightUserPrompt(id, type))) return;
           pi.sendUserMessage(cmd.message, { deliverAs: "steer" });
           send(success(id, type));
           return;
         case "follow_up":
+          if (!isExtensionCommand(pi, cmd.message) && !(await preflightUserPrompt(id, type))) return;
           pi.sendUserMessage(cmd.message, { deliverAs: "followUp" });
           send(success(id, type));
           return;
@@ -1059,6 +1049,8 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         revokeForegroundTasksDescriptor();
         transport?.rotateOperatorEpoch();
         cancelPendingRemoteUiRequests();
+        preflightAbortController.abort();
+        preflightAbortController = new AbortController();
         providerReconnect.trigger();
         debugLog("client disconnected");
       },
@@ -1072,6 +1064,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     revokeForegroundTasksDescriptor();
     providerReconnect.stop();
     cancelPendingRemoteUiRequests();
+    preflightAbortController.abort();
     transport?.close();
     transport = null;
     currentSessionFile = null;
@@ -1322,6 +1315,8 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (event, ctx) => {
+    preflightAbortController.abort();
+    preflightAbortController = new AbortController();
     latestCtx = ctx;
     const retained = event.reason === "reload"
       ? takeBridgeAfterReload(ctx.sessionManager.getSessionFile())
@@ -1385,6 +1380,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       revokeForegroundTasksDescriptor();
       providerReconnect.stop();
       cancelPendingRemoteUiRequests();
+      preflightAbortController.abort();
       retainBridgeForReload(transport, currentAgentId, titleAttempted);
       transport = null;
     } else {
