@@ -64,6 +64,7 @@ type PendingRemoteUiRequest = {
 };
 
 const REMOTE_UI_BRIDGE_KEY = "__piPaseoRemoteUiV1";
+const REMOTE_IDLE_PROMPT_KEY = "__piPaseoIdlePromptV1";
 
 // Markers and command names must match Paseo's pi adapter
 // (@getpaseo/server dist/server/server/agent/providers/pi/agent.js).
@@ -684,9 +685,31 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       ? [{ type: "text", text: message }, ...cmd.images]
       : message;
     const streaming = latestCtx ? !latestCtx.isIdle() : false;
-    const result = await dispatchPaseoPrompt(pi, content as any, message, streaming, (err) =>
+    const dispatchApi = {
+      getCommands: () => pi.getCommands(),
+      sendUserMessage: (promptContent: any, options: any) => pi.sendUserMessage(promptContent, options),
+      dispatchCancellablePrompt: async (promptContent: any, options: any): Promise<boolean> => {
+        const state = { result: true };
+        const globals = globalThis as Record<string, unknown>;
+        if (globals[REMOTE_IDLE_PROMPT_KEY]) throw new Error("Another Paseo prompt is awaiting pre-send confirmation.");
+        globals[REMOTE_IDLE_PROMPT_KEY] = state;
+        try {
+          await pi.sendUserMessage(promptContent, options);
+          return state.result;
+        } finally {
+          if (globals[REMOTE_IDLE_PROMPT_KEY] === state) delete globals[REMOTE_IDLE_PROMPT_KEY];
+        }
+      },
+    };
+    const result = await dispatchPaseoPrompt(dispatchApi, content as any, message, streaming, (err) =>
       debugLog(`prompt failed after acceptance: ${String(err)}`),
     );
+    if (result.cancelled) {
+      // A failed submit makes Paseo restore its composer draft and attachments;
+      // a successful no-turn acknowledgement would consume the submitted text.
+      send(failure(cmd.id, "prompt", "Prompt cancelled; draft restored."));
+      return;
+    }
     send(success(cmd.id, "prompt", result));
   }
 

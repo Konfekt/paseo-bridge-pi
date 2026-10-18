@@ -65,6 +65,36 @@ test("expands ordinary prompts while acknowledging them asynchronously", async (
   completion.resolve();
 });
 
+test("cancellable ordinary prompt preserves the draft on cancellation", async () => {
+  let submissions = 0;
+  let received: unknown;
+  const pi = {
+    getCommands: () => [],
+    sendUserMessage() { submissions += 1; },
+    async dispatchCancellablePrompt(_content: unknown, options: unknown) {
+      received = options;
+      return false;
+    },
+  };
+  assert.deepEqual(await dispatchPaseoPrompt(pi, "draft", "draft", false), { agentInvoked: false, cancelled: true });
+  assert.equal(submissions, 0);
+  assert.deepEqual(received, { expandPromptTemplates: true });
+});
+
+test("cancellable ordinary prompt submits exactly once on Ignore", async () => {
+  let submissions = 0;
+  const pi = {
+    getCommands: () => [],
+    sendUserMessage() { submissions += 1; },
+    async dispatchCancellablePrompt(content: unknown, options: unknown) {
+      pi.sendUserMessage(content, options);
+      return true;
+    },
+  };
+  assert.deepEqual(await dispatchPaseoPrompt(pi, "draft", "draft", false), { agentInvoked: true });
+  assert.equal(submissions, 1);
+});
+
 test("reports extension command failures", async () => {
   const failure = new Error("command failed");
   const pi = {

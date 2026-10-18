@@ -7,6 +7,7 @@ type PromptCommand = { name: string; source: string };
 type PromptApi = {
   getCommands(): PromptCommand[];
   sendUserMessage(content: PromptContent, options?: PromptOptions): void | Promise<void>;
+  dispatchCancellablePrompt?(content: PromptContent, options?: PromptOptions): Promise<boolean>;
 };
 
 function extensionCommandName(message: string): string | null {
@@ -26,12 +27,17 @@ export async function dispatchPaseoPrompt(
   message: string,
   streaming: boolean,
   onAsyncError: (error: unknown) => void = () => {},
-): Promise<{ agentInvoked: boolean }> {
+): Promise<{ agentInvoked: boolean; cancelled?: boolean }> {
   const command = isExtensionCommand(pi, message);
-  const submission = pi.sendUserMessage(content, {
+  const options = {
     ...(streaming ? { deliverAs: "followUp" as const } : {}),
     expandPromptTemplates: true,
-  });
+  };
+  if (!command && pi.dispatchCancellablePrompt) {
+    const submitted = await pi.dispatchCancellablePrompt(content, options);
+    return submitted ? { agentInvoked: true } : { agentInvoked: false, cancelled: true };
+  }
+  const submission = pi.sendUserMessage(content, options);
 
   // Extension commands execute immediately and may be asynchronous. Wait for
   // them so Paseo receives a failure rather than treating the command as an
