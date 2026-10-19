@@ -10,6 +10,7 @@ import {
   type PermissionGateOperatorIdentityV1,
 } from "./permission-gate-operator.js";
 import { decodeForegroundTasksFrame, foregroundTasksCapability, foregroundTasksSocketPath, validateForegroundTasksEnvelope, type ForegroundTasksAuthIdentityV1 } from "./foreground-task-operator.js";
+import { accountControlsCapability, accountControlsSocketPath, validateAccountControlsEnvelope } from "./account-controls-operator.js";
 
 type Callbacks = {
   command(value: any): Promise<void>;
@@ -21,6 +22,8 @@ type Callbacks = {
   harnessReadOnly?(request: unknown): Promise<unknown>;
   foregroundTasksIdentity?(): ForegroundTasksAuthIdentityV1 | undefined;
   foregroundTasks?(request: unknown): Promise<unknown>;
+  accountControlsIdentity?(): { agentId: string; sessionId: string; runtimeEpoch: string; serviceEpoch: string; capability: string } | undefined;
+  accountControls?(request: unknown): Promise<unknown>;
 };
 
 /** Socket ownership is independent of the replaceable extension context. */
@@ -33,6 +36,8 @@ export class BridgeTransport {
   private readonlySockets = new Set<net.Socket>();
   private foregroundTasksServer: net.Server | null = null;
   private foregroundTasksSockets = new Set<net.Socket>();
+  private accountControlsServer: net.Server | null = null;
+  private accountControlsSockets = new Set<net.Socket>();
   private client: net.Socket | null = null;
   private callbacks?: Callbacks;
   private closed = false;
@@ -48,7 +53,9 @@ export class BridgeTransport {
   private _harnessReadOnlyCapability?: string;
   private _foregroundTasksCapability?: string;
   get foregroundTasksCapability(): string { return this._foregroundTasksCapability ??= foregroundTasksCapability(); }
-  rotateOperatorEpoch(): void { this._operatorEpoch = randomUUID(); this._harnessReadOnlyCapability = randomBytes(32).toString("hex"); this._foregroundTasksCapability = foregroundTasksCapability(); }
+  private _accountControlsCapability?: string;
+  get accountControlsCapability(): string { return this._accountControlsCapability ??= accountControlsCapability(); }
+  rotateOperatorEpoch(): void { this._operatorEpoch = randomUUID(); this._harnessReadOnlyCapability = randomBytes(32).toString("hex"); this._foregroundTasksCapability = foregroundTasksCapability(); this._accountControlsCapability = accountControlsCapability(); }
 
   constructor(sessionFile: string, pipePath: string) {
     this.sessionFile = sessionFile;
@@ -65,6 +72,7 @@ export class BridgeTransport {
       this.ensureOperatorEndpoint();
       this.ensureReadonlyEndpoint();
       this.ensureForegroundTasksEndpoint();
+      this.ensureAccountControlsEndpoint();
     }
     if (this.connected) callbacks.attached();
   }
@@ -80,6 +88,7 @@ export class BridgeTransport {
     this.ensureOperatorEndpoint();
     this.ensureReadonlyEndpoint();
     this.ensureForegroundTasksEndpoint();
+    this.ensureAccountControlsEndpoint();
     this.server = net.createServer((socket) => this.attach(socket));
     this.server.on("error", (error) => this.callbacks?.error(error));
     this.server.listen(this.pipePath, () => {
@@ -247,6 +256,40 @@ export class BridgeTransport {
     this.foregroundTasksServer.listen(socketPath, () => { if (process.platform !== "win32") { try { fs.chmodSync(socketPath, 0o600); } catch {} } });
   }
 
+  private ensureAccountControlsEndpoint(): void {
+    this.accountControlsSockets ??= new Set<net.Socket>();
+    if (this.accountControlsServer || this.closed) return;
+    const socketPath = accountControlsSocketPath(this.pipePath);
+    if (process.platform !== "win32") { try { fs.unlinkSync(socketPath); } catch {} }
+    this.accountControlsServer = net.createServer((socket) => {
+      if (this.accountControlsSockets.size >= 8 || this.closed) { socket.destroy(); return; }
+      this.accountControlsSockets.add(socket); socket.on("close", () => this.accountControlsSockets.delete(socket));
+      socket.setTimeout(10_000, () => socket.destroy()); let buffer = Buffer.alloc(0); let received = false;
+      socket.on("data", (chunk: Buffer) => {
+        if (received || buffer.length + chunk.length > 32 * 1024) { socket.destroy(); return; }
+        buffer = Buffer.concat([buffer, chunk]); const newline = buffer.indexOf(0x0a); if (newline < 0) return;
+        received = true; const id = "invalid";
+        void (async () => {
+          let requestId = id, response: any;
+          try {
+            const frame = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, newline))); requestId = frame?.id ?? id;
+            const identity = this.callbacks?.accountControlsIdentity?.(); const execute = this.callbacks?.accountControls;
+            if (newline !== buffer.length - 1 || !identity || !execute || !validateAccountControlsEnvelope(frame, identity)) throw new Error("Account-controls authentication failed");
+            const data = await execute(frame.request);
+            const current = this.callbacks?.accountControlsIdentity?.();
+            if (!current || current.agentId !== identity.agentId || current.sessionId !== identity.sessionId || current.runtimeEpoch !== identity.runtimeEpoch
+              || current.serviceEpoch !== identity.serviceEpoch || current.capability !== identity.capability) throw new Error("Account-controls identity changed during request");
+            response = { v: 1, type: "account_controls", id: requestId, success: true, agentId: identity.agentId, sessionId: identity.sessionId, runtimeEpoch: identity.runtimeEpoch, serviceEpoch: identity.serviceEpoch, data };
+          } catch (error) { response = { v: 1, type: "account_controls", id: requestId, success: false, error: error instanceof Error ? error.message.replace(/[\r\n\x00-\x1f\x7f]+/g, " ").slice(0, 250) : "Account-controls request failed" }; }
+          const output = `${JSON.stringify(response)}\n`;
+          if (Buffer.byteLength(output) <= 128 * 1024) socket.end(output); else socket.end(`${JSON.stringify({ v: 1, type: "account_controls", id: requestId, success: false, error: "Oversized account-controls response" })}\n`);
+        })();
+      });
+    });
+    this.accountControlsServer.on("error", (error) => this.callbacks?.error(error));
+    this.accountControlsServer.listen(socketPath, () => { if (process.platform !== "win32") { try { fs.chmodSync(socketPath, 0o600); } catch {} } });
+  }
+
   private ensureForkSnapshotEndpoint(): void {
     if (this.snapshotServer || this.closed) return;
     // A separate read-only endpoint never takes over Paseo's controller socket.
@@ -293,6 +336,10 @@ export class BridgeTransport {
     this.readonlyServer = null;
     this.foregroundTasksServer?.close();
     this.foregroundTasksServer = null;
+    this.accountControlsServer?.close();
+    this.accountControlsServer = null;
+    for (const socket of this.accountControlsSockets ?? []) socket.destroy();
+    this.accountControlsSockets?.clear();
     for (const socket of this.foregroundTasksSockets ?? []) socket.destroy();
     this.foregroundTasksSockets?.clear();
     for (const socket of this.operatorSockets ?? []) socket.destroy();
@@ -305,6 +352,7 @@ export class BridgeTransport {
       try { fs.unlinkSync(permissionGateOperatorSocketPath(this.pipePath)); } catch {}
       try { fs.unlinkSync(`${this.pipePath}.harness-readonly`); } catch {}
       try { fs.unlinkSync(foregroundTasksSocketPath(this.pipePath)); } catch {}
+      try { fs.unlinkSync(accountControlsSocketPath(this.pipePath)); } catch {}
     }
   }
 

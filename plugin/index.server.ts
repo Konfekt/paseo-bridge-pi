@@ -6,6 +6,8 @@ import { observabilitySnapshotRpc } from './shared/observability';
 import { createHarnessReadOnlyHandlers } from "./server/harness-readonly";
 import { createForegroundTasksHandlers } from "./server/foreground-tasks";
 import { foregroundTasksRpc, foregroundTasksStatusRpc } from "./shared/foreground-tasks";
+import { createAccountControlsHandlers } from "./server/account-controls";
+import { accountControlsStatusRpc, accountControlsSwitchRpc } from "./shared/account-controls";
 
 export default function contribute(server: PluginServerContext) {
   const handlers = createHandlers(readOperatorDescriptor);
@@ -21,5 +23,8 @@ export default function contribute(server: PluginServerContext) {
   const foregroundTasks = createForegroundTasksHandlers();
   server.handle(foregroundTasksStatusRpc, foregroundTasks.status);
   server.handle(foregroundTasksRpc, foregroundTasks.control);
+  const accountControls = createAccountControlsHandlers();
+  server.handle(accountControlsStatusRpc, accountControls.status);
+  server.handle(accountControlsSwitchRpc, accountControls.switch);
   return () => {};
 }

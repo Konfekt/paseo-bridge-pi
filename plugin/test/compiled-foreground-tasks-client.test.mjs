@@ -71,6 +71,7 @@ test('compiled foreground popover reports closed-state attention, persists inter
     paseo: { agents: { list: async () => ({ subscription: { subscribe: value => observers.push(value) } }) } },
     rpc: async (contract, input) => { statusCalls.push({ name: contract.name, input }); return status; },
     addWorkspacePanel: () => () => {},
+    addHeaderButton: button => ({ ...button, update() {}, remove() {} }),
     addComposerPill: pill => {
       const registration = { ...pill, updates: [], update(patch) { this.updates.push(patch); this.button = { ...this.button, ...patch }; }, remove() {} };
       pills.push(registration); return registration;

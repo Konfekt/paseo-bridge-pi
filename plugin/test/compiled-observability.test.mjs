@@ -27,13 +27,20 @@ test("native Activity dashboard shows every section, accessible meters and expan
 		client: resolve(root, "index.client.tsx"),
 	});
 	let panel,
-		observer,
+		observers = [],
+		agentSubscriptions = [],
+		signals = [],
+		accountSubscription,
+		subscriptionCount = 0,
 		signal,
 		pill,
+		header,
+		headers = [],
 		removed = false,
 		hook = 0,
 		refreshes = 0;
 	const states = [],
+		effects = [],
 		queries = [],
 		calls = [];
 	const identity = {
@@ -42,6 +49,8 @@ test("native Activity dashboard shows every section, accessible meters and expan
 		runtimeEpoch: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa",
 	};
 	let status = { data: identity };
+	const accountSnapshot = { protocol: 1, serviceEpoch: "service-1", selectionRevision: 0, sessionId: "session", accounts: [{ id: "named-1", label: "Work", authKind: "oauth" }], currentAccountId: null, defaultSelected: true, activationStatus: "active", busy: false, canSwitch: true, usage: { effectiveCredential: "unknown", status: "unknown", remoteEntitlement: "not-queried", settingsUrl: "https://chatgpt.com/settings/usage" } };
+	let accountStatus = { data: { available: true, sessionId: "session", runtimeEpoch: identity.runtimeEpoch, snapshot: accountSnapshot, reason: null }, isError: false }, switchCalls = [], switchResult = { ok: true, requestId: "00000000-0000-4000-8000-000000000001", snapshot: accountSnapshot }, switchReject = false, updatedAt = 100, openedUrls = [], statusResponseGates = [];
 	const snap = (feature, data) => ({
 		data: {
 			protocol: 1,
@@ -118,6 +127,8 @@ test("native Activity dashboard shows every section, accessible meters and expan
 				useRpc: (contract) => async (input) => {
 					contract.input.parse(input);
 					calls.push({ contract, input });
+					if (contract.name === "account_controls_status") { const data=accountStatus.data; const gate=statusResponseGates.shift(); if(gate) await gate.wait; return data; }
+					if (contract.name === "account_controls_switch") { switchCalls.push(input); if (switchReject) throw new Error("socket timed out"); return switchResult; }
 					return {};
 				},
 			};
@@ -135,30 +146,39 @@ test("native Activity dashboard shows every section, accessible meters and expan
 		if (name === "@getpaseo/plugin/client/react-native")
 			return { ScrollView: "ScrollView" };
 		if (name === "react-native")
-			return { Text: "Text", View: "View", Pressable: "Pressable" };
+			return { Text: "Text", View: "View", Pressable: "Pressable", Linking: { openURL: async url => openedUrls.push(url) } };
 		if (name === "react/jsx-runtime")
 			return { jsx, jsxs: jsx, Fragment: "Fragment" };
 		if (name === "react")
 			return {
+				useEffect: (effect) => { const cleanup = effect(); if (typeof cleanup === "function") effects.push(cleanup); },
 				useState: (initial) => {
 					const index = hook++;
 					if (!(index in states)) states[index] = initial;
-					return [states[index], (value) => (states[index] = value)];
+					return [states[index], (value) => (states[index] = typeof value === "function" ? value(states[index]) : value)];
 				},
 			};
 		if (name === "@tanstack/react-query")
 			return {
 				useQuery: (options) => {
 					queries.push(options);
+					if (options.queryKey[0] === "pi-account-controls") void options.queryFn();
 					return {
 						isPending: false,
 						isError: false,
 						refetch: async () => {
 							refreshes++;
+							if(options.queryKey[0]==="pi-account-controls") {
+								const data=await options.queryFn(); updatedAt++;
+								return {data,isError:accountStatus.isError,dataUpdatedAt:updatedAt};
+							}
+							return { data: options.queryKey[0] === "pi-activity-identity" ? status.data : results[options.queryKey.at(-1)]?.data, isError: false, dataUpdatedAt: updatedAt };
 						},
+						dataUpdatedAt: updatedAt,
+						...(options.queryKey[0]==="pi-account-controls"?{isError:accountStatus.isError}:{}),
 						...(options.queryKey[0] === "pi-activity-identity"
 							? status
-							: results[options.queryKey.at(-1)]),
+							: options.queryKey[0] === "pi-account-controls" ? accountStatus : results[options.queryKey.at(-1)]),
 					};
 				},
 			};
@@ -171,7 +191,8 @@ test("native Activity dashboard shows every section, accessible meters and expan
 			agents: {
 				list: async (o) => {
 					signal = o.signal;
-					return { subscription: { subscribe: (x) => (observer = x) } };
+					signals.push(o.signal);
+					return { subscription: { subscribe: (x) => { subscriptionCount++; agentSubscriptions.push(x); if (subscriptionCount <= 4) observers.push(x); else accountSubscription = x; } } };
 				},
 			},
 		},
@@ -179,14 +200,11 @@ test("native Activity dashboard shows every section, accessible meters and expan
 			panel = p;
 			return () => (removed = true);
 		},
+		addHeaderButton: (p) => { header = { ...p, remove() { this.removed = true; }, update() {} }; headers.push(header); return header; },
 		addComposerPill: (p) => {
-			pill = {
-				...p,
-				remove() {
-					this.removed = true;
-				},
-			};
-			return pill;
+			const registered = { ...p, remove() { this.removed = true; }, update() {} };
+			if (p.id === "pi-activity") pill = registered;
+			return registered;
 		},
 		openPanel() {},
 	});
@@ -222,12 +240,17 @@ test("native Activity dashboard shows every section, accessible meters and expan
 	};
 	try {
 		await new Promise((r) => setImmediate(r));
-		observer.snapshot({
-			entries: [
-				{ agent: { id: "agent", workspaceId: "workspace", provider: "pi" } },
-			],
-		});
+		for (const observer of observers) observer.snapshot({ entries: [{ agent: { id: "agent", workspaceId: "workspace", provider: "pi" } }] });
+		accountSubscription?.snapshot({ entries: [
+			{ agent: { id: "agent", workspaceId: "workspace", provider: "pi" } },
+			{ agent: { id: "second-agent", name: "Second", workspaceId: "workspace", provider: "pi" } },
+		] });
 		assert.equal(pill.id, "pi-activity");
+		assert.equal(pill.agentId, "agent");
+		assert.equal(header.id, "pi-accounts");
+		assert.equal(header.button.behavior.kind, "popover");
+		assert.equal(header.workspaceId, "workspace");
+		assert.equal(headers.length, 1, "workspace receives one Accounts header regardless of Pi agent count");
 		let tree = render();
 		assert.equal(
 			nodes(tree).filter((n) => n.type === "SettingsSection").length,
@@ -267,7 +290,7 @@ test("native Activity dashboard shows every section, accessible meters and expan
 		assert.match(text(tree), /Shipped/);
 		press(tree, "Refresh");
 		assert.equal(refreshes, 4);
-		for (const query of queries.slice(1)) {
+		for (const query of queries.slice(1,4)) {
 			assert.equal(query.queryKey[1], "host");
 			await query.queryFn();
 		}
@@ -275,7 +298,10 @@ test("native Activity dashboard shows every section, accessible meters and expan
 			calls.map((c) => c.input.feature),
 			["progress", "cache", "stamp"],
 		);
-		assert.ok(calls.every((c) => c.input.expectedSessionId === "session"));
+		assert.doesNotMatch(text(tree), /Account|Usage/);
+		assert.equal(nodes(tree).filter((n) => n.type === "SettingsSection").map(n => n.props.title).join(","), "Progress,Cache,Recent responses");
+
+		assert.ok(calls.filter(c=>c.input.feature).every((c) => c.input.expectedSessionId === "session"));
 		results.progress.isError = true;
 		tree = render();
 		assert.doesNotMatch(text(tree), /Approve review/);
@@ -309,10 +335,108 @@ test("native Activity dashboard shows every section, accessible meters and expan
 		assert.doesNotMatch(text(tree), /Approve review|gpt-6-astra/);
 		assert.ok(queries.slice(1).every((q) => q.enabled === false));
 		assert.doesNotMatch(text(tree), /not a|not independent/);
+		states.length = 0; hook = 0;
+		const accountProps = { context: "workspace", workspaceId: "workspace", host: { id: "host", label: "Local" }, theme: { colors } };
+		const accountRender = () => { hook = 0; return header.button.behavior.Content(accountProps); };
+		let accountTree = accountRender();
+		await new Promise(r => setImmediate(r));
+		assert.ok(agentSubscriptions.length >= 6, `expected popover subscription, got ${agentSubscriptions.length}`);
+		agentSubscriptions.at(-1).snapshot({ entries: [
+			{ agent: { id: "agent-a", name: "Alpha", workspaceId: "workspace", provider: "pi" } },
+			{ agent: { id: "agent-b", name: "Beta", workspaceId: "workspace", provider: "pi" } },
+		] });
+		accountTree = accountRender();
+		assert.match(text(accountTree), /Choose the Pi session/);
+		assert.match(text(accountTree), /Alpha/);
+		assert.match(text(accountTree), /Beta/);
+		assert.equal(accountTree.props.style.maxHeight, 520);
+		let releaseAlpha;
+		statusResponseGates.push({ wait: new Promise(resolve => releaseAlpha = resolve) });
+		const alpha = nodes(accountTree).find(n => n.type === "Pressable" && text(n).includes("Alpha"));
+		alpha.props.onPress();
+		accountTree = accountRender();
+		const beta = nodes(accountTree).find(n => n.type === "Pressable" && text(n).includes("Beta"));
+		beta.props.onPress();
+		releaseAlpha();
+		await new Promise(r => setImmediate(r));
+		accountTree = accountRender();
+		assert.match(text(accountTree), /Beta\s+· selected/);
+		assert.ok(calls.filter(c => c.contract.name === "account_controls_status").some(c => c.input.agentId === "agent-b"), "status and actions must target the explicitly selected agent");
+		assert.doesNotMatch(text(accountTree), /aaaaaaaa-aaaa/);
+		accountStatus.data.snapshot = { ...accountSnapshot, busy: true };
+		accountTree = accountRender();
+		assert.equal(nodes(accountTree).find(n => n.type === "Pressable" && text(n).includes("Work")).props.disabled, true, "busy Pi session must disable account changes");
+		accountStatus.data.snapshot = accountSnapshot;
+		accountTree = accountRender();
+		const work = nodes(accountTree).find(n => n.type === "Pressable" && text(n).includes("Work"));
+		work.props.onPress();
+		accountTree = accountRender();
+		assert.match(text(accountTree), /Use\s+Work\s+for this Pi session/);
+		assert.equal(switchCalls.length, 0, "switch requires explicit confirmation");
+		const confirm = nodes(accountTree).find(n => n.type === "Pressable" && text(n) === "Confirm switch");
+		await confirm.props.onPress();
+		await new Promise(r => setImmediate(r));
+		assert.equal(switchCalls.length, 1);
+		assert.equal(switchCalls[0].agentId, "agent-b");
+		assert.equal(switchCalls[0].expectedSessionId, "session");
+		assert.equal(switchCalls[0].request.expectedServiceEpoch, "service-1");
+		assert.equal(switchCalls[0].request.expectedSelectionRevision, 0);
+		assert.equal(switchCalls[0].request.accountId, "named-1");
+		switchResult = { ok: false, requestId: "00000000-0000-4000-8000-000000000002", reason: "stale-selection", snapshot: accountSnapshot };
+		nodes(accountTree).find(n => n.type === "Pressable" && text(n).includes("Work")).props.onPress();
+		accountTree = accountRender();
+		await nodes(accountTree).find(n => n.type === "Pressable" && text(n) === "Confirm switch").props.onPress();
+		await new Promise(r => setImmediate(r));
+		accountTree = accountRender();
+		assert.match(text(accountTree), /Selection changed elsewhere/);
+		switchResult = { ok: false, requestId: "00000000-0000-4000-8000-000000000004", reason: "activation-failed", snapshot: accountSnapshot };
+		nodes(accountTree).find(n => n.type === "Pressable" && text(n).includes("Work")).props.onPress();
+		accountTree = accountRender();
+		await nodes(accountTree).find(n => n.type === "Pressable" && text(n) === "Confirm switch").props.onPress();
+		await new Promise(r => setImmediate(r));
+		accountTree = accountRender();
+		assert.match(text(accountTree), /Account activation failed/);
+		assert.doesNotMatch(text(accountTree), /No account change was made/);
+		switchResult = { ok: true, requestId: "00000000-0000-4000-8000-000000000003", snapshot: accountSnapshot };
+		switchReject = true;
+		nodes(accountTree).find(n => n.type === "Pressable" && text(n).includes("Work")).props.onPress();
+		accountTree = accountRender();
+		await nodes(accountTree).find(n => n.type === "Pressable" && text(n) === "Confirm switch").props.onPress();
+		await new Promise(r => setImmediate(r));
+		accountTree = accountRender();
+		assert.match(text(accountTree), /outcome uncertain/i);
+		switchReject = false;
+
+
+		accountSubscription.update({ type: "agent_update", payload: { kind: "remove", agentId: "agent-b" } });
+		accountTree = accountRender();
+		assert.match(text(accountTree), /Selected Pi session is no longer in this workspace/);
+		assert.equal(nodes(accountTree).filter(n => n.type === "SettingsSection").length, 0, "a removed selection must not silently target the remaining Pi agent");
+		accountSubscription.snapshot({ entries: [{ agent: { id: "agent-a", name: "Alpha", workspaceId: "workspace", provider: "pi" } }] });
+		accountTree = accountRender();
+		assert.match(text(accountTree), /Selected Pi session is no longer in this workspace/);
+		const selectAlpha = nodes(accountTree).find(n => n.type === "Pressable" && text(n).includes("Alpha"));
+		selectAlpha.props.onPress();
+		accountTree = accountRender();
+		assert.doesNotMatch(text(accountTree), /Selected Pi session is no longer/);
+		for (const cleanup of effects.splice(0)) cleanup();
+		states.length = 0;
+		const soloProps = { ...accountProps, workspaceId: "workspace-solo" };
+		const soloRender = () => { hook = 0; return header.button.behavior.Content(soloProps); };
+		soloRender();
+		await new Promise(r => setImmediate(r));
+		agentSubscriptions.at(-1).snapshot({ entries: [{ agent: { id: "solo-agent", name: "Solo", workspaceId: "workspace-solo", provider: "pi" } }] });
+		const soloTree = soloRender();
+		assert.match(text(soloTree), /Solo/);
+		assert.match(text(soloTree), /Account/);
+		assert.doesNotMatch(text(soloTree), /Choose the Pi session/);
+		accountSubscription.update({ type: "agent_update", payload: { kind: "remove", agentId: "agent-a" } });
 	} finally {
+		for (const cleanup of effects.splice(0)) cleanup();
 		stop();
 	}
 	assert.equal(removed, true);
-	assert.equal(signal.aborted, true);
+	assert.ok(signals.slice(0, 5).every(item => item.aborted));
 	assert.equal(pill.removed, true);
+	assert.equal(header.removed, true);
 });

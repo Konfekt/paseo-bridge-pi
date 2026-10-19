@@ -1,6 +1,6 @@
 # Paseo Pi controls
 
-A Paseo 0.10 plugin with agent-specific permission controls, a temporary interactive foreground-task composer popover, and read-only Jobs / Pi subagents views. Install from this repository with:
+A Paseo plugin with account controls, agent-specific permission controls, a foreground-task composer popover, and Activity / Jobs / Pi subagents views. Install from this repository with:
 
 ```sh
 paseo plugin install github:taugoust/paseo-bridge-pi --path plugin
@@ -8,9 +8,17 @@ paseo plugin install github:taugoust/paseo-bridge-pi --path plugin
 
 The pill is registered against each non-archived Pi agent's `agentId` and workspace. The daemon and Pi must run as the same Unix user; Windows daemon hosts are not supported. Changes apply to the selected agent and its children; underlying authorization and sandbox policy remain mandatory. Its label reports `On`, `Off`, `unavailable`, or a checking state. The popover reads current state, disables controls when state is stale/unavailable or an operation is busy, and sends explicit `enabled: true` or `enabled: false` requests. Status failures never imply a mode. No model prompt, chat message, abort, or slash command is used.
 
-## Pi Activity: Progress, response stamps, and cache diagnostics
+## Accounts header popover
 
-The **Activity** pill opens one agent-bound dashboard with all sections visible together. It uses Paseo's native SettingsSection/SettingsCard surfaces, themed React Native meters, and expandable details; there are no feature tabs.
+The Activity dashboard contains only Progress, Cache, and Recent responses. Account switching and login status live in the native workspace **Accounts** header popover. Select a Pi session explicitly when a workspace has multiple Pi agents; a sole session is selected initially, and an established selection is never silently retargeted if that session disappears or restarts. Switching between Pi's built-in login and existing named accounts requires confirmation and is enabled only when the account service reports Pi idle. Add named accounts using Pi `/accounts`; credentials are never copied or entered in Paseo. The optional official link is labeled **Open usage settings**; it is a settings link, not a usage report or quota.
+
+Account controls use a separate capability-authenticated private socket and descriptor, bound to agent, session, bridge runtime epoch, and account-service epoch. The read-only harness API is unchanged. Switch requests include a stable request ID and expected selection revision; uncertain outcomes are not automatically replayed, and require refreshing status before another action. Missing account-controls service is shown as unavailable.
+
+Provider usage stays in Paseo's native Usage panels, with their existing sources and account associations. Named-account quota integration requires a verified account-matched source; this change adds none.
+
+## Activity: progress, cache, and recent responses
+
+The **Activity** pill opens one agent-bound dashboard with the three diagnostics visible together. It uses Paseo's native SettingsSection/SettingsCard surfaces, themed React Native meters, and expandable details; there are no feature tabs.
 
 - **Progress:** completed/total meter, active and blocked steps first, and an expansion for the full list. Blocked steps retain their own label and color.
 - **Cache:** observed hit-rate meter and a compact input/cost summary. Cache details expand in place for weighted totals, request gaps, estimates, and recent hit-rate bars. Unknown metrics remain unavailable.
@@ -72,4 +80,4 @@ PASEO_PLUGIN_COMPILER=/path/to/paseo/packages/server/dist/server/server/plugins/
 
 Set `PI_TUI_TEST_PI` to the raw immutable Pi executable, not an AgentSH/permission-gate wrapper. The test never inherits or reuses `PI_TUI_WORKER_LAUNCHER`; it explicitly binds the selected raw test Pi to the native `none` launch mode. The test creates no tmux panes, Paseo agents, workspaces, or persistent configuration. Its external runtime source is read-only.
 
-Validation passes with Paseo 0.10. Mobile/desktop visual confirmation after installation remains pending. Full plugin TypeScript declaration checking is not yet configured (the installed server SDK omits frontend type dependencies). Bridge TypeScript checking is covered by the root `npm run typecheck`.
+Automated validation passes with Paseo 0.11.4. Mobile/desktop visual confirmation after installation remains pending. Full plugin TypeScript declaration checking is not yet configured (the installed server SDK omits frontend type dependencies). Bridge TypeScript checking is covered by the root `npm run typecheck`.

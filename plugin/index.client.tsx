@@ -3,6 +3,7 @@ import { contributeClient } from "./client/main";
 import { contributeHarness } from "./client/harness";
 import { contributeObservability } from './client/observability';
 import { contributeForegroundTasks } from "./client/foreground-tasks";
+import { contributeAccountControls } from "./client/account-controls";
 
 export default function contribute(client: PluginClientContext) {
   const stops: (() => void)[] = [];
@@ -12,6 +13,7 @@ export default function contribute(client: PluginClientContext) {
     stops.push(contributeHarness(client));
     stops.push(contributeForegroundTasks(client));
     stops.push(contributeObservability(client));
+    stops.push(contributeAccountControls(client));
     return cleanup;
   } catch (error) {
     cleanup();

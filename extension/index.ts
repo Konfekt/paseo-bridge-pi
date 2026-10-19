@@ -32,6 +32,7 @@ import {
   removeHarnessReadOnlyDescriptor,
 } from "./permission-gate-operator.js";
 import { foregroundTasksSocketPath, removeForegroundTasksDescriptor, writeForegroundTasksDescriptor } from "./foreground-task-operator.js";
+import { accountControlsSocketPath, removeAccountControlsDescriptor, writeAccountControlsDescriptor } from "./account-controls-operator.js";
 import { isRuntimeReloadCommand, requireIdleReload, validateReloadPrompt } from "./reload-command.js";
 import { abortAndWaitForIdle } from "./abort-dispatch.js";
 import { dispatchPaseoPrompt, isExtensionCommand } from "./prompt-dispatch.js";
@@ -905,6 +906,28 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     );
   }
 
+  function activeAccountControlsService() {
+    const service = (globalThis as Record<string, any>).__paeAccountControlsV1;
+    const sessionId = latestCtx?.sessionManager.getSessionId();
+    if (!service || service.protocol !== 1 || typeof service.sessionId !== "string" || typeof service.serviceEpoch !== "string"
+      || typeof service.getSnapshot !== "function" || typeof service.switchAccount !== "function" || !sessionId || service.sessionId !== sessionId) return undefined;
+    return service;
+  }
+  function activeAccountControlsDescriptor() {
+    const t = transport, ctx = latestCtx, agentId = currentAgentId, service = activeAccountControlsService();
+    if (!t || !t.connected || !ctx || !agentId || !service || currentSessionFile !== t.sessionFile) return undefined;
+    return { version: 1 as const, socketPath: accountControlsSocketPath(t.pipePath), capability: t.accountControlsCapability,
+      agentId, sessionId: ctx.sessionManager.getSessionId(), runtimeEpoch: t.operatorEpoch, serviceEpoch: service.serviceEpoch };
+  }
+  function publishAccountControlsDescriptor() {
+    const descriptor = activeAccountControlsDescriptor();
+    if (!descriptor) { revokeAccountControlsDescriptor(); return; }
+    try { writeAccountControlsDescriptor(path.join(os.homedir(), ".pi", "paseo-bridge"), descriptor); } catch { revokeAccountControlsDescriptor(); }
+  }
+  function revokeAccountControlsDescriptor() {
+    if (transport && currentAgentId) removeAccountControlsDescriptor(path.join(os.homedir(), ".pi", "paseo-bridge"), currentAgentId, transport.operatorEpoch);
+  }
+
   function bindTransport(): void {
     transport?.bind({
       command: handleCommand,
@@ -987,6 +1010,21 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         }
         throw new Error("Unsupported read-only harness method");
       },
+      accountControlsIdentity() {
+        const descriptor = activeAccountControlsDescriptor();
+        return descriptor ? { ...descriptor, capability: transport!.accountControlsCapability } : undefined;
+      },
+      async accountControls(request: any) {
+        const service = activeAccountControlsService(), identity = activeAccountControlsDescriptor(), t = transport, ctx = latestCtx;
+        if (!service || !identity || !t || !ctx) throw new Error("Account-controls service unavailable or stale");
+        let result: unknown;
+        if (request?.operation === "snapshot" && request.sessionId === identity.sessionId) result = await service.getSnapshot({ sessionId: identity.sessionId });
+        else if (request?.operation === "switch" && request.request?.expectedSessionId === identity.sessionId && request.request?.expectedServiceEpoch === identity.serviceEpoch) result = await service.switchAccount(request.request);
+        else throw new Error("Invalid account-controls operation");
+        if (transport !== t || latestCtx !== ctx || (globalThis as any).__paeAccountControlsV1 !== service || activeAccountControlsService() !== service || !t.connected
+          || currentAgentId !== identity.agentId || currentSessionFile !== t.sessionFile || ctx.sessionManager.getSessionId() !== identity.sessionId || t.operatorEpoch !== identity.runtimeEpoch) throw new Error("Account-controls identity changed during request");
+        return result;
+      },
       foregroundTasksIdentity() {
         const descriptor = activeForegroundTasksDescriptor();
         const service = activeForegroundTasksService();
@@ -1049,6 +1087,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         publishPermissionGateOperatorDescriptor();
         publishHarnessReadOnlyDescriptor();
         publishForegroundTasksDescriptor();
+        publishAccountControlsDescriptor();
         providerReconnect.connected();
         debugLog("client connected");
         notifyTui("Paseo attached to this session");
@@ -1058,6 +1097,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         revokePermissionGateOperatorDescriptor();
         revokeHarnessReadOnlyDescriptor();
         revokeForegroundTasksDescriptor();
+        revokeAccountControlsDescriptor();
         transport?.rotateOperatorEpoch();
         cancelPendingRemoteUiRequests();
         preflightAbortController.abort();
@@ -1073,6 +1113,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     revokePermissionGateOperatorDescriptor();
     revokeHarnessReadOnlyDescriptor();
     revokeForegroundTasksDescriptor();
+    revokeAccountControlsDescriptor();
     providerReconnect.stop();
     cancelPendingRemoteUiRequests();
     preflightAbortController.abort();
@@ -1369,6 +1410,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         publishPermissionGateOperatorDescriptor();
         publishHarnessReadOnlyDescriptor();
         publishForegroundTasksDescriptor();
+        publishAccountControlsDescriptor();
         if (!placement.infrastructure && !currentAgentId) registerWithPaseo(currentSessionFile, latestCtx.cwd);
         tagAgentPane(placement);
       }, 2000);
@@ -1389,6 +1431,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       revokePermissionGateOperatorDescriptor();
       revokeHarnessReadOnlyDescriptor();
       revokeForegroundTasksDescriptor();
+      revokeAccountControlsDescriptor();
       providerReconnect.stop();
       cancelPendingRemoteUiRequests();
       preflightAbortController.abort();

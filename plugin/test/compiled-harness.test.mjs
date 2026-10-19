@@ -53,6 +53,7 @@ test('compiled read-only panels render lists/details, bind generations and only 
     paseo: { agents: { list: async ({ signal }) => ({ subscription: { subscribe: value => observers.push({ value, signal }) } }) } },
     rpc: async () => ({ available: false, enabled: null }),
     addWorkspacePanel: panel => { panels.set(panel.id, panel); return () => { stoppedPanels++; }; },
+    addHeaderButton: button => ({ ...button, update() {}, remove() {} }),
     addComposerPill: pill => { const registration = { ...pill, removed: false, update() {}, remove() { this.removed = true; } }; pills.push(registration); return registration; },
     openPanel: (id, target) => opened.push({ id, target }),
   });

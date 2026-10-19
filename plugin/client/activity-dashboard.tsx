@@ -18,7 +18,7 @@ import {
 
 type Snapshot = RpcOutput<typeof observabilitySnapshotRpc>;
 type Feature = Snapshot["feature"];
-type Colors = PluginAgentPanelProps["theme"]["colors"];
+export type Colors = PluginAgentPanelProps["theme"]["colors"];
 type Stamp = Extract<Snapshot, { feature: "stamp" }>["data"]["records"][number];
 type State = { data?: Snapshot; pending: boolean; error: boolean };
 
