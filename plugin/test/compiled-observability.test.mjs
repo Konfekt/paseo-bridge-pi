@@ -203,8 +203,9 @@ test("compiled Activity panel renders all features, binds host/session, hides st
 				},
 			},
 		};
-		assert.match(text(render()), /not a proven miss/);
-		assert.match(text(render()), /not a prediction/);
+		assert.match(text(render()), /Cache accounting unavailable/);
+		assert.match(text(render()), /Observed cache accounting/);
+		assert.doesNotMatch(text(render()), /not a|not independent|not backfilled/);
 		status = { data: identity, isError: true };
 		assert.equal(queries.length > 0, true);
 		assert.doesNotMatch(text(render()), /Active-branch totals/);

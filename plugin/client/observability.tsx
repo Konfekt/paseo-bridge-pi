@@ -218,7 +218,7 @@ export function ObservabilityPanel({
 			) : null}
 			{data?.feature === "progress" ? (
 				<View style={{ gap: 8 }}>
-					{line("Model-reported progress, not independent verification.")}
+					{line("Model-reported progress")}
 					{!data.data.steps.length ? line("No progress recorded.") : null}
 					{data.data.steps.map((step, i) =>
 						line(
@@ -234,7 +234,7 @@ export function ObservabilityPanel({
 						"Latest 50 recorded stamps. Times are local Pi observations; costs are estimates.",
 					)}
 					{!data.data.records.length
-						? line("No stamps recorded yet. Older messages are not backfilled.")
+						? line("No stamps recorded yet.")
 						: null}
 					{data.data.records
 						.slice()
@@ -270,7 +270,7 @@ export function ObservabilityPanel({
 			{data?.feature === "cache" ? (
 				<View style={{ gap: 8 }}>
 					{line(
-						"Observed cache accounting, not a prediction or subscription quota.",
+						"Observed cache accounting",
 					)}
 					{data.data.latest ? (
 						<>
@@ -283,7 +283,7 @@ export function ObservabilityPanel({
 						</>
 					) : (
 						line(
-							"No comparable cache accounting available yet. Missing cache data is not a proven miss.",
+							"Cache accounting unavailable.",
 						)
 					)}
 					{data.data.comparison
