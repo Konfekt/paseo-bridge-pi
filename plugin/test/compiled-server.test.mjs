@@ -27,6 +27,7 @@ test('compiled plugin backend operates the real bridge without prompt dispatch o
   let workspaceId = 'workspace';
   let changeWorkspaceAfterList = false;
   let changeEpochAfterList = false;
+  let observationMode = 'valid';
   const foregroundCalls = [];
   const task = { taskId: 'task-1', childId: 'child-1', workerEpoch: 'worker-epoch-1', groupId: 'group-1', attempt: 1, title: 'Helper', model: 'harness-test/mock:off', status: 'waiting-permission',
     createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:01.000Z', pendingInteractions: 1, canPrompt: true, canStop: true };
@@ -59,6 +60,7 @@ test('compiled plugin backend operates the real bridge without prompt dispatch o
       foregroundTasks: request => foregroundService.execute(request),
       harnessReadOnly: async request => {
         if (request.method === 'status') return { available: true, sessionId: 'session', jobs: true, subagents: true };
+        if (request.method === 'observability.snapshot') return { protocol: 1, state: 'available', sessionId: observationMode === 'stale' ? 'old-session' : 'session', feature: request.payload.feature, lastUpdated: null, stale: false, data: { steps: [{ text: 'Review', status: observationMode === 'invalid' ? 'invented' : 'blocked', secret: 'never-forward' }] } };
         if (request.method === 'jobs.list') {
           if (changeWorkspaceAfterList) workspaceId = 'changed-workspace';
           if (changeEpochAfterList) writeHarnessReadOnlyDescriptor(join(root, '.pi', 'paseo-bridge'), { ...readDescriptor, runtimeEpoch: '00000000-0000-4000-8000-000000000002' });
@@ -97,6 +99,14 @@ test('compiled plugin backend operates the real bridge without prompt dispatch o
     assert.equal(readonlyStatus.available, true, readonlyStatus.reason ?? '');
     assert.equal(readonlyStatus.sessionId, 'session');
     const readTarget = { ...target, expectedSessionId: readonlyStatus.sessionId, expectedRuntimeEpoch: readonlyStatus.runtimeEpoch };
+    const observed = await invoke('observability_snapshot', { ...readTarget, feature: 'progress' });
+    assert.equal(observed.data.steps[0].status, 'blocked');
+    assert.equal(JSON.stringify(observed).includes('never-forward'), false);
+    observationMode = 'stale';
+    await assert.rejects(invoke('observability_snapshot', { ...readTarget, feature: 'progress' }), /identity mismatch/);
+    observationMode = 'invalid';
+    await assert.rejects(invoke('observability_snapshot', { ...readTarget, feature: 'progress' }));
+    observationMode = 'valid';
     const jobs = await invoke('harness_jobs_list', readTarget);
     assert.equal(jobs.state, 'available');
     changeWorkspaceAfterList = true;

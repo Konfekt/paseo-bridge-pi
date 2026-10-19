@@ -1,3 +1,4 @@
+import { observabilitySnapshotRpc, observabilitySnapshotSchema } from '../shared/observability';
 import { createHash } from "node:crypto";
 import { constants, lstat, open } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -51,6 +52,11 @@ export function createHarnessReadOnlyHandlers(readDescriptor = readHarnessDescri
           || currentDescriptor.runtimeEpoch !== raw.runtimeEpoch) throw new Error("Stale status identity");
         return { available: true, sessionId: raw.sessionId, runtimeEpoch: raw.runtimeEpoch, reason: null };
       } catch { return { available: false, sessionId: null, runtimeEpoch: null, reason: "Read-only harness endpoint is unavailable." }; }
+    },
+    observability: async (input: RpcInput<typeof observabilitySnapshotRpc>, context: PluginHandlerContext) => {
+      const result = observabilitySnapshotSchema.parse(await invoke(input, 'observability.snapshot', { feature: input.feature }, context));
+      if (result.feature !== input.feature || result.sessionId !== input.expectedSessionId) throw new Error('Observability snapshot identity mismatch');
+      return result;
     },
     jobsList: (input: RpcInput<typeof harnessJobsListRpc>, context: PluginHandlerContext) => invoke(input, "jobs.list", { limit: input.limit, cursor: input.cursor }, context),
     jobsOutput: (input: RpcInput<typeof harnessJobsOutputRpc>, context: PluginHandlerContext) => invoke(input, "jobs.output", { jobId: input.jobId, maxBytes: input.maxBytes }, context),

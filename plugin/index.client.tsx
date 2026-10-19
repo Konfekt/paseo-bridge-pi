@@ -1,16 +1,20 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { contributeClient } from "./client/main";
 import { contributeHarness } from "./client/harness";
+import { contributeObservability } from './client/observability';
 import { contributeForegroundTasks } from "./client/foreground-tasks";
 
 export default function contribute(client: PluginClientContext) {
-  const stopPrompts = contributeClient(client);
+  const stops: (() => void)[] = [];
+  const cleanup = () => { for (const stop of stops.splice(0).reverse()) stop(); };
   try {
-    const stopHarness = contributeHarness(client);
-    const stopForegroundTasks = contributeForegroundTasks(client);
-    return () => { stopForegroundTasks(); stopHarness(); stopPrompts(); };
+    stops.push(contributeClient(client));
+    stops.push(contributeHarness(client));
+    stops.push(contributeForegroundTasks(client));
+    stops.push(contributeObservability(client));
+    return cleanup;
   } catch (error) {
-    stopPrompts();
+    cleanup();
     throw error;
   }
 }

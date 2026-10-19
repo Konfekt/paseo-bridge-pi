@@ -8,6 +8,20 @@ paseo plugin install github:taugoust/paseo-bridge-pi --path plugin
 
 The pill is registered against each non-archived Pi agent's `agentId` and workspace. The daemon and Pi must run as the same Unix user; Windows daemon hosts are not supported. Changes apply to the selected agent and its children; underlying authorization and sandbox policy remain mandatory. Its label reports `On`, `Off`, `unavailable`, or a checking state. The popover reads current state, disables controls when state is stale/unavailable or an operation is busy, and sends explicit `enabled: true` or `enabled: false` requests. Status failures never imply a mode. No model prompt, chat message, abort, or slash command is used.
 
+## Pi Activity: Progress, response stamps, and cache diagnostics
+
+The **Activity** pill opens one agent-bound workspace panel with three views:
+
+- **Progress:** structured pending, in-progress, blocked, and completed steps. These are model reports, not independent verification.
+- **Response stamps:** latest 50 recorded timestamp/response/tool metadata entries, including reported physical model, thinking, duration, usage, and estimated cost when available. This is a separate panel, not an original-message bubble decorator. Old messages are not backfilled.
+- **Cache diagnostics:** observed cache rates, request gaps, weighted session totals (including summary usage), and estimated costs. Unknown accounting is not a proven cache miss; these are not account quotas or predictions.
+
+Requires the companion Pi `stamp`, `progress`, and `cache-hit-monitor` extensions and a bridge reload. Each feature can be enabled independently; missing features show unavailable. Snapshots use the existing authenticated private read-only harness transport, bind host/agent/workspace/session/runtime, validate output schemas, and reject stale results. No credentials, response IDs, raw diagnostic text, message content, tool arguments, or tool output are exported. Progress display text is bounded without changing saved state.
+
+The panel polls every five seconds only while mounted and supports manual/reconnect refresh. It has no mutations, approvals, or prompt dispatch. Use Pi's `/stamp`, `/progress`, and `/cache-hit-monitor` commands for terminal settings/display; the mobile panel does not parse terminal widgets.
+
+Compiled-plugin rendering and transport tests are automated; **native iOS visual/interaction verification is pending deployment**.
+
 ## Interactive foreground tasks
 
 The **Foreground** composer pill opens a temporary, agent-bound popover (anchored surface on wide layouts; bottom sheet on compact layouts). Its closed-state label reports running work, pending questions/permissions, or finished tasks. It lists foreground helpers owned directly by the selected parent Pi session, streams their conversation, and supports explicit user prompts, individual permission/questionnaire answers, and Stop. Closing or dismissing the surface only hides it; it does not stop the helper. Unsent prompt drafts and questionnaire selections are retained client-side across close/reopen for that host, agent, parent session, and task.

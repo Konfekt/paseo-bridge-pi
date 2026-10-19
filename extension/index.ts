@@ -917,19 +917,21 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
           || request.runtimeEpoch !== activeTransport.operatorEpoch || request.capability !== activeTransport.harnessReadOnlyCapability) {
           throw new Error("Read-only harness authentication failed");
         }
+        const method = request.method;
+        const registryKey = method === "observability.snapshot" || (method === "status" && !(globalThis as any).__paeHarnessReadOnlyV1)
+          ? "__paeObservabilityV1" : "__paeHarnessReadOnlyV1";
         let service: any;
         const assertCurrent = () => {
-          const liveRegistry = (globalThis as any).__paeHarnessReadOnlyV1;
-          const liveService = method.startsWith("jobs.") ? liveRegistry?.jobs : method.startsWith("subagents.") ? liveRegistry?.subagents : undefined;
+          const liveRegistry = (globalThis as any)[registryKey];
+          const liveService = method === "observability.snapshot" ? liveRegistry?.[request.payload?.feature] : method.startsWith("jobs.") ? liveRegistry?.jobs : method.startsWith("subagents.") ? liveRegistry?.subagents : undefined;
           if (transport !== activeTransport || latestCtx !== ctx || currentAgentId !== agentId
             || currentSessionFile !== activeTransport.sessionFile || !activeTransport.connected
             || ctx.sessionManager.getSessionId() !== request.sessionId || activeTransport.operatorEpoch !== request.runtimeEpoch
             || activeTransport.harnessReadOnlyCapability !== request.capability
             || liveRegistry !== registry || (service && liveService !== service)) throw new Error("Read-only harness session changed during request");
         };
-        const registry = (globalThis as any).__paeHarnessReadOnlyV1;
+        const registry = (globalThis as any)[registryKey];
         if (!registry || registry.protocol !== 1) throw new Error("Read-only harness service unavailable");
-        const method = request.method;
         const payload = request.payload;
         if (!payload || typeof payload !== "object" || Array.isArray(payload) || payload.sessionId !== request.sessionId) throw new Error("Invalid read-only payload");
         const exactKeys = (required: string[], optional: string[] = []) => {
@@ -942,6 +944,15 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
           return { available: true, sessionId: request.sessionId,
           jobs: Boolean(registry.jobs?.protocol === 1 && registry.jobs.sessionId === request.sessionId),
           subagents: Boolean(registry.subagents?.protocol === 1 && registry.subagents.sessionId === request.sessionId) };
+        }
+        if (method === "observability.snapshot") {
+          if (!exactKeys(["sessionId", "feature"]) || !["stamp", "progress", "cache"].includes(payload.feature)) throw new Error("Invalid observability request");
+          service = registry[payload.feature];
+          if (!service || service.protocol !== 1 || service.sessionId !== request.sessionId) throw new Error("Observability extension is not active for this session");
+          const snapshot = await service.snapshot({ sessionId: request.sessionId });
+          assertCurrent();
+          if (snapshot?.protocol !== 1 || snapshot.sessionId !== request.sessionId || snapshot.feature !== payload.feature || Buffer.byteLength(JSON.stringify(snapshot)) > 48 * 1024) throw new Error("Invalid observability snapshot");
+          return snapshot;
         }
         service = method.startsWith("jobs.") ? registry.jobs : method.startsWith("subagents.") ? registry.subagents : undefined;
         if (!service || service.protocol !== 1 || service.sessionId !== request.sessionId) throw new Error("Read-only service unavailable for this session");
