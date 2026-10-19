@@ -19,6 +19,7 @@ test('compiled popover uses actual host export boundaries and renders every stat
   const hostHelpers = Object.fromEntries(['Icon', 'Modal', 'ScrollView', 'FlatList', 'TextInput', 'copyText', 'useRevealedText', 'useToast'].map(name => [name, () => null]));
   const load = name => {
     if (name === '@getpaseo/plugin') return { defineRpc: contract => contract };
+    if (name === '@getpaseo/plugin/client/ui') return {};
     if (name === '@getpaseo/plugin/client') return { useRpc: () => async () => ({}) };
     // Paseo 0.10 packages/app/src/plugins/react-native/runtime.ts exports
     // helpers only. Core primitives come from its separate react-native module.

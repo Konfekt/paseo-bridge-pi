@@ -10,12 +10,14 @@ const nodes = (x) =>
 		? []
 		: [x, ...[x.props?.children].flat(Infinity).flatMap(nodes)];
 const text = (x) =>
-	typeof x === "string"
-		? x
-		: !x || typeof x !== "object"
-			? ""
-			: [x.props?.children].flat(Infinity).map(text).join(" ");
-test("compiled Activity panel renders all features, binds host/session, hides stale errors and cleans up", {
+	typeof x === "number"
+		? String(x)
+		: typeof x === "string"
+			? x
+			: !x || typeof x !== "object"
+				? ""
+				: [x.props?.children].flat(Infinity).map(text).join(" ");
+test("native Activity dashboard shows every section, accessible meters and expandable detail with isolated session queries", {
 	skip: !process.env.PASEO_PLUGIN_COMPILER,
 }, async () => {
 	const { compilePlugin } = await import(
@@ -28,29 +30,87 @@ test("compiled Activity panel renders all features, binds host/session, hides st
 		observer,
 		signal,
 		pill,
-		removed = false;
-	let selected = "progress";
-	const queries = [],
+		removed = false,
+		hook = 0,
+		refreshes = 0;
+	const states = [],
+		queries = [],
 		calls = [];
 	const identity = {
 		available: true,
 		sessionId: "session",
 		runtimeEpoch: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa",
 	};
-	let status = { data: identity },
-		result = {
-			data: {
-				protocol: 1,
-				state: "available",
-				sessionId: "session",
-				feature: "progress",
-				lastUpdated: null,
-				stale: false,
-				data: { steps: [{ text: "Approve review", status: "blocked" }] },
+	let status = { data: identity };
+	const snap = (feature, data) => ({
+		data: {
+			protocol: 1,
+			state: "available",
+			sessionId: "session",
+			feature,
+			lastUpdated: null,
+			stale: false,
+			data,
+		},
+	});
+	const results = {
+		progress: snap("progress", {
+			steps: [
+				{ text: "Shipped", status: "completed" },
+				{ text: "Approve review", status: "blocked" },
+				{ text: "Implement UI", status: "in_progress" },
+				{ text: "Follow up", status: "pending" },
+				{ text: "Later", status: "pending" },
+			],
+		}),
+		stamp: snap("stamp", {
+			records: [
+				{
+					id: "r",
+					role: "assistant",
+					timestamp: 1,
+					completedAt: 1001,
+					provider: "openai",
+					model: "gpt-6-astra",
+					thinking: "low",
+					outcome: "stop",
+					usage: { input: 1234, output: 10, estimatedCost: 0.1 },
+				},
+			],
+		}),
+		cache: snap("cache", {
+			streaming: false,
+			requestNumber: 1,
+			latest: {
+				provider: "openai",
+				model: "gpt-6-astra",
+				hitRatePercent: 75,
+				input: 250,
+				cacheRead: 750,
+				cacheWrite: 0,
 			},
-		};
-	const jsx = (type, props) =>
-		typeof type === "function" ? type(props) : { type, props };
+			comparison: {
+				requestStartGapMs: 2000,
+				rebilledTokens: 0,
+				estimatedMissPremium: 0,
+			},
+			session: {
+				requestCount: 2,
+				promptTokens: 2000,
+				hitRatePercent: 75,
+				promptCost: 0.1,
+				estimatedSavings: 0.02,
+			},
+			trend: [70, 75],
+		}),
+	};
+	const jsx = (type, props, key) => {
+		assert.ok(
+			typeof type === "string" || typeof type === "function",
+			`Missing host component ${type}`,
+		);
+		return typeof type === "function" ? type(props) : { type, props, key };
+	};
 	const load = (name) => {
 		if (name === "@getpaseo/plugin") return { defineRpc: (x) => x };
 		if (name === "@getpaseo/plugin/client")
@@ -61,6 +121,17 @@ test("compiled Activity panel renders all features, binds host/session, hides st
 					return {};
 				},
 			};
+		if (name === "@getpaseo/plugin/client/ui")
+			return {
+				SettingsSection: (props) => ({
+					type: "SettingsSection",
+					props: {
+						...props,
+						children: [props.title, props.trailing, props.children],
+					},
+				}),
+				SettingsCard: (props) => ({ type: "SettingsCard", props }),
+			};
 		if (name === "@getpaseo/plugin/client/react-native")
 			return { ScrollView: "ScrollView" };
 		if (name === "react-native")
@@ -68,7 +139,13 @@ test("compiled Activity panel renders all features, binds host/session, hides st
 		if (name === "react/jsx-runtime")
 			return { jsx, jsxs: jsx, Fragment: "Fragment" };
 		if (name === "react")
-			return { useState: () => [selected, (value) => (selected = value)] };
+			return {
+				useState: (initial) => {
+					const index = hook++;
+					if (!(index in states)) states[index] = initial;
+					return [states[index], (value) => (states[index] = value)];
+				},
+			};
 		if (name === "@tanstack/react-query")
 			return {
 				useQuery: (options) => {
@@ -76,17 +153,19 @@ test("compiled Activity panel renders all features, binds host/session, hides st
 					return {
 						isPending: false,
 						isError: false,
-						refetch: async () => {},
+						refetch: async () => {
+							refreshes++;
+						},
 						...(options.queryKey[0] === "pi-activity-identity"
 							? status
-							: result),
+							: results[options.queryKey.at(-1)]),
 					};
 				},
 			};
 		return require(name);
 	};
-	const contributeObservability = (0, eval)(clientBundle)(load).default;
-	const stop = contributeObservability({
+	const contribute = (0, eval)(clientBundle)(load).default;
+	const stop = contribute({
 		rpc: async () => ({ available: false }),
 		paseo: {
 			agents: {
@@ -111,21 +190,35 @@ test("compiled Activity panel renders all features, binds host/session, hides st
 		},
 		openPanel() {},
 	});
+	const colors = {
+		foreground: "#fff",
+		foregroundMuted: "#aaa",
+		statusDanger: "#f00",
+		statusWarning: "#fa0",
+		statusSuccess: "#0f0",
+		accent: "#08f",
+		surface0: "#111",
+		surface1: "#222",
+		surface2: "#333",
+		border: "#444",
+	};
 	const props = {
 		agentId: "agent",
 		workspaceId: "workspace",
 		host: { id: "host" },
-		theme: {
-			colors: {
-				foreground: "white",
-				foregroundMuted: "gray",
-				statusDanger: "red",
-			},
-		},
+		theme: { colors },
 	};
 	const render = () => {
 		queries.length = 0;
+		hook = 0;
 		return panel.Component(props);
+	};
+	const press = (tree, label) => {
+		const node = nodes(tree).find(
+			(n) => n.type === "Pressable" && n.props.accessibilityLabel === label,
+		);
+		assert.ok(node, label);
+		node.props.onPress();
 	};
 	try {
 		await new Promise((r) => setImmediate(r));
@@ -135,81 +228,87 @@ test("compiled Activity panel renders all features, binds host/session, hides st
 			],
 		});
 		assert.equal(pill.id, "pi-activity");
-		assert.match(text(render()), /Approve review/);
-		assert.match(text(render()), /blocked/);
-		assert.equal(queries[1].queryKey[1], "host");
-		await queries[1].queryFn();
-		assert.equal(calls[0].input.expectedSessionId, "session");
-		result = { ...result, isError: true };
-		assert.doesNotMatch(text(render()), /Approve review/);
-		result = {
+		let tree = render();
+		assert.equal(
+			nodes(tree).filter((n) => n.type === "SettingsSection").length,
+			3,
+		);
+		assert.equal(queries.length, 4);
+		assert.match(text(tree), /Approve review/);
+		assert.match(text(tree), /Observed cache accounting/);
+		assert.match(text(tree), /gpt-6-astra/);
+		assert.match(text(tree), /1\s*\/\s*5\s*complete/);
+		assert.doesNotMatch(text(tree), /Input tokens/);
+		assert.equal(
+			nodes(tree).filter((n) => n.props?.accessibilityRole === "tab").length,
+			0,
+		);
+		const meters = nodes(tree).filter(
+			(n) => n.props?.accessibilityRole === "progressbar",
+		);
+		assert.deepEqual(
+			meters.map((n) => n.props.accessibilityValue.now),
+			[20, 75],
+		);
+		assert.ok(
+			text(tree).indexOf("Implement UI") < text(tree).indexOf("Approve review"),
+		);
+		press(tree, "Cache details");
+		tree = render();
+		assert.match(text(tree), /Session requests/);
+		assert.match(text(tree), /Request gap/);
+		press(tree, "Response details r");
+		tree = render();
+		assert.match(text(tree), /Input tokens/);
+		assert.match(text(tree), /1,234/);
+		assert.doesNotMatch(text(tree), /Shipped/);
+		press(tree, "Show all 5 steps");
+		tree = render();
+		assert.match(text(tree), /Shipped/);
+		press(tree, "Refresh");
+		assert.equal(refreshes, 4);
+		for (const query of queries.slice(1)) {
+			assert.equal(query.queryKey[1], "host");
+			await query.queryFn();
+		}
+		assert.deepEqual(
+			calls.map((c) => c.input.feature),
+			["progress", "cache", "stamp"],
+		);
+		assert.ok(calls.every((c) => c.input.expectedSessionId === "session"));
+		results.progress.isError = true;
+		tree = render();
+		assert.doesNotMatch(text(tree), /Approve review/);
+		assert.match(text(tree), /gpt-6-astra/);
+		delete results.progress.isError;
+		results.cache = snap("cache", {
+			...results.cache.data.data,
+			latest: null,
+			comparison: null,
+			trend: [],
+			session: { ...results.cache.data.data.session, hitRatePercent: null },
+		});
+		tree = render();
+		const unknown = nodes(tree).find(
+			(n) => n.props?.accessibilityLabel === "Cache hit rate",
+		);
+		assert.equal(unknown.props.accessibilityValue.now, undefined);
+		assert.equal(unknown.props.accessibilityValue.text, "Unavailable");
+		status = {
 			data: {
-				protocol: 1,
-				state: "available",
-				sessionId: "old-session",
-				feature: "progress",
-				data: { steps: [{ text: "STALE", status: "completed" }] },
+				...identity,
+				sessionId: "new-session",
+				runtimeEpoch: "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb",
 			},
 		};
-		assert.doesNotMatch(text(render()), /STALE/);
-		selected = "stamp";
-		result = {
-			data: {
-				protocol: 1,
-				state: "available",
-				sessionId: "session",
-				feature: "stamp",
-				lastUpdated: null,
-				data: {
-					records: [
-						{
-							id: "r",
-							role: "assistant",
-							timestamp: 1,
-							completedAt: 1001,
-							provider: "openai",
-							model: "gpt-6-astra",
-							thinking: "low",
-							outcome: "stop",
-							usage: { input: 100, output: 10, estimatedCost: 0.1 },
-						},
-					],
-				},
-			},
-		};
-		assert.match(text(render()), /gpt-6-astra/);
-		assert.match(text(render()), /Duration 1s/);
-		selected = "cache";
-		result = {
-			data: {
-				protocol: 1,
-				state: "available",
-				sessionId: "session",
-				feature: "cache",
-				lastUpdated: null,
-				data: {
-					streaming: false,
-					requestNumber: 0,
-					latest: null,
-					comparison: null,
-					session: {
-						requestCount: 0,
-						promptTokens: 0,
-						hitRatePercent: null,
-						promptCost: null,
-						estimatedSavings: null,
-					},
-					trend: [],
-				},
-			},
-		};
-		assert.match(text(render()), /Cache accounting unavailable/);
-		assert.match(text(render()), /Observed cache accounting/);
-		assert.doesNotMatch(text(render()), /not a|not independent|not backfilled/);
+		tree = render();
+		assert.doesNotMatch(text(tree), /Approve review|gpt-6-astra/);
+		assert.ok(nodes(tree).some((n) => n.key?.includes("new-session:bbbbbbbb")));
 		status = { data: identity, isError: true };
-		assert.equal(queries.length > 0, true);
-		assert.doesNotMatch(text(render()), /Active-branch totals/);
-		assert.equal(queries[1].enabled, false);
+		tree = render();
+		assert.doesNotMatch(text(tree), /Approve review|gpt-6-astra/);
+		assert.ok(queries.slice(1).every((q) => q.enabled === false));
+		assert.doesNotMatch(text(tree), /not a|not independent/);
 	} finally {
 		stop();
 	}

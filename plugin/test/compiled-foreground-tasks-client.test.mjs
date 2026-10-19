@@ -28,6 +28,7 @@ test('compiled foreground popover reports closed-state attention, persists inter
   const jsx = (type, props) => typeof type === 'function' ? type(props) : { type, props };
   const load = name => {
     if (name === '@getpaseo/plugin') return { defineRpc: contract => contract };
+    if (name === '@getpaseo/plugin/client/ui') return {};
     if (name === '@getpaseo/plugin/client') return { useRpc: contract => async input => {
       contract.input.parse(input); calls.push({ name: contract.name, input });
       if (contract.name === 'foreground_tasks_control') {

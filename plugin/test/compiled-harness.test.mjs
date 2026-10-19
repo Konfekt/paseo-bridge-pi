@@ -27,6 +27,7 @@ test('compiled read-only panels render lists/details, bind generations and only 
   };
   const load = name => {
     if (name === '@getpaseo/plugin') return { defineRpc: contract => contract };
+    if (name === '@getpaseo/plugin/client/ui') return {};
     if (name === '@getpaseo/plugin/client') return { useRpc: contract => async input => {
       contract.input.parse(input); calls.push({ name: contract.name, input }); return {};
     } };

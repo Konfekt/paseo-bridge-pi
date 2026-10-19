@@ -10,15 +10,17 @@ The pill is registered against each non-archived Pi agent's `agentId` and worksp
 
 ## Pi Activity: Progress, response stamps, and cache diagnostics
 
-The **Activity** pill opens one agent-bound workspace panel with three views:
+The **Activity** pill opens one agent-bound dashboard with all sections visible together. It uses Paseo's native SettingsSection/SettingsCard surfaces, themed React Native meters, and expandable details; there are no feature tabs.
 
-- **Progress:** structured pending, in-progress, blocked, and completed steps. These are model reports, not independent verification.
-- **Response stamps:** latest 50 recorded timestamp/response/tool metadata entries, including reported physical model, thinking, duration, usage, and estimated cost when available. This is a separate panel, not an original-message bubble decorator. Old messages are not backfilled.
-- **Cache diagnostics:** observed cache rates, request gaps, weighted session totals (including summary usage), and estimated costs. Unknown accounting is not a proven cache miss; these are not account quotas or predictions.
+- **Progress:** completed/total meter, active and blocked steps first, and an expansion for the full list. Blocked steps retain their own label and color.
+- **Cache:** observed hit-rate meter and a compact input/cost summary. Cache details expand in place for weighted totals, request gaps, estimates, and recent hit-rate bars. Unknown metrics remain unavailable.
+- **Recent responses:** five compact model/time/duration/cost rows with tap-to-expand token details, plus an expansion for more responses and tool timing. The source retains up to 50 stamp records. Original conversation bubbles remain unchanged.
 
 Requires the companion Pi `stamp`, `progress`, and `cache-hit-monitor` extensions and a bridge reload. Each feature can be enabled independently; missing features show unavailable. Snapshots use the existing authenticated private read-only harness transport, bind host/agent/workspace/session/runtime, validate output schemas, and reject stale results. No credentials, response IDs, raw diagnostic text, message content, tool arguments, or tool output are exported. Progress display text is bounded without changing saved state.
 
-The panel polls every five seconds only while mounted and supports manual/reconnect refresh. It has no mutations, approvals, or prompt dispatch. Use Pi's `/stamp`, `/progress`, and `/cache-hit-monitor` commands for terminal settings/display; the mobile panel does not parse terminal widgets.
+The shared Nix Paseo package also maps successful `update_progress` version-5 results into native conversation task cards, including persisted-history replay. Paseo's task protocol has no blocked state, so blocked rows retain `completed: false` and an explicit “Blocked” label. Failed, running, malformed, and unsupported results retain ordinary tool rendering. This mapper needs the corresponding daemon package update; the iOS application uses its existing task-card renderer.
+
+The panel polls its independent sections every five seconds only while mounted and supports one manual/reconnect refresh. It has no mutations, approvals, or prompt dispatch. Use Pi's `/stamp`, `/progress`, and `/cache-hit-monitor` commands for terminal settings/display; the mobile panel does not parse terminal widgets.
 
 Compiled-plugin rendering and transport tests are automated; **native iOS visual/interaction verification is pending deployment**.
 
