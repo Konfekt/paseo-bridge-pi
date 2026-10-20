@@ -64,12 +64,12 @@ test('compiled read-only panels render lists/details, bind generations and only 
     await flush();
     const snapshot = { entries: [{ agent: { id: 'agent', workspaceId: 'workspace', provider: 'pi' } }, { agent: { id: 'other', workspaceId: 'workspace', provider: 'claude' } }] };
     observers.forEach(({ value }) => value.snapshot(snapshot));
-    assert.equal(pills.length, 7);
+    assert.equal(pills.length, 5);
     assert.equal(panels.size, 5);
-    pills.find(pill => pill.id === 'harness-jobs').button.behavior.onPress();
-    assert.deepEqual(opened.pop(), { id: 'harness-jobs', target: { workspaceId: 'workspace', agentId: 'agent' } });
+    assert.equal(pills.find(pill => pill.id === 'tasks').button.behavior.kind, 'popover');
+    assert.ok(!pills.some(pill => ['harness-jobs', 'harness-subagents', 'foreground-tasks'].includes(pill.id)));
     observers.forEach(({ value }) => value.update({ type: 'agent_update', payload: { kind: 'upsert', agent: snapshot.entries[0].agent } }));
-    assert.equal(pills.length, 7, 'stream updates must not rebuild views');
+    assert.equal(pills.length, 5, 'stream updates must not rebuild views');
 
     statusResult = { isPending: true };
     assert.match(text(render('harness-jobs')), /Connecting/);

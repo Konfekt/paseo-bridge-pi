@@ -43,6 +43,8 @@ import { coordinateMirroredSelect } from "./mirrored-select.js";
 import { createProviderReconnectLoop } from "./provider-reconnect.js";
 import { unknownRpcCommandError } from "./rpc-compat.js";
 import { buildSessionStats } from "./session-stats.js";
+import { handleSecurityModeRequest } from "./security-mode-operator.js";
+import { featureSnapshot, handleNativeFeatureRequest } from "./native-features.js";
 import { createPaseoWsConnection } from "./paseo-ws.js";
 import { applyRemoteModel } from "./model-sync.js";
 import { normalizePiEventForPaseo } from "./tool-result-normalization.js";
@@ -313,6 +315,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   let importFailures = 0;
   let importRetryAt = 0;
   let currentAgentId: string | null = null;
+  let lastSecurityModeStatus: string | undefined;
   // Values Paseo just applied through the bridge; used to break the echo
   // loop when pushing TUI-side changes back to the daemon.
   let remoteAppliedModel: string | null = null;
@@ -742,6 +745,21 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         case "get_state":
           send(success(id, type, buildState()));
           return;
+        case "get_pi_features":
+        case "set_pi_feature":
+          send(success(id, type, await handleNativeFeatureRequest(cmd, () => latestCtx, () => transport)));
+          return;
+        case "get_security_mode":
+        case "set_security_mode": {
+          const result = handleSecurityModeRequest(cmd, {
+            context: () => latestCtx,
+            transport: () => transport,
+            service: () => (globalThis as Record<string, any>).__PAE_PERMISSION_GATE_OPERATOR_V1__,
+          });
+          if ("error" in result) send(failure(id, type, result.error));
+          else send(success(id, type, result.data));
+          return;
+        }
         case "get_messages": {
           const entries = latestCtx?.sessionManager.buildContextEntries() ?? [];
           const messages = entries.filter((e: any) => e.type === "message").map((e: any) => e.message);
@@ -844,6 +862,29 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       // Missing/stale/non-guard authority must not leave an operator descriptor available.
       revokePermissionGateOperatorDescriptor();
     }
+  }
+
+  function publishSecurityModeChangeHint(): void {
+    const activeTransport = transport;
+    const ctx = latestCtx;
+    if (!activeTransport?.connected || !ctx || currentSessionFile !== activeTransport.sessionFile) return;
+    const sessionId = ctx.sessionManager.getSessionId();
+    const identityPrefix = `${sessionId}:${activeTransport.operatorEpoch}:`;
+    let signature: string;
+    try {
+      const service = (globalThis as Record<string, any>).__PAE_PERMISSION_GATE_OPERATOR_V1__;
+      if (service?.version !== 1 || typeof service.status !== "function") signature = `${identityPrefix}unavailable`;
+      else {
+        const state = service.status(sessionId);
+        signature = state?.sessionId === sessionId && typeof state.enabled === "boolean"
+          ? `${identityPrefix}available:${state.enabled}` : `${identityPrefix}unavailable`;
+      }
+    } catch { signature = `${identityPrefix}unavailable`; }
+    signature += JSON.stringify(featureSnapshot(sessionId));
+    if (signature === lastSecurityModeStatus) return;
+    lastSecurityModeStatus = signature;
+    // This is only a hint; Paseo re-reads authoritative status over the main RPC.
+    send({ type: "security_mode_changed" });
   }
 
   function revokePermissionGateOperatorDescriptor(): void {
@@ -1475,6 +1516,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
           writeRuntimeRecord(currentSessionFile, latestCtx.cwd);
         }
         publishPermissionGateOperatorDescriptor();
+        publishSecurityModeChangeHint();
         publishHarnessReadOnlyDescriptor();
         publishForegroundTasksDescriptor();
         publishAccountControlsDescriptor();

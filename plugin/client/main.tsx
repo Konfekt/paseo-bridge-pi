@@ -8,10 +8,10 @@ import {
 import { useEffect, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { permissionGateSetRpc, permissionGateStatusRpc } from "../shared/permission-gate";
-import { gateControlsDisabled, gateLabel } from "../shared/ui-state";
+import { gateControlsDisabled, gateLabel, hasNativeAccessModes } from "../shared/ui-state";
 import { mayApplyAsyncResult } from "../shared/lifecycle";
 
-type Agent = { id: string; workspaceId?: string | null; provider?: string; archivedAt?: string | null };
+type Agent = { id: string; workspaceId?: string | null; provider?: string; archivedAt?: string | null; availableModes?: { id: string }[] };
 type Entry = { agent: Agent; registration: PluginButtonRegistration; sequence: number };
 
 export function contributeClient(client: PluginClientContext) {
@@ -32,15 +32,15 @@ export function contributeClient(client: PluginClientContext) {
       if (!mayApplyAsyncResult({ stopped, aborted: lifetime.signal.aborted, sequence, currentSequence: entry.sequence, current: entries.get(entry.agent.id), expected: entry })) return;
       entry.registration.update({
         label: gateLabel(status),
-        title: status.available ? `Prompts ${status.enabled ? "On" : "Off"}` : "Prompts unavailable · press to retry",
+        title: status.available ? gateLabel(status) : "Access mode unavailable · press to retry",
       });
     } catch {
       if (!mayApplyAsyncResult({ stopped, aborted: lifetime.signal.aborted, sequence, currentSequence: entry.sequence, current: entries.get(entry.agent.id), expected: entry })) return;
-      entry.registration.update({ label: "Prompts · unavailable", title: "Prompts unavailable · press to retry" });
+      entry.registration.update({ label: "Access unavailable", title: "Access mode unavailable · press to retry" });
     }
   };
   const register = (agent: Agent) => {
-    if (agent.provider !== "pi" || agent.archivedAt || !agent.workspaceId) { remove(agent.id); return; }
+    if (agent.provider !== "pi" || agent.archivedAt || !agent.workspaceId || hasNativeAccessModes(agent.availableModes)) { remove(agent.id); return; }
     if (stopped) return;
     const existing = entries.get(agent.id);
     if (existing && existing.agent.workspaceId === agent.workspaceId) {
@@ -53,9 +53,9 @@ export function contributeClient(client: PluginClientContext) {
       workspaceId: agent.workspaceId,
       agentId: agent.id,
       button: {
-        title: "Prompts · checking",
+        title: "Access mode · checking",
         icon: "Shield",
-        label: "Prompts · …",
+        label: "Access · …",
         behavior: { kind: "popover", Content: PermissionGatePopover },
       },
     });
@@ -135,17 +135,19 @@ function PermissionGateControls({ workspaceId, agentId, theme }: { workspaceId: 
   const danger = theme.colors.statusDanger;
   return (
     <View style={{ gap: 12 }}>
-      <Text accessibilityRole="header" style={{ color, fontSize: 18 }}>Permission prompts</Text>
+      <Text accessibilityRole="header" style={{ color, fontSize: 18 }}>Access mode</Text>
       {status.isError ? <Text style={{ color: danger }}>Could not read permission state. Controls are disabled.</Text> : null}
       {status.isPending ? <Text style={{ color: muted }}>Checking this agent…</Text> : null}
       {status.data && !status.data.available ? <Text style={{ color: muted }}>{status.data.reason ?? "Permission control unavailable."}</Text> : null}
-      {available ? <Text style={{ color: muted }}>For this agent and its children, prompts are {enabled ? "on" : "off"}.</Text> : null}
-      <Text style={{ color: muted }}>Authorization and sandbox policy still apply when prompts are off.</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel="Turn permission prompts on" disabled={disabled || enabled === true} onPress={() => mutation.mutate(true)} style={{ padding: 12, opacity: disabled || enabled === true ? 0.5 : 1 }}>
-        <Text style={{ color }}>Turn prompts on</Text>
+      {available ? <Text style={{ color: muted }}>Applies to this agent and its children.</Text> : null}
+      <Text style={{ color: muted }}>Sandbox and authorization policy stay active.</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel="Use Dangerous ask" disabled={disabled || enabled === true} onPress={() => mutation.mutate(true)} style={{ padding: 12, opacity: disabled ? 0.5 : 1 }}>
+        <Text style={{ color }}>{enabled === true ? "✓ " : ""}Dangerous ask</Text>
+        <Text style={{ color: muted }}>Ask when an action needs approval.</Text>
       </Pressable>
-      <Pressable accessibilityRole="button" accessibilityLabel="Turn permission prompts off" disabled={disabled || enabled === false} onPress={() => mutation.mutate(false)} style={{ padding: 12, opacity: disabled || enabled === false ? 0.5 : 1 }}>
-        <Text style={{ color }}>Turn prompts off</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel="Use Full access" disabled={disabled || enabled === false} onPress={() => mutation.mutate(false)} style={{ padding: 12, opacity: disabled ? 0.5 : 1 }}>
+        <Text style={{ color }}>{enabled === false ? "✓ " : ""}Full access</Text>
+        <Text style={{ color: muted }}>Turn off approval prompts.</Text>
       </Pressable>
       {mutation.isPending ? <Text style={{ color: muted }}>Applying…</Text> : null}
       {message ? <Text accessibilityRole="alert" style={{ color: danger }}>{message}</Text> : null}

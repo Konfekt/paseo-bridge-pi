@@ -1,555 +1,304 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Pressable, Text, View } from "react-native";
+import { Icon, Modal, ScrollView, TextInput, copyText } from "@getpaseo/plugin/client/react-native";
 import {
-	ScrollView,
-	TextInput,
-	copyText,
-} from "@getpaseo/plugin/client/react-native";
-import {
-	SettingsCard,
-	SettingsSection,
-	SettingsSelect,
-} from "@getpaseo/plugin/client/ui";
-import {
-	useRpc,
-	type PluginAgentPanelProps,
-	type PluginClientContext,
-	type PluginButtonRegistration,
+  useRpc, type PluginAgentPanelProps, type PluginClientContext,
+  type PluginButtonRegistration, type PluginButtonContentProps, type PluginButtonIconProps, type PluginButtonBehavior,
 } from "@getpaseo/plugin/client";
 import { btwControlRpc, btwStatusRpc, type BtwRequest } from "../shared/btw";
 
 type Memory = {
-	selected?: string;
-	model?: string;
-	context: "recent" | "none";
-	binding?: string;
-	deleteConfirm?: string;
-	drafts: Record<string, { text: string; revision: number }>;
-	busy: boolean;
-	uncertain: boolean;
-	message?: string;
-	sequence: number;
-	refreshed: number;
-	failedAt: number;
+  generation: number;
+  selected?: string;
+  binding?: string;
+  pendingQuestion?: string;
+  drafts: Record<string, { text: string; revision: number }>;
+  busy: boolean;
+  uncertain: boolean;
+  message?: string;
+  sequence: number;
+  refreshed: number;
+  failedAt: number;
 };
-const memories = new Map<string, Memory>();
-function memory(key: string): Memory {
-	let m = memories.get(key);
-	if (!m) {
-		m = {
-			context: "recent",
-			drafts: {},
-			busy: false,
-			uncertain: false,
-			sequence: 0,
-			refreshed: 0,
-			failedAt: 0,
-		};
-		memories.set(key, m);
-	}
-	return m;
-}
 function uuid() {
-	return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-		const r = (Math.random() * 16) | 0;
-		return (c === "x" ? r : (r & 3) | 8).toString(16);
-	});
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+    const r = (Math.random() * 16) | 0;
+    return (c === "x" ? r : (r & 3) | 8).toString(16);
+  });
 }
-
-export function BtwPanel(props: PluginAgentPanelProps) {
-	return (
-		<BtwView
-			key={JSON.stringify([props.host.id, props.workspaceId, props.agentId])}
-			{...props}
-		/>
-	);
+type ChatProps = Pick<PluginAgentPanelProps, "host" | "workspaceId" | "agentId" | "theme" | "layout"> & { expanded?: boolean };
+export function BtwPanel(props: ChatProps) {
+  return <BtwView key={JSON.stringify([props.host.id, props.workspaceId, props.agentId])} {...props} />;
 }
-function BtwView({ host, workspaceId, agentId, theme }: PluginAgentPanelProps) {
-	const status = useRpc(btwStatusRpc),
-		control = useRpc(btwControlRpc);
-	const [saved] = useState(() =>
-		memory(JSON.stringify([host.id, workspaceId, agentId])),
-	);
-	const [, redraw] = useState(0);
-	const refreshView = () => redraw((n) => n + 1);
-	const selected = saved.selected;
-	const query = useQuery({
-		queryKey: ["pi-btw", host.id, workspaceId, agentId, selected ?? ""],
-		queryFn: async () => {
-			const sequence = ++saved.sequence;
-			const data = await status({
-				agentId,
-				workspaceId,
-				...(selected ? { threadId: selected } : {}),
-			});
-			if (data.available && data.snapshot) {
-				const binding = JSON.stringify([
-					data.sessionId,
-					data.runtimeEpoch,
-					data.snapshot.serviceEpoch,
-				]);
-				saved.binding ??= binding;
-				if (binding === saved.binding)
-					saved.refreshed = Math.max(saved.refreshed, sequence);
-			}
-			return data;
-		},
-		refetchInterval: (query) =>
-			query.state.data?.snapshot?.threads.find((t) => t.id === selected)
-				?.state === "running"
-				? 1000
-				: 5000,
-		refetchOnReconnect: true,
-		staleTime: 0,
-	});
-	const data = query.data,
-		snap = data?.snapshot;
-	const binding =
-		data?.available && snap
-			? JSON.stringify([data.sessionId, data.runtimeEpoch, snap.serviceEpoch])
-			: undefined;
-	const current = !!binding && binding === saved.binding && !query.isError;
-	const thread = current
-		? snap?.threads.find((t) => t.id === selected)
-		: undefined;
-	const draftKey = selected ?? "new",
-		draft = saved.drafts[draftKey]?.text ?? "";
-	const blocked = !current || saved.busy || saved.uncertain;
-	const colors = theme.colors;
-	const button = (label: string, action: () => void, disabled = false) => (
-		<Pressable
-			accessibilityRole="button"
-			accessibilityState={{ disabled }}
-			disabled={disabled}
-			onPress={action}
-			style={{
-				minHeight: 44,
-				justifyContent: "center",
-				opacity: disabled ? 0.5 : 1,
-			}}
-		>
-			<Text style={{ color: colors.accent }}>{label}</Text>
-		</Pressable>
-	);
-	async function mutate(operation: BtwRequest["operation"]) {
-		if (
-			blocked ||
-			saved.busy ||
-			saved.uncertain ||
-			!snap ||
-			!data?.runtimeEpoch ||
-			!data.sessionId
-		)
-			return;
-		const question = draft.trim(),
-			submitted = saved.drafts[draftKey];
-		if (
-			(operation === "start" || operation === "send") &&
-			(!question || thread?.state === "running")
-		)
-			return;
-		const threadId = operation === "start" ? uuid() : selected;
-		if (!threadId) return;
-		const base = {
-			sessionId: data.sessionId,
-			serviceEpoch: snap.serviceEpoch,
-			requestId: uuid(),
-			threadId,
-		};
-		const request: BtwRequest =
-			operation === "start"
-				? {
-						...base,
-						operation,
-						question,
-						model: saved.model ?? snap.defaultModel,
-						context: saved.context,
-					}
-				: operation === "send"
-					? { ...base, operation, question }
-					: { ...base, operation };
-		saved.busy = true;
-		saved.message = undefined;
-		if (operation === "start") saved.selected = threadId;
-		refreshView();
-		try {
-			await control({
-				agentId,
-				workspaceId,
-				expectedRuntimeEpoch: data.runtimeEpoch,
-				request,
-			});
-			if (
-				(operation === "start" || operation === "send") &&
-				submitted &&
-				saved.drafts[draftKey]?.revision === submitted.revision
-			)
-				saved.drafts[draftKey] = { text: "", revision: submitted.revision + 1 };
-			if (operation === "remove" && saved.selected === threadId)
-				saved.selected = undefined;
-		} catch {
-			saved.uncertain = true;
-			saved.failedAt = saved.sequence;
-			saved.message =
-				"The action may have completed. Refresh and review this thread before another action.";
-		} finally {
-			saved.busy = false;
-			refreshView();
-			void query.refetch();
-		}
-	}
-	return (
-		<ScrollView
-			style={{ flex: 1, backgroundColor: colors.surface0 }}
-			contentContainerStyle={{ padding: 16, gap: 16 }}
-		>
-			<View
-				style={{
-					flexDirection: "row",
-					justifyContent: "space-between",
-					alignItems: "center",
-				}}
-			>
-				<Text
-					accessibilityRole="header"
-					style={{ color: colors.foreground, fontSize: 20, fontWeight: "600" }}
-				>
-					BTW
-				</Text>
-				{button("Refresh", () => void query.refetch(), query.isFetching)}
-			</View>
-			{query.isPending ? (
-				<Text style={{ color: colors.foregroundMuted }}>Connecting to Pi…</Text>
-			) : null}
-			{query.isError ? (
-				<Text style={{ color: colors.statusWarning }}>
-					BTW connection unavailable. Refresh to reconnect.
-				</Text>
-			) : null}
-			{!query.isPending && !query.isError && !data?.available ? (
-				<Text style={{ color: colors.foregroundMuted }}>
-					Reload Pi to enable BTW, then refresh.
-				</Text>
-			) : null}
-			{binding && binding !== saved.binding ? (
-				<View>
-					<Text style={{ color: colors.statusWarning }}>
-						The Pi connection changed. Review the current session before
-						continuing.
-					</Text>
-					{button(
-						"Connect current session",
-						() => {
-							saved.binding = binding;
-							saved.selected = undefined;
-							saved.uncertain = false;
-							saved.message = undefined;
-							refreshView();
-							void query.refetch();
-						},
-						saved.busy,
-					)}
-				</View>
-			) : null}
-			{current && snap ? (
-				<>
-					<SettingsSection title="Side conversations">
-						<SettingsCard>
-							<SettingsSelect
-								label="Conversation"
-								value={selected ?? "new"}
-								options={[
-									{ label: "New conversation", value: "new" },
-									...snap.threads.map((t) => ({
-										label: `${t.question.slice(0, 70)} · ${t.state}`,
-										value: t.id,
-									})),
-								]}
-								onValueChange={(value) => {
-									saved.selected = value === "new" ? undefined : value;
-									saved.deleteConfirm = undefined;
-									if (!saved.uncertain) saved.message = undefined;
-									refreshView();
-								}}
-								disabled={saved.busy}
-							/>
-							{!selected ? (
-								<>
-									<SettingsSelect
-										label="Model"
-										value={saved.model ?? snap.defaultModel}
-										options={[
-											...new Set([snap.defaultModel, ...snap.models]),
-										].map((value) => ({ label: value, value }))}
-										onValueChange={(value) => {
-											saved.model = value;
-											refreshView();
-										}}
-										disabled={blocked}
-									/>
-									<SettingsSelect
-										label="Context"
-										value={saved.context}
-										options={[
-											{ label: "Recent main conversation", value: "recent" },
-											{ label: "No main context", value: "none" },
-										]}
-										onValueChange={(value) => {
-											saved.context = value;
-											refreshView();
-										}}
-										disabled={blocked}
-									/>
-								</>
-							) : null}
-						</SettingsCard>
-					</SettingsSection>
-					{thread ? (
-						<View style={{ gap: 12 }}>
-							<Text style={{ color: colors.foregroundMuted }}>
-								{thread.model} ·{" "}
-								{thread.context === "recent"
-									? "Main-context snapshot"
-									: "No main context"}
-								{thread.contextTruncated ? " · Earlier context omitted" : ""}
-							</Text>
-							{thread.turns.map((turn, index) => (
-								<SettingsSection
-									key={`${thread.id}:${index}`}
-									title={`Exchange ${index + 1}`}
-								>
-									<SettingsCard>
-										<View style={{ padding: 12, gap: 12 }}>
-											<Text
-												selectable
-												style={{ color: colors.foreground, fontWeight: "600" }}
-											>
-												{turn.question}
-											</Text>
-											<Text
-												selectable
-												style={{ color: colors.foreground, lineHeight: 22 }}
-											>
-												{turn.answer}
-											</Text>
-											{button("Copy answer", () => {
-												void copyText(turn.answer).then(
-													() => {
-														saved.message =
-															"Answer copied. Paste it into the main draft when ready.";
-														refreshView();
-													},
-													() => {
-														saved.message =
-															"Could not copy. Select the answer text to copy it.";
-														refreshView();
-													},
-												);
-											})}
-										</View>
-									</SettingsCard>
-								</SettingsSection>
-							))}
-							{thread.state === "running" ? (
-								<SettingsSection title="Answering">
-									<SettingsCard>
-										<View style={{ padding: 12, gap: 12 }}>
-											<Text
-												style={{ color: colors.foreground, fontWeight: "600" }}
-											>
-												{thread.question}
-											</Text>
-											<Text selectable style={{ color: colors.foreground }}>
-												{thread.partial || "Thinking…"}
-											</Text>
-											{button(
-												"Stop response",
-												() => void mutate("cancel"),
-												blocked,
-											)}
-										</View>
-									</SettingsCard>
-								</SettingsSection>
-							) : null}
-							{thread.state === "cancelled" ? (
-								<Text style={{ color: colors.foregroundMuted }}>
-									Response cancelled. Completed exchanges are retained.
-								</Text>
-							) : null}
-							{thread.error ? (
-								<Text style={{ color: colors.statusWarning }}>
-									{thread.error}
-								</Text>
-							) : null}
-							{button(
-								"Delete side conversation",
-								() => {
-									if (saved.deleteConfirm !== thread.id) {
-										saved.deleteConfirm = thread.id;
-										saved.message =
-											"Delete this side conversation? Tap Delete again to confirm.";
-										refreshView();
-									} else {
-										saved.deleteConfirm = undefined;
-										void mutate("remove");
-									}
-								},
-								blocked,
-							)}
-						</View>
-					) : selected ? (
-						<Text style={{ color: colors.foregroundMuted }}>
-							{saved.busy || query.isFetching
-								? "Loading selected conversation…"
-								: "Selected conversation is no longer available. Choose another conversation."}
-						</Text>
-					) : null}
-					{saved.message ? (
-						<Text
-							accessibilityRole="alert"
-							style={{
-								color: saved.uncertain
-									? colors.statusWarning
-									: colors.foregroundMuted,
-							}}
-						>
-							{saved.message}
-						</Text>
-					) : null}
-					{saved.uncertain
-						? button(
-								"I reviewed the refreshed status",
-								() => {
-									saved.uncertain = false;
-									saved.message = undefined;
-									refreshView();
-								},
-								saved.busy ||
-									saved.refreshed <= saved.failedAt ||
-									query.isError ||
-									query.isFetching,
-							)
-						: null}
-					<TextInput
-						accessibilityLabel="BTW question"
-						placeholder={thread ? "Ask a follow-up…" : "Ask a side question…"}
-						multiline
-						maxLength={8000}
-						editable={!blocked && thread?.state !== "running"}
-						value={draft}
-						onChangeText={(text) => {
-							saved.drafts[draftKey] = {
-								text,
-								revision: (saved.drafts[draftKey]?.revision ?? 0) + 1,
-							};
-							refreshView();
-						}}
-						style={{
-							color: colors.foreground,
-							backgroundColor: colors.surface1,
-							borderColor: colors.border,
-							borderWidth: 1,
-							borderRadius: 10,
-							padding: 12,
-							minHeight: 90,
-						}}
-					/>
-					{button(
-						thread ? "Send follow-up" : "Ask BTW",
-						() => void mutate(selected ? "send" : "start"),
-						blocked ||
-							!draft.trim() ||
-							thread?.state === "running" ||
-							(!!selected && !thread),
-					)}
-					<Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>
-						Temporary history · cleared when Pi reloads or switches sessions.
-					</Text>
-				</>
-			) : null}
-		</ScrollView>
-	);
+function BtwPopover(props: PluginButtonContentProps) {
+  return props.context === "agent" ? <BtwPanel {...props} /> : null;
+}
+function createMobileChatState() {
+  let open = false;
+  const listeners = new Set<() => void>();
+  return {
+    getSnapshot: () => open,
+    subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    setOpen: (value: boolean) => { if (open !== value) { open = value; for (const listener of listeners) listener(); } },
+  };
+}
+function BtwButtonIcon(props: PluginButtonIconProps & {
+  configure: (behavior: PluginButtonBehavior) => void;
+  modal: ReturnType<typeof createMobileChatState>;
+}) {
+  // Button actions briefly replace their icon with a spinner. Keep modal state outside that icon lifetime.
+  const open = useSyncExternalStore(props.modal.subscribe, props.modal.getSnapshot, props.modal.getSnapshot);
+  const setOpen = props.modal.setOpen;
+  const mobile = props.layout.compact || props.layout.platform !== "web";
+  useEffect(() => {
+    props.configure(mobile ? { kind: "action", onPress: () => setOpen(true) }
+      : { kind: "popover", Content: BtwPopover });
+    if (!mobile) setOpen(false);
+  }, [mobile, props.configure, setOpen]);
+  return <>
+    <Icon name="MessagesSquare" size={props.size} color={props.color} />
+    {mobile && open && props.context === "agent" ? (
+      <Modal title="" open={open} onOpenChange={setOpen}>
+        <Modal.Content scrollable={false} style={{ flex: 1 }} contentContainerStyle={{ flex: 1, padding: 0, gap: 0 }}>
+          <BtwPanel {...props} expanded />
+        </Modal.Content>
+      </Modal>
+    ) : null}
+  </>;
+}
+function BtwView({ host, workspaceId, agentId, theme, layout, expanded = false }: ChatProps) {
+  const status = useRpc(btwStatusRpc), control = useRpc(btwControlRpc);
+  const [saved] = useState<Memory>(() => ({ generation: 0, drafts: {}, busy: false, uncertain: false, sequence: 0, refreshed: 0, failedAt: 0 }));
+  const [instanceId] = useState(uuid);
+  const [, redraw] = useState(0);
+  const [copied, setCopied] = useState<string>();
+  const scroll = useRef<any>(null);
+  const closed = useRef(false);
+  const pending = useRef<Promise<unknown> | undefined>(undefined);
+  const discard = useRef<(() => Promise<unknown>) | undefined>(undefined);
+  function discardOwnedThread() {
+    const remove = discard.current, inflight = pending.current;
+    discard.current = undefined;
+    pending.current = undefined;
+    if (remove) void (async () => {
+      try { await inflight; } catch { /* Still discard a possibly accepted request. */ }
+      try { await remove(); } catch (error) { console.warn("BTW dismissal cleanup unavailable", error); }
+    })();
+  }
+  useEffect(() => {
+    closed.current = false;
+    return () => { closed.current = true; discardOwnedThread(); };
+  }, []);
+  const refreshView = () => { if (!closed.current) redraw(n => n + 1); };
+  const selected = saved.selected;
+  const query = useQuery({
+    queryKey: ["pi-btw", host.id, workspaceId, agentId, instanceId, selected ?? ""],
+    queryFn: async () => {
+      const sequence = ++saved.sequence, generation = saved.generation;
+      const data = await status({ agentId, workspaceId, ...(selected ? { threadId: selected } : {}) });
+      if (closed.current || generation !== saved.generation) return data;
+      if (data.available && data.snapshot) {
+        const binding = JSON.stringify([data.sessionId, data.runtimeEpoch, data.snapshot.serviceEpoch]);
+        if (saved.binding && saved.binding !== binding) {
+          const previous = JSON.parse(saved.binding), threadId = saved.selected;
+          // A new transport may still own the same engine and thread. Remove only that exact thread.
+          if (threadId && previous[0] === data.sessionId && previous[2] === data.snapshot.serviceEpoch) {
+            const sessionId = data.sessionId!, serviceEpoch = data.snapshot.serviceEpoch;
+            discard.current = () => control({ agentId, workspaceId, expectedRuntimeEpoch: data.runtimeEpoch!,
+              request: { operation: "remove", sessionId, serviceEpoch, threadId, requestId: uuid() } });
+          }
+          discardOwnedThread();
+          saved.generation += 1;
+          saved.selected = undefined;
+          saved.pendingQuestion = undefined;
+          saved.drafts = {};
+          saved.busy = false;
+          saved.uncertain = false;
+          saved.message = undefined;
+          saved.failedAt = 0;
+          setCopied(undefined);
+          refreshView();
+        }
+        saved.binding = binding;
+        saved.refreshed = Math.max(saved.refreshed, sequence);
+      }
+      return data;
+    },
+    gcTime: 0,
+    refetchInterval: query => query.state.data?.snapshot?.threads.find(t => t.id === selected)?.state === "running" ? 1000 : 5000,
+    refetchOnReconnect: true,
+    staleTime: 0,
+  });
+  const data = query.data, snap = data?.snapshot;
+  const binding = data?.available && snap
+    ? JSON.stringify([data.sessionId, data.runtimeEpoch, snap.serviceEpoch]) : undefined;
+  const current = !!binding && binding === saved.binding && !query.isError;
+  const thread = current ? snap?.threads.find(t => t.id === selected) : undefined;
+  const draftKey = selected ?? "new", draft = saved.drafts[draftKey]?.text ?? "";
+  const blocked = !current || saved.busy || saved.uncertain;
+  const canSend = !blocked && !!draft.trim() && thread?.state !== "running" && (!selected || !!thread);
+  const colors = theme.colors;
+  const button = (label: string, action: () => void, disabled = false) => (
+    <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }}
+      disabled={disabled} onPress={action}
+      style={{ minHeight: 36, paddingHorizontal: 8, justifyContent: "center", opacity: disabled ? 0.45 : 1 }}>
+      <Text style={{ color: colors.accent }}>{label}</Text>
+    </Pressable>
+  );
+  const question = (text: string) => (
+    <View style={{ alignSelf: "flex-end", maxWidth: "92%", backgroundColor: colors.surface1, borderRadius: 12, padding: 10 }}>
+      <Text selectable style={{ color: colors.foreground, lineHeight: 21 }}>{text}</Text>
+    </View>
+  );
+  async function mutate(operation: BtwRequest["operation"]) {
+    if (blocked || saved.busy || saved.uncertain || !snap || !data?.runtimeEpoch || !data.sessionId) return;
+    const generation = saved.generation;
+    const question = draft.trim(), submitted = saved.drafts[draftKey];
+    if ((operation === "start" || operation === "send") && (!question || thread?.state === "running")) return;
+    const threadId = operation === "start" ? uuid() : selected;
+    if (!threadId) return;
+    const base = { sessionId: data.sessionId, serviceEpoch: snap.serviceEpoch, requestId: uuid(), threadId };
+    const request: BtwRequest = operation === "start"
+      ? { ...base, operation, question, model: snap.defaultModel, context: "recent" }
+      : operation === "send" ? { ...base, operation, question } : { ...base, operation };
+    saved.busy = true;
+    saved.message = undefined;
+    if (operation === "start" || operation === "send") saved.pendingQuestion = question;
+    if (operation === "start") saved.selected = threadId;
+    refreshView();
+    discard.current = () => control({ agentId, workspaceId, expectedRuntimeEpoch: data.runtimeEpoch!,
+      request: { ...base, operation: "remove", requestId: uuid() } });
+    try {
+      pending.current = control({ agentId, workspaceId, expectedRuntimeEpoch: data.runtimeEpoch, request });
+      await pending.current;
+      if (generation !== saved.generation || closed.current) return;
+      if ((operation === "start" || operation === "send") && submitted && saved.drafts[draftKey]?.revision === submitted.revision)
+        saved.drafts[draftKey] = { text: "", revision: submitted.revision + 1 };
+      if (operation === "remove" && saved.selected === threadId) saved.selected = undefined;
+    } catch {
+      if (generation !== saved.generation || closed.current) return;
+      saved.uncertain = true;
+      saved.failedAt = saved.sequence;
+      saved.message = "The action may have completed. Refresh and review this chat before continuing.";
+    } finally {
+      if (generation === saved.generation && !closed.current) {
+        saved.busy = false;
+        refreshView();
+        void query.refetch();
+      }
+    }
+  }
+  return (
+    <View style={expanded ? { flex: 1, minHeight: 0, width: "100%", backgroundColor: colors.surface0 }
+      : { width: 340, maxWidth: "100%", height: 400, backgroundColor: colors.surface0 }}>
+      <ScrollView ref={scroll} style={{ flex: 1 }} contentContainerStyle={{ padding: 12, gap: 14 }}
+        onContentSizeChange={() => scroll.current?.scrollToEnd?.({ animated: false })}>
+        {query.isPending ? <Text style={{ color: colors.foregroundMuted }}>Connecting…</Text> : null}
+        {query.isError ? <Text style={{ color: colors.statusWarning }}>Connection unavailable.</Text> : null}
+        {!query.isPending && !query.isError && !data?.available ? <Text style={{ color: colors.foregroundMuted }}>Reload Pi to enable BTW.</Text> : null}
+        {thread?.turns.map((turn, index) => <View key={`${thread.id}:${index}`} style={{ gap: 12 }}>
+          {question(turn.question)}
+          <Text selectable style={{ color: colors.foreground, lineHeight: 22 }}>{turn.answer}</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel="Copy response"
+            style={{ alignSelf: "flex-start", padding: 8 }} onPress={() => {
+              const generation = saved.generation;
+              void copyText(turn.answer).then(() => { if (!closed.current && generation === saved.generation) setCopied(`${thread.id}:${index}`); }, () => {
+                if (closed.current || generation !== saved.generation) return;
+                if (!saved.uncertain) saved.message = "Could not copy. Select the text to copy it.";
+                refreshView();
+              });
+            }}>
+            <Icon name={copied === `${thread.id}:${index}` ? "Check" : "Copy"} size={16} color={colors.foregroundMuted} />
+          </Pressable>
+        </View>)}
+        {thread?.state === "running" ? <View style={{ gap: 12 }}>
+          {question(saved.pendingQuestion ?? thread.question)}
+          <Text selectable style={{ color: colors.foreground, lineHeight: 22 }}>{thread.partial || "Thinking…"}</Text>
+        </View> : null}
+        {current && selected && !thread ? <Text style={{ color: colors.foregroundMuted }}>{saved.busy || query.isFetching ? "Loading…" : "This chat is no longer available. Dismiss and reopen BTW to start again."}</Text> : null}
+        {thread?.state === "cancelled" ? <Text style={{ color: colors.foregroundMuted }}>Response stopped.</Text> : null}
+        {thread?.error ? <Text style={{ color: colors.statusWarning }}>{thread.error}</Text> : null}
+        {saved.message ? <Text accessibilityRole="alert" style={{ color: saved.uncertain ? colors.statusWarning : colors.foregroundMuted }}>{saved.message}</Text> : null}
+        {saved.uncertain ? <View>
+          {button("Refresh", () => void query.refetch(), query.isFetching)}
+          {button("I reviewed the refreshed chat", () => { saved.uncertain = false; saved.message = undefined; refreshView(); },
+            saved.busy || saved.refreshed <= saved.failedAt || query.isError || query.isFetching)}
+        </View> : null}
+      </ScrollView>
+      <View style={{ margin: 10, position: "relative", backgroundColor: colors.surface1,
+        borderWidth: 1, borderColor: colors.border, borderRadius: 10 }}>
+        <TextInput accessibilityLabel="BTW message" placeholder="Ask a side question…" placeholderTextColor={colors.foregroundMuted} multiline maxLength={8000}
+          editable={!blocked && thread?.state !== "running"} value={draft}
+          onKeyPress={layout.platform === "web" ? event => {
+            const key = event.nativeEvent as typeof event.nativeEvent & { shiftKey?: boolean; isComposing?: boolean; keyCode?: number; which?: number; repeat?: boolean };
+            if (key.key !== "Enter" || key.shiftKey || key.isComposing || key.keyCode === 229 || key.which === 229) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (canSend && !key.repeat) void mutate(selected ? "send" : "start");
+          } : undefined}
+          onChangeText={text => { saved.drafts[draftKey] = { text, revision: (saved.drafts[draftKey]?.revision ?? 0) + 1 }; refreshView(); }}
+          style={{ color: colors.foreground, backgroundColor: "transparent", borderWidth: 0,
+            borderRadius: 10, padding: 10, paddingBottom: 44, minHeight: 88, maxHeight: 150 }} />
+        <View style={{ position: "absolute", bottom: 8, right: 8 }}>
+          <Pressable accessibilityRole="button"
+            accessibilityLabel={thread?.state === "running" ? "Stop response" : "Send message"}
+            accessibilityState={{ disabled: thread?.state === "running" ? blocked : !canSend }}
+            disabled={thread?.state === "running" ? blocked : !canSend}
+            onPress={() => void mutate(thread?.state === "running" ? "cancel" : selected ? "send" : "start")}
+            style={{ width: 28, height: 28, borderRadius: 999, marginLeft: 4,
+              alignItems: "center", justifyContent: "center",
+              backgroundColor: thread?.state === "running" ? colors.statusDanger : colors.accent,
+              opacity: (thread?.state === "running" ? blocked : !canSend) ? 0.5 : 1 }}>
+            {thread?.state === "running"
+              ? <View style={{ width: 12, height: 12, borderRadius: 1, backgroundColor: "white" }} />
+              : <Icon name="ArrowUp" size={layout.platform === "web" ? 16 : 20} color={colors.accentForeground} />}
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  );
 }
 
 export function contributeBtw(client: PluginClientContext) {
-	const entries = new Map<
-		string,
-		{ workspace: string; button: PluginButtonRegistration }
-	>();
-	const controller = new AbortController();
-	let stopped = false;
-	const dispose = client.addWorkspacePanel({
-		id: "pi-btw",
-		title: "BTW",
-		icon: "MessagesSquare",
-		context: "agent",
-		locations: ["workspace"],
-		Component: BtwPanel,
-	});
-	const remove = (id: string) => {
-		entries.get(id)?.button.remove();
-		entries.delete(id);
-	};
-	const register = (agent: {
-		id: string;
-		workspaceId?: string | null;
-		provider?: string;
-		archivedAt?: string | null;
-	}) => {
-		if (stopped) return;
-		if (agent.provider !== "pi" || agent.archivedAt || !agent.workspaceId) {
-			remove(agent.id);
-			return;
-		}
-		if (entries.get(agent.id)?.workspace === agent.workspaceId) return;
-		remove(agent.id);
-		const workspaceId = agent.workspaceId;
-		entries.set(agent.id, {
-			workspace: workspaceId,
-			button: client.addComposerPill({
-				id: "pi-btw",
-				agentId: agent.id,
-				workspaceId,
-				button: {
-					label: "BTW",
-					title: "Side conversations",
-					icon: "MessagesSquare",
-					behavior: {
-						kind: "action",
-						onPress: () =>
-							client.openPanel("pi-btw", { agentId: agent.id, workspaceId }),
-					},
-				},
-			}),
-		});
-	};
-	void client.paseo.agents
-		.list({ subscribe: {}, signal: controller.signal })
-		.then(({ subscription }) => {
-			if (stopped) return;
-			subscription.subscribe({
-				snapshot: ({ entries: agents }) => {
-					if (stopped) return;
-					const ids = new Set(agents.map(({ agent }) => agent.id));
-					for (const id of entries.keys()) if (!ids.has(id)) remove(id);
-					for (const { agent } of agents) register(agent);
-				},
-				update: (message) => {
-					if (stopped || message.type !== "agent_update") return;
-					if (message.payload.kind === "remove")
-						remove(message.payload.agentId);
-					else register(message.payload.agent);
-				},
-			});
-		})
-		.catch((error) => {
-			if (!stopped) console.error("BTW subscription unavailable", error);
-		});
-	return () => {
-		stopped = true;
-		controller.abort();
-		for (const id of entries.keys()) remove(id);
-		dispose();
-	};
+  const entries = new Map<string, { workspace: string; button: PluginButtonRegistration }>();
+  const controller = new AbortController();
+  let stopped = false;
+  const remove = (id: string) => { entries.get(id)?.button.remove(); entries.delete(id); };
+  const register = (agent: { id: string; workspaceId?: string | null; provider?: string; archivedAt?: string | null }) => {
+    if (stopped) return;
+    if (agent.provider !== "pi" || agent.archivedAt || !agent.workspaceId) { remove(agent.id); return; }
+    if (entries.get(agent.id)?.workspace === agent.workspaceId) return;
+    remove(agent.id);
+    const workspaceId = agent.workspaceId;
+    let button: PluginButtonRegistration | undefined;
+    const configure = (behavior: PluginButtonBehavior) => button?.update({ behavior });
+    const modal = createMobileChatState();
+    button = client.addComposerPill({ id: "pi-btw", agentId: agent.id, workspaceId,
+      button: { label: "btw", title: "btw", icon: props => <BtwButtonIcon {...props} configure={configure} modal={modal} />,
+        behavior: { kind: "popover", Content: BtwPopover } },
+    });
+    entries.set(agent.id, { workspace: workspaceId, button });
+  };
+  void client.paseo.agents.list({ subscribe: {}, signal: controller.signal }).then(({ subscription }) => {
+    if (stopped) return;
+    subscription.subscribe({
+      snapshot: ({ entries: agents }) => {
+        if (stopped) return;
+        const ids = new Set(agents.map(({ agent }) => agent.id));
+        for (const id of entries.keys()) if (!ids.has(id)) remove(id);
+        for (const { agent } of agents) register(agent);
+      },
+      update: message => {
+        if (stopped || message.type !== "agent_update") return;
+        if (message.payload.kind === "remove") remove(message.payload.agentId);
+        else register(message.payload.agent);
+      },
+    });
+  }).catch(error => { if (!stopped) console.error("BTW subscription unavailable", error); });
+  return () => {
+    stopped = true;
+    controller.abort();
+    for (const id of entries.keys()) remove(id);
+  };
 }

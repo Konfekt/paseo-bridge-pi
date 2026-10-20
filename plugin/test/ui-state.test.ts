@@ -1,14 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { gateControlsDisabled, gateLabel } from "../shared/ui-state.ts";
+import { gateControlsDisabled, gateLabel, hasNativeAccessModes } from "../shared/ui-state.ts";
 
 const ready = { available: true, enabled: false, pending: false, fetching: false, stale: false, error: false };
 
-test("pill reports prompt state without suggesting authorization is bypassed", () => {
-  assert.equal(gateLabel({ available: true, enabled: true }), "Prompts · On");
-  assert.equal(gateLabel({ available: true, enabled: false }), "Prompts · Off");
-  assert.equal(gateLabel({ available: false, enabled: null }), "Prompts · unavailable");
-  assert.equal(gateLabel(), "Prompts · …");
+test("access labels map to the existing prompt policy without defaulting unknown state", () => {
+  assert.equal(gateLabel({ available: true, enabled: true }), "Dangerous ask");
+  assert.equal(gateLabel({ available: true, enabled: false }), "Full access");
+  assert.equal(gateLabel({ available: false, enabled: null }), "Access unavailable");
+  assert.equal(gateLabel(), "Access · …");
+});
+
+test("fallback is hidden only when both native access modes are advertised", () => {
+  assert.equal(hasNativeAccessModes(), false);
+  assert.equal(hasNativeAccessModes([{ id: "default" }]), false);
+  assert.equal(hasNativeAccessModes([{ id: "pi-prompts-on" }]), false);
+  assert.equal(hasNativeAccessModes([{ id: "pi-prompts-on" }, { id: "pi-prompts-off" }]), true);
 });
 
 test("stale, failed, unavailable, pending and reconnect-refresh states fail closed", () => {

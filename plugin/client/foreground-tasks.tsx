@@ -98,10 +98,10 @@ export function contributeForegroundTasks(client: PluginClientContext) {
 
 function ForegroundTasksPopover(props: PluginButtonContentProps) {
   if (props.context !== "agent") return <View />;
-  return <ForegroundTasksView key={`${props.host.id}:${props.agentId}:${props.workspaceId}`} {...props} agentId={props.agentId} workspaceId={props.workspaceId} />;
+  return <ForegroundTasksSection key={`${props.host.id}:${props.agentId}:${props.workspaceId}`} {...props} agentId={props.agentId} workspaceId={props.workspaceId} />;
 }
 
-function ForegroundTasksView({ agentId, workspaceId, host, theme, close }: PluginButtonContentProps & { agentId: string; workspaceId: string }) {
+export function ForegroundTasksSection({ agentId, workspaceId, host, theme, close }: PluginButtonContentProps & { agentId: string; workspaceId: string }) {
   const statusCall = useRpc(foregroundTasksStatusRpc);
   const controlCall = useRpc(foregroundTasksRpc);
   const status = useQuery({

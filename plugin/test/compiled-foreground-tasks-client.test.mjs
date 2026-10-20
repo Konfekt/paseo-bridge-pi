@@ -86,7 +86,7 @@ test('compiled foreground popover reports closed-state attention, persists inter
   }
   function render() {
     stateIndex = 0; refIndex = 0; effectIndex = 0;
-    return pills.find(pill => pill.id === 'foreground-tasks').button.behavior.Content(props);
+    return pills.find(pill => pill.id === 'tasks').button.behavior.Content(props);
   }
   const press = (tree, label) => {
     const item = walk(tree).find(node => node.type === 'Pressable' && node.props.accessibilityLabel === label);
@@ -95,14 +95,16 @@ test('compiled foreground popover reports closed-state attention, persists inter
   const node = (tree, type, label) => walk(tree).find(item => item.type === type && item.props.accessibilityLabel === label);
   try {
     await flush(); observers.forEach(observer => observer.snapshot({ entries: [{ agent }] })); await flush();
-    const pill = pills.find(item => item.id === 'foreground-tasks');
+    const pill = pills.find(item => item.id === 'tasks');
     assert.ok(pill); assert.equal(pill.button.behavior.kind, 'popover');
-    assert.ok(statusCalls.some(call => call.name === 'foreground_tasks_status'), 'composer pill polls status while closed');
-    assert.match(pill.updates.at(-1).label, /Q\d+.*P\d+/); assert.match(pill.updates.at(-1).title, /permissions/);
+    assert.ok(!statusCalls.some(call => call.name === 'foreground_tasks_status'), 'hidden registrations do not poll foreground state');
+    pill.button.icon({ ...props, size: 14, color: '#aaa' });
+    assert.equal(pill.updates.at(-1).label, 'Tasks · attention');
+    assert.match(pill.updates.at(-1).title, /foreground: 0 running, 1 needing attention/);
 
     let tree = render();
     assert.equal(walk(tree).some(item => item.type === 'ScrollView'), false, 'composer popover must use only the host surface scroll owner');
-    assert.equal(tree.props.style.maxHeight, 410);
+    assert.ok(walk(tree).some(item => item.props?.style?.maxHeight === 410));
     assert.match(text(tree), /Helper · waiting-permission/);
     assert.equal(calls.length, 0, 'opening a pending permission never submits a decision');
     press(tree, 'Helper · waiting-permission · harness-test/mock:off · 2 awaiting you');

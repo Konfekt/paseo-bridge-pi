@@ -47,7 +47,7 @@ export function contributeObservability(client: PluginClientContext) {
 				workspaceId,
 				button: {
 					label: "Activity",
-					title: "Progress, cache and response details",
+					title: "Activity",
 					icon: "Activity",
 					behavior: {
 						kind: "action",

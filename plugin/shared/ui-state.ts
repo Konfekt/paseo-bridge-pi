@@ -12,7 +12,12 @@ export function gateControlsDisabled(state: GateUiState): boolean {
 }
 
 export function gateLabel(state?: Pick<GateUiState, "available" | "enabled">): string {
-  if (!state) return "Prompts · …";
-  if (!state.available || state.enabled === null) return "Prompts · unavailable";
-  return `Prompts · ${state.enabled ? "On" : "Off"}`;
+  if (!state) return "Access · …";
+  if (!state.available || state.enabled === null) return "Access unavailable";
+  return state.enabled ? "Dangerous ask" : "Full access";
+}
+
+export function hasNativeAccessModes(modes?: readonly { id: string }[]): boolean {
+  return !!modes?.some(mode => mode.id === "pi-prompts-on")
+    && !!modes.some(mode => mode.id === "pi-prompts-off");
 }

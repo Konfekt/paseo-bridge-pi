@@ -59,8 +59,8 @@ test('compiled contribution preserves Pi pills, isolates installations and ignor
     a.calls[0].resolve(good);
     b.calls[0].resolve({ ...good, enabled: false });
     await flush();
-    assert.match(a.registrations[0].updates.at(-1).label, /On/);
-    assert.match(b.registrations[0].updates.at(-1).label, /Off/);
+    assert.equal(a.registrations[0].updates.at(-1).label, 'Dangerous ask');
+    assert.equal(b.registrations[0].updates.at(-1).label, 'Full access');
     a.observer.update({ type: 'agent_update', payload: { kind: 'upsert', agent: { ...pi, title: 'Streaming' } } });
     assert.equal(a.registrations.length, 1, 'ordinary updates must not rebuild the pill');
     a.observer.update({ type: 'agent_update', payload: { kind: 'upsert', agent: { ...pi, workspaceId: null } } });
@@ -75,6 +75,19 @@ test('compiled contribution preserves Pi pills, isolates installations and ignor
     assert.equal(last.updates.length, 0, 'late result after cleanup must not update the UI');
     assert.equal(a.signal.aborted, true);
     assert.equal(b.registrations[0].removed, false);
+    const c = fixture();
+    await flush();
+    const native = { ...pi, availableModes: [{ id: 'pi-prompts-on' }, { id: 'pi-prompts-off' }] };
+    c.observer.snapshot({ entries: [{ agent: native }] });
+    assert.equal(c.registrations.length, 0, 'native mode dropdown replaces the fallback pill');
+    assert.equal(c.calls.length, 0, 'no redundant permission polling when native modes exist');
+    c.observer.update({ type: 'agent_update', payload: { kind: 'upsert', agent: pi } });
+    assert.equal(c.registrations.length, 1, 'fallback returns when native modes disappear');
+    c.observer.update({ type: 'agent_update', payload: { kind: 'upsert', agent: native } });
+    c.calls[0].resolve(good);
+    await flush();
+    assert.equal(c.registrations[0].removed, true);
+    assert.equal(c.registrations[0].updates.length, 0, 'late fallback RPC cannot overwrite native mode UI');
   } finally {
     for (const fixture of fixtures) fixture.cleanup();
   }

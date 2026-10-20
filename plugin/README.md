@@ -1,12 +1,18 @@
 # Paseo Pi controls
 
-A Paseo plugin with account controls, agent-specific permission controls, a foreground-task composer popover, and Activity / Jobs / Pi subagents views. Install from this repository with:
+A Paseo plugin with account controls, native access modes, one Tasks composer popover, and an Activity dashboard. Install from this repository with:
 
 ```sh
 paseo plugin install github:taugoust/paseo-bridge-pi --path plugin
 ```
 
 The pill is registered against each non-archived Pi agent's `agentId` and workspace. The daemon and Pi must run as the same Unix user; Windows daemon hosts are not supported. Changes apply to the selected agent and its children; underlying authorization and sandbox policy remain mandatory. Its label reports `On`, `Off`, `unavailable`, or a checking state. The popover reads current state, disables controls when state is stale/unavailable or an operation is busy, and sends explicit `enabled: true` or `enabled: false` requests. Status failures never imply a mode. No model prompt, chat message, abort, or slash command is used.
+
+## Access mode and composer layout
+
+On the patched Paseo server, Pi's existing native mode selector beside thinking displays **Dangerous ask** (approval prompts on) or **Full access** (approval prompts off). Reads reflect the authoritative permission-gate service; only an explicit selection changes it. Existing sandbox/authorization policy stays active. Session/runtime-bound writes are read back, and unsupported runtimes expose no native modes. A renamed plugin control remains as a fallback until the active Pi bridge is reloaded; it disappears once both native modes are advertised.
+
+**Tasks** replaces the Jobs, Pi subagents and Foreground pills. Its mounted indicator shows running/attention state; its tabs expose category-specific counts rather than double-counting helpers appearing in more than one view. Hidden registrations do not poll. **Activity** is a pulse-icon button. These remain in the existing pill row because the public client SDK has no bottom-toolbar plugin slot. BTW, Workflows and Accounts keep their existing placement.
 
 ## Worktree and Goal
 
@@ -32,7 +38,7 @@ Provider usage stays in Paseo's native Usage panels, with their existing sources
 
 ## Activity: progress, cache, and recent responses
 
-The **Activity** pill opens one agent-bound dashboard with the three diagnostics visible together. It uses Paseo's native SettingsSection/SettingsCard surfaces, themed React Native meters, and expandable details; there are no feature tabs.
+The **Activity** pulse-icon button opens one agent-bound dashboard with the three diagnostics visible together. It uses Paseo's native SettingsSection/SettingsCard surfaces, themed React Native meters, and expandable details; there are no feature tabs.
 
 - **Progress:** completed/total meter, active and blocked steps first, and an expansion for the full list. Blocked steps retain their own label and color.
 - **Cache:** observed hit-rate meter and a compact input/cost summary. Cache details expand in place for weighted totals, request gaps, estimates, and recent hit-rate bars. Unknown metrics remain unavailable.
@@ -48,13 +54,13 @@ Compiled-plugin rendering and transport tests are automated; **native iOS visual
 
 ## Interactive foreground tasks
 
-The **Foreground** composer pill opens a temporary, agent-bound popover (anchored surface on wide layouts; bottom sheet on compact layouts). Its closed-state label reports running work, pending questions/permissions, or finished tasks. It lists foreground helpers owned directly by the selected parent Pi session, streams their conversation, and supports explicit user prompts, individual permission/questionnaire answers, and Stop. Closing or dismissing the surface only hides it; it does not stop the helper. Unsent prompt drafts and questionnaire selections are retained client-side across close/reopen for that host, agent, parent session, and task.
+The **Foreground** tab in **Tasks** uses a temporary, agent-bound popover (anchored surface on wide layouts; bottom sheet on compact layouts). The mounted Tasks indicator reports running work or attention, and the tab shows its own count. It lists foreground helpers owned directly by the selected parent Pi session, streams their conversation, and supports explicit user prompts, individual permission/questionnaire answers, and Stop. Closing or dismissing the surface only hides it; it does not stop the helper. Unsent prompt drafts and questionnaire selections are retained client-side across close/reopen for that host, agent, parent session, and task.
 
 Foreground control requires the companion `pi-agent-extensions` runtime to publish `__paeForegroundTasksV1` protocol 1. Control uses its own private socket and capability descriptor; it is not added to the read-only Jobs/Subagents transport or permission-mode operator. Requests bind the Paseo agent, parent session, bridge runtime epoch, service epoch, and task/worker epoch. Request IDs are stable across uncertain outcomes; nothing is automatically replayed or approved. Stale worker interactions are disabled. Background workers may start foreground helpers, but those helpers do not delegate, so the view is the parent's direct task list rather than a recursive tree. No tmux object, Paseo agent, workspace tab, or nested Modal is created for this UI.
 
 ## Read-only Jobs and Pi subagents
 
-The **Jobs** and **Pi subagents** pills open agent-bound panels. These request data only while open, refresh every five seconds, and offer manual refresh. The first version shows up to 50 direct session-owned jobs or native tasks, not a recursive tree.
+The **Jobs** and **Agents** tabs in **Tasks** show agent-bound views. An **Open panel** action retains the full workspace panels and their child-chat navigation. Data refreshes while the Tasks indicator/view or a full panel is mounted, with shared query keys and manual refresh. The first version shows up to 50 direct session-owned jobs or native tasks, not a recursive tree.
 
 - Jobs: status, elapsed time, observation-only labels, and bounded output.
 - Native subagents: status, attempt, bounded answer-only report, and **Open child chat** only when the backend verifies an exact live Paseo runtime match.
