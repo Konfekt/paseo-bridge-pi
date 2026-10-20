@@ -192,13 +192,13 @@ test("native Activity dashboard shows every section, accessible meters and expan
 				list: async (o) => {
 					signal = o.signal;
 					signals.push(o.signal);
-					return { subscription: { subscribe: (x) => { subscriptionCount++; agentSubscriptions.push(x); if (subscriptionCount <= 4) observers.push(x); else accountSubscription = x; } } };
+					return { subscription: { subscribe: (x) => { subscriptionCount++; agentSubscriptions.push(x); if (subscriptionCount <= 4) observers.push(x); else if (subscriptionCount === 5 || subscriptionCount >= 8) accountSubscription = x; } } };
 				},
 			},
 		},
 		addWorkspacePanel: (p) => {
-			panel = p;
-			return () => (removed = true);
+			if (p.id === "pi-activity") panel = p;
+			return () => { if (p.id === "pi-activity") removed = true; };
 		},
 		addHeaderButton: (p) => { header = { ...p, remove() { this.removed = true; }, update() {} }; headers.push(header); return header; },
 		addComposerPill: (p) => {

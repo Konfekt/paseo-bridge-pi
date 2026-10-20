@@ -8,6 +8,20 @@ paseo plugin install github:taugoust/paseo-bridge-pi --path plugin
 
 The pill is registered against each non-archived Pi agent's `agentId` and workspace. The daemon and Pi must run as the same Unix user; Windows daemon hosts are not supported. Changes apply to the selected agent and its children; underlying authorization and sandbox policy remain mandatory. Its label reports `On`, `Off`, `unavailable`, or a checking state. The popover reads current state, disables controls when state is stale/unavailable or an operation is busy, and sends explicit `enabled: true` or `enabled: false` requests. Status failures never imply a mode. No model prompt, chat message, abort, or slash command is used.
 
+## Worktree and Goal
+
+The agent-bound **Workflows** composer pill opens native Goal controls and Git worktree management. A session-owned private service adapts the candidate engines. Creation/removal/pruning retain exact previews and revalidation; removal also refuses a worktree used by another open Paseo agent. Open new workspace uses explicit, idempotent native workspace creation in the parent project and preserves the original Pi conversation. It does not infer tmux workspace identity from cwd.
+
+Goal starts only after explicit confirmation showing model, workspace and limits. The panel supports pause, resume/wake, objective/budget updates and clear, and retains completed-goal evidence. Default limits are three automatic responses, two repeated no-progress runs and a 250k main-session token budget; the final request may exceed that budget. Existing tool permissions and model/idle-guard policies remain in force. Goal state persists in Pi; setup dialogs are invalidated on reload.
+
+No raw chat-command injection is used for these controls. Requests and dialog responses bind session/runtime/service/operation identities and idempotency keys. Lost replies lock mutations until refreshed state is reviewed. The native iOS visual/gesture check remains a user-review step.
+
+## BTW side conversations
+
+The agent-bound **BTW** composer pill opens a native workspace panel. It adapts the candidate's side-thread engine through a separate private controller: model/context selection, streamed text, follow-ups, Stop, explicit deletion, and temporary reconnectable history. Main conversation state is untouched. **Copy answer** uses the native client clipboard for explicit paste; the public plugin SDK cannot directly edit the main draft.
+
+Pi must have the companion `btw` extension loaded. Reloading Pi clears side history and cancels owned responses. Session/runtime/service identity and idempotency checks protect every mutation; uncertain delivery requires a fresh status review before another action. The default side model is separate from the main model, with no fallback. Native iOS verification is pending user review.
+
 ## Accounts header popover
 
 The Activity dashboard contains only Progress, Cache, and Recent responses. Account switching and login status live in the native workspace **Accounts** header popover. Select a Pi session explicitly when a workspace has multiple Pi agents; a sole session is selected initially, and an established selection is never silently retargeted if that session disappears or restarts. Switching between Pi's built-in login and existing named accounts requires confirmation and is enabled only when the account service reports Pi idle. Add named accounts using Pi `/accounts`; credentials are never copied or entered in Paseo. The optional official link is labeled **Open usage settings**; it is a settings link, not a usage report or quota.

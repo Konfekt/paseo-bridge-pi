@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dispatchAfterIdlePreflight, IDLE_PREFLIGHT_KEY } from "../extension/idle-preflight.ts";
+import { dispatchAfterIdlePreflight, IDLE_PREFLIGHT_KEY, IDLE_PROMPT_CANCELLED } from "../extension/idle-preflight.ts";
+
+function isPiRequestAbortError(error: unknown): boolean {
+  const value = error as { name?: unknown; message?: unknown };
+  const diagnostic = `${String(value?.name ?? "")} ${String(value?.message ?? error)}`;
+  return value?.name === "AbortError" || /\brequest was aborted\b|\babort(ed)?\b/i.test(diagnostic);
+}
 
 const active = new AbortController().signal;
 
@@ -12,6 +18,11 @@ test("bridge handshake safely dispatches when optional warning extension is abse
   assert.equal(sends, 1);
 });
 
+test("cancellation is authoritative even without the optional warning extension", async () => {
+  const result = await dispatchAfterIdlePreflight(undefined, AbortSignal.abort(), async () => assert.fail("must not dispatch"));
+  assert.deepEqual(result, { outcome: "cancel", dispatched: false });
+});
+
 test("registered extension Cancel stops dispatch; Ignore dispatches once", async () => {
   let sends = 0;
   const cancelled = await dispatchAfterIdlePreflight(
@@ -19,6 +30,7 @@ test("registered extension Cancel stops dispatch; Ignore dispatches once", async
   );
   assert.deepEqual(cancelled, { outcome: "cancel", dispatched: false });
   assert.equal(sends, 0);
+  assert.equal(isPiRequestAbortError(new Error(IDLE_PROMPT_CANCELLED)), true);
 
   const ignored = await dispatchAfterIdlePreflight(
     { ready: true, check: async () => "continue" as const }, active, async () => ++sends,

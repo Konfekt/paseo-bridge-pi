@@ -33,10 +33,12 @@ import {
 } from "./permission-gate-operator.js";
 import { foregroundTasksSocketPath, removeForegroundTasksDescriptor, writeForegroundTasksDescriptor } from "./foreground-task-operator.js";
 import { accountControlsSocketPath, removeAccountControlsDescriptor, writeAccountControlsDescriptor } from "./account-controls-operator.js";
+import { btwSocketPath, removeBtwDescriptor, writeBtwDescriptor } from "./btw-operator.js";
+import { workflowsSocketPath, removeWorkflowsDescriptor, writeWorkflowsDescriptor } from "./workflows-operator.js";
 import { isRuntimeReloadCommand, requireIdleReload, validateReloadPrompt } from "./reload-command.js";
 import { abortAndWaitForIdle } from "./abort-dispatch.js";
 import { dispatchPaseoPrompt, isExtensionCommand } from "./prompt-dispatch.js";
-import { dispatchAfterIdlePreflight, IDLE_PREFLIGHT_KEY } from "./idle-preflight.js";
+import { dispatchAfterIdlePreflight, IDLE_PREFLIGHT_KEY, IDLE_PROMPT_CANCELLED } from "./idle-preflight.js";
 import { coordinateMirroredSelect } from "./mirrored-select.js";
 import { createProviderReconnectLoop } from "./provider-reconnect.js";
 import { unknownRpcCommandError } from "./rpc-compat.js";
@@ -650,7 +652,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     const capability = (globalThis as Record<string, unknown>)[IDLE_PREFLIGHT_KEY];
     const gated = await dispatchAfterIdlePreflight(capability, preflightAbortController.signal, async () => true);
     if (gated.dispatched) return true;
-    const error = gated.outcome === "cancel" ? "Prompt cancelled; draft restored." :
+    const error = gated.outcome === "cancel" ? IDLE_PROMPT_CANCELLED :
       "Prompt not sent: pre-send confirmation could not complete.";
     send(failure(id, commandType, error));
     return false;
@@ -906,6 +908,43 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     );
   }
 
+  function activeWorkflowsService() {
+    const service = (globalThis as any).__paeWorkflowsV1;
+    return service?.protocol === 1 && service.sessionId === latestCtx?.sessionManager.getSessionId()
+      && typeof service.serviceEpoch === "string" && typeof service.handle === "function" ? service : undefined;
+  }
+  function activeWorkflowsDescriptor() {
+    const t = transport, ctx = latestCtx, service = activeWorkflowsService();
+    if (!t?.connected || !ctx || !currentAgentId || !service || currentSessionFile !== t.sessionFile) return undefined;
+    return { version: 1 as const, socketPath: workflowsSocketPath(t.pipePath), capability: t.workflowsCapability,
+      agentId: currentAgentId, sessionId: ctx.sessionManager.getSessionId(), runtimeEpoch: t.operatorEpoch, serviceEpoch: service.serviceEpoch };
+  }
+  function revokeWorkflowsDescriptor() { if (transport && currentAgentId) removeWorkflowsDescriptor(path.join(os.homedir(), ".pi", "paseo-bridge"), currentAgentId, transport.operatorEpoch); }
+  function publishWorkflowsDescriptor() {
+    const descriptor = activeWorkflowsDescriptor();
+    if (!descriptor) { revokeWorkflowsDescriptor(); return; }
+    try { writeWorkflowsDescriptor(path.join(os.homedir(), ".pi", "paseo-bridge"), descriptor); } catch { revokeWorkflowsDescriptor(); }
+  }
+  function activeBtwService() {
+    const service = (globalThis as any).__paeBtwV1;
+    return service?.protocol === 1 && service.sessionId === latestCtx?.sessionManager.getSessionId()
+      && typeof service.serviceEpoch === "string" && typeof service.handle === "function" ? service : undefined;
+  }
+  function activeBtwDescriptor() {
+    const t = transport, ctx = latestCtx, service = activeBtwService();
+    if (!t?.connected || !ctx || !currentAgentId || !service || currentSessionFile !== t.sessionFile) return undefined;
+    return { version: 1 as const, socketPath: btwSocketPath(t.pipePath), capability: t.btwCapability,
+      agentId: currentAgentId, sessionId: ctx.sessionManager.getSessionId(), runtimeEpoch: t.operatorEpoch, serviceEpoch: service.serviceEpoch };
+  }
+  function revokeBtwDescriptor() {
+    if (transport && currentAgentId) removeBtwDescriptor(path.join(os.homedir(), ".pi", "paseo-bridge"), currentAgentId, transport.operatorEpoch);
+  }
+  function publishBtwDescriptor() {
+    const descriptor = activeBtwDescriptor();
+    if (!descriptor) { revokeBtwDescriptor(); return; }
+    try { writeBtwDescriptor(path.join(os.homedir(), ".pi", "paseo-bridge"), descriptor); } catch { revokeBtwDescriptor(); }
+  }
+
   function activeAccountControlsService() {
     const service = (globalThis as Record<string, any>).__paeAccountControlsV1;
     const sessionId = latestCtx?.sessionManager.getSessionId();
@@ -920,6 +959,8 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       agentId, sessionId: ctx.sessionManager.getSessionId(), runtimeEpoch: t.operatorEpoch, serviceEpoch: service.serviceEpoch };
   }
   function publishAccountControlsDescriptor() {
+    publishWorkflowsDescriptor();
+    publishBtwDescriptor();
     const descriptor = activeAccountControlsDescriptor();
     if (!descriptor) { revokeAccountControlsDescriptor(); return; }
     try { writeAccountControlsDescriptor(path.join(os.homedir(), ".pi", "paseo-bridge"), descriptor); } catch { revokeAccountControlsDescriptor(); }
@@ -1010,6 +1051,25 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         }
         throw new Error("Unsupported read-only harness method");
       },
+      workflowsIdentity() { return activeWorkflowsDescriptor(); },
+      async workflows(request: any) {
+        const service = activeWorkflowsService(), identity = activeWorkflowsDescriptor(), t = transport, ctx = latestCtx;
+        if (!service || !identity || !t || !ctx || request?.sessionId !== identity.sessionId || request?.serviceEpoch !== identity.serviceEpoch) throw new Error("Workflow session unavailable");
+        const result = await service.handle(request);
+        // Goal can start a turn while this request settles. Fresh event-context wrappers
+        // are expected; bind to session/runtime/service identity, not wrapper identity.
+        if (transport !== t || activeWorkflowsService() !== service || !t.connected || t.operatorEpoch !== identity.runtimeEpoch || currentAgentId !== identity.agentId
+          || currentSessionFile !== t.sessionFile || latestCtx?.sessionManager.getSessionId() !== identity.sessionId) throw new Error("Workflow session changed");
+        return result;
+      },
+      btwIdentity() { return activeBtwDescriptor(); },
+      async btw(request: any) {
+        const service = activeBtwService(), identity = activeBtwDescriptor(), t = transport, ctx = latestCtx;
+        if (!service || !identity || !t || !ctx || request?.sessionId !== identity.sessionId || request?.serviceEpoch !== identity.serviceEpoch) throw new Error("BTW session unavailable");
+        const result = await service.handle(request);
+        if (transport !== t || latestCtx !== ctx || activeBtwService() !== service || !t.connected || t.operatorEpoch !== identity.runtimeEpoch || currentAgentId !== identity.agentId) throw new Error("BTW session changed");
+        return result;
+      },
       accountControlsIdentity() {
         const descriptor = activeAccountControlsDescriptor();
         return descriptor ? { ...descriptor, capability: transport!.accountControlsCapability } : undefined;
@@ -1098,6 +1158,8 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         revokeHarnessReadOnlyDescriptor();
         revokeForegroundTasksDescriptor();
         revokeAccountControlsDescriptor();
+        revokeBtwDescriptor();
+        revokeWorkflowsDescriptor();
         transport?.rotateOperatorEpoch();
         cancelPendingRemoteUiRequests();
         preflightAbortController.abort();
@@ -1114,6 +1176,8 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     revokeHarnessReadOnlyDescriptor();
     revokeForegroundTasksDescriptor();
     revokeAccountControlsDescriptor();
+    revokeBtwDescriptor();
+    revokeWorkflowsDescriptor();
     providerReconnect.stop();
     cancelPendingRemoteUiRequests();
     preflightAbortController.abort();
@@ -1128,6 +1192,9 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
 
   function startServer(sessionFile: string): void {
     assertNoLiveRuntimeOwner(sessionFile, { ignorePid: process.pid });
+    // connectSession stops the previous server even on first connection.
+    // Its aborted signal belongs to that old lifecycle, never the new server.
+    preflightAbortController = new AbortController();
     transport = new BridgeTransport(sessionFile, pipePathForSession(sessionFile));
     currentSessionFile = sessionFile;
     bindTransport();
@@ -1432,6 +1499,8 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       revokeHarnessReadOnlyDescriptor();
       revokeForegroundTasksDescriptor();
       revokeAccountControlsDescriptor();
+      revokeBtwDescriptor();
+      revokeWorkflowsDescriptor();
       providerReconnect.stop();
       cancelPendingRemoteUiRequests();
       preflightAbortController.abort();
@@ -1564,6 +1633,13 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     latestCtx = ctx;
     isCompacting = false;
     send({ type: "compaction_end", ...(event?.entry ? { entry: event.entry } : {}) });
+  });
+
+  pi.on("session_compact_failed", async (_event, ctx) => {
+    latestCtx = ctx;
+    isCompacting = false;
+    // Paseo 0.11 has no compaction_failed wire event. Do not report a failed
+    // attempt as a successful compaction_end; get_state must still be idle.
   });
 
   pi.on("model_select", async (event, ctx) => {

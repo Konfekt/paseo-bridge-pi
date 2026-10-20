@@ -7,6 +7,10 @@ import { createHarnessReadOnlyHandlers } from "./server/harness-readonly";
 import { createForegroundTasksHandlers } from "./server/foreground-tasks";
 import { foregroundTasksRpc, foregroundTasksStatusRpc } from "./shared/foreground-tasks";
 import { createAccountControlsHandlers } from "./server/account-controls";
+import { createBtwHandlers } from "./server/btw";
+import { createWorkflowsHandlers } from "./server/workflows";
+import { workflowsStatusRpc, workflowsControlRpc } from "./shared/workflows";
+import { btwStatusRpc, btwControlRpc } from "./shared/btw";
 import { accountControlsStatusRpc, accountControlsSwitchRpc } from "./shared/account-controls";
 
 export default function contribute(server: PluginServerContext) {
@@ -23,6 +27,12 @@ export default function contribute(server: PluginServerContext) {
   const foregroundTasks = createForegroundTasksHandlers();
   server.handle(foregroundTasksStatusRpc, foregroundTasks.status);
   server.handle(foregroundTasksRpc, foregroundTasks.control);
+  const workflows = createWorkflowsHandlers();
+  server.handle(workflowsStatusRpc, workflows.status);
+  server.handle(workflowsControlRpc, workflows.control);
+  const btw = createBtwHandlers();
+  server.handle(btwStatusRpc, btw.status);
+  server.handle(btwControlRpc, btw.control);
   const accountControls = createAccountControlsHandlers();
   server.handle(accountControlsStatusRpc, accountControls.status);
   server.handle(accountControlsSwitchRpc, accountControls.switch);

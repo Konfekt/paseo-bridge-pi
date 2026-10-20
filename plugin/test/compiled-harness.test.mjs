@@ -64,12 +64,12 @@ test('compiled read-only panels render lists/details, bind generations and only 
     await flush();
     const snapshot = { entries: [{ agent: { id: 'agent', workspaceId: 'workspace', provider: 'pi' } }, { agent: { id: 'other', workspaceId: 'workspace', provider: 'claude' } }] };
     observers.forEach(({ value }) => value.snapshot(snapshot));
-    assert.equal(pills.length, 5);
-    assert.equal(panels.size, 3);
+    assert.equal(pills.length, 7);
+    assert.equal(panels.size, 5);
     pills.find(pill => pill.id === 'harness-jobs').button.behavior.onPress();
     assert.deepEqual(opened.pop(), { id: 'harness-jobs', target: { workspaceId: 'workspace', agentId: 'agent' } });
     observers.forEach(({ value }) => value.update({ type: 'agent_update', payload: { kind: 'upsert', agent: snapshot.entries[0].agent } }));
-    assert.equal(pills.length, 5, 'stream updates must not rebuild views');
+    assert.equal(pills.length, 7, 'stream updates must not rebuild views');
 
     statusResult = { isPending: true };
     assert.match(text(render('harness-jobs')), /Connecting/);
@@ -113,7 +113,7 @@ test('compiled read-only panels render lists/details, bind generations and only 
     assert.ok(calls.every(call => ['harness_jobs_output', 'harness_subagent_report'].includes(call.name)));
     assert.doesNotMatch(text(tree), /Cancel|Reap|Send instruction/);
   } finally { cleanup(); }
-  assert.equal(stoppedPanels, 3);
+  assert.equal(stoppedPanels, 5);
   assert.ok(observers.every(({ signal }) => signal.aborted));
   assert.ok(pills.every(pill => pill.removed));
 });

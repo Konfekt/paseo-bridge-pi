@@ -1,4 +1,6 @@
 export const IDLE_PREFLIGHT_KEY = "__piIdleContextPreflightV1";
+// Paseo classifies native prompt failures containing "aborted" as cancellation.
+export const IDLE_PROMPT_CANCELLED = "Request was aborted: prompt cancelled.";
 
 export type IdlePreflightCapability = {
   ready: boolean;
@@ -11,8 +13,8 @@ export async function checkIdlePreflight(
   capability: unknown,
   signal: AbortSignal,
 ): Promise<IdlePreflightResult> {
-  if (capability == null) return "unavailable";
   if (signal.aborted) return "cancel";
+  if (capability == null) return "unavailable";
   if (typeof capability !== "object" || !("ready" in capability) || !("check" in capability)) return "error";
   const candidate = capability as IdlePreflightCapability;
   if (candidate.ready !== true || typeof candidate.check !== "function") return "error";
@@ -39,6 +41,7 @@ export async function dispatchAfterIdlePreflight<T>(
   dispatch: () => Promise<T>,
 ): Promise<{ outcome: IdlePreflightResult; dispatched: boolean; value?: T }> {
   const outcome = await checkIdlePreflight(capability, signal);
+  if (signal.aborted) return { outcome: "cancel", dispatched: false };
   if (outcome === "cancel" || outcome === "error") return { outcome, dispatched: false };
   return { outcome, dispatched: true, value: await dispatch() };
 }
