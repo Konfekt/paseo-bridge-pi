@@ -44,14 +44,7 @@ function ThinkingRenderer({ item, theme }: PluginTimelineItemProps<Data>) {
 		item.data.phase === "streaming",
 	);
 	return (
-		<View
-			style={{
-				borderLeftWidth: 2,
-				borderLeftColor: theme.colors.border,
-				paddingLeft: 10,
-				marginVertical: 4,
-			}}
-		>
+		<View style={{ marginVertical: 4 }}>
 			<Pressable
 				accessibilityRole="button"
 				accessibilityLabel={expanded ? "Collapse thinking" : "Expand thinking"}
