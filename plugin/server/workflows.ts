@@ -181,8 +181,22 @@ export function createWorkflowsHandlers(
 					.refresh();
 				if (!parent) throw new Error("Parent workspace is unavailable");
 				await recheck(input, context, d);
-				// A directory is not a workspace identity on tmux-backed hosts.
-				// Allocate explicitly in the existing project, with a stable creation key.
+				// Prefer the worker's existing workspace instead of allocating a new
+				// tmux window on every click. Cwd is used only to find an explicit ID.
+				const target = await realpath(result.openPath);
+				let cursor: string | undefined;
+				for (let page = 0; ; page++) {
+					if (page >= 100) throw new Error("Workspace inventory is incomplete");
+					const listed = await context.paseo.workspaces.list({ filter: { projectId: parent.projectId }, page: { limit: 200, cursor } });
+					for (const workspace of listed.entries) {
+						if (workspace.workspaceDirectory && await realpath(workspace.workspaceDirectory).catch(() => null) === target) { openedWorkspaceId = workspace.id; break; }
+					}
+					if (openedWorkspaceId || listed.pageInfo?.hasMore === false) break;
+					if (!listed.pageInfo?.nextCursor || listed.pageInfo.nextCursor === cursor) throw new Error("Workspace inventory is incomplete");
+					cursor = listed.pageInfo.nextCursor;
+				}
+				await recheck(input, context, d);
+				if (!openedWorkspaceId) {
 				const workspace = await context.paseo.workspaces.create({
 					source: {
 						kind: "directory",
@@ -194,6 +208,7 @@ export function createWorkflowsHandlers(
 					requestId: input.request.requestId,
 				});
 				openedWorkspaceId = workspace.id;
+				}
 				await recheck(input, context, d);
 			}
 			const { openPath: _path, ...snapshot } = result;

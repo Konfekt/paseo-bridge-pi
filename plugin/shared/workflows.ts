@@ -4,6 +4,9 @@ const id = z.string().min(1).max(256);
 export const workflowSnapshotSchema = z
 	.object({
 		protocol: z.literal(1),
+		capabilities: z
+			.object({ createPausedGoal: z.boolean().optional() })
+			.optional(),
 		sessionId: id,
 		serviceEpoch: z.string().uuid(),
 		cwd: z.string().max(4096),
@@ -30,6 +33,8 @@ export const workflowSnapshotSchema = z
 				z
 					.object({
 						path: z.string().max(4096),
+						repositoryPath: z.string().max(4096).optional(),
+						repositoryLabel: z.string().max(4096).optional(),
 						branch: z.string().max(4096).nullable(),
 						head: z.string().max(64).nullable(),
 						main: z.boolean(),
@@ -37,16 +42,42 @@ export const workflowSnapshotSchema = z
 						locked: z.boolean(),
 						stale: z.boolean(),
 						detached: z.boolean(),
+						changedFiles: z.number().int().min(0).nullable().optional(),
+						ownerTaskId: z.string().max(128).optional(),
+						ownerTitle: z.string().max(500).optional(),
+						workerStatus: z.string().max(40).optional(),
+						inUse: z.boolean().optional(),
+						includedChanges: z.boolean().optional(),
+						setupError: z.string().max(2000).optional(),
 					})
 					.strict(),
 			)
 			.max(100),
 		worktreeError: z.string().max(2000).nullable(),
 		worktreeLoading: z.boolean(),
+		worktreeRepositoryCount: z.number().int().min(0).optional(),
+		worktreeContainer: z.boolean().optional(),
 		goal: z
 			.object({
 				id,
 				text: z.string().max(4000),
+				tasks: z
+					.array(
+						z
+							.object({
+								id: z.string().max(128).optional(),
+								text: z.string().max(4000),
+								status: z.enum([
+									"pending",
+									"in_progress",
+									"completed",
+									"blocked",
+								]),
+							})
+							.strict(),
+					)
+					.max(50)
+					.optional(),
 				status: z.enum([
 					"active",
 					"paused",
@@ -98,12 +129,15 @@ export const workflowRequestSchema = z.discriminatedUnion("operation", [
 				"worktree.prune",
 				"worktree.open",
 				"goal.start",
+				"goal.create_paused",
 				"goal.edit",
 				"goal.pause",
 				"goal.resume",
 				"goal.clear",
+				"goal.add_task",
 			]),
 			expectedGoalId: id.nullable(),
+			text: z.string().max(503).optional(),
 			objective: z.string().max(4000).optional(),
 			tokenBudget: z.number().int().positive().max(1_000_000).optional(),
 			path: z.string().max(4096).optional(),

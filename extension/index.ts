@@ -1072,6 +1072,32 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
           // runtime registry once per list row is expensive on shared homes.
           return page;
         }
+        if (method === "subagents.independentSource") {
+          if (!exactKeys(["sessionId", "taskId", "childId", "attempt", "runtimeId"])
+            || !/^subagent-task-[0-9a-f]{24}$/.test(payload.taskId) || !/^subagent-child-[0-9a-f]{24}$/.test(payload.childId)
+            || !Number.isSafeInteger(payload.attempt) || payload.attempt < 1
+            || (payload.runtimeId !== null && (typeof payload.runtimeId !== "string" || payload.runtimeId.length > 256))) throw new Error("Invalid independent source request");
+          if (typeof service.independentSource !== "function") throw new Error("Reload Pi to enable independent conversations");
+          const result = await service.independentSource(payload);
+          assertCurrent();
+          if (result.sessionId !== request.sessionId || Buffer.byteLength(JSON.stringify(result)) > 16384) throw new Error("Invalid independent source response");
+          return result;
+        }
+        if (method === "subagents.conversation") {
+          if (!exactKeys(["sessionId", "taskId", "childId", "attempt", "runtimeId"], ["cursor"])
+            || !/^subagent-task-[0-9a-f]{24}$/.test(payload.taskId)
+            || !/^subagent-child-[0-9a-f]{24}$/.test(payload.childId)
+            || !Number.isSafeInteger(payload.attempt) || payload.attempt < 1
+            || (payload.runtimeId !== null && (typeof payload.runtimeId !== "string" || payload.runtimeId.length > 256))
+            || (payload.cursor !== undefined && (!Number.isSafeInteger(payload.cursor) || payload.cursor < 0))) throw new Error("Invalid conversation request");
+          if (typeof service.conversation !== "function") throw new Error("Reload Pi to enable retained conversations");
+          const result = await service.conversation(payload);
+          assertCurrent();
+          if (result?.sessionId !== request.sessionId || Buffer.byteLength(JSON.stringify(result)) > 48 * 1024) throw new Error("Invalid conversation response");
+          if (result.item && (result.item.taskId !== payload.taskId || result.item.childId !== payload.childId
+            || result.item.attempt !== payload.attempt || result.item.runtimeId !== payload.runtimeId)) throw new Error("Conversation identity changed");
+          return result;
+        }
         if (["jobs.output", "subagents.report"].includes(method)) {
           const key = method === "jobs.output" ? "jobId" : "taskId";
           if (!exactKeys(["sessionId", key], ["maxBytes"])) throw new Error("Unexpected detail payload fields");
@@ -1384,11 +1410,9 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     }
     const hostArgs = process.env.PASEO_HOST ? ["--host", process.env.PASEO_HOST] : [];
     const retryImport = () => {
-      const delay = importRetryDelay(++importFailures);
-      if (delay === undefined) {
-        debugLog("workspace import retries exhausted; use /paseo-bridge connect after resolving topology");
-        return;
-      }
+      // Projection may lag startup or reconnect. These failures occur before
+      // import allocation, so keep retrying slowly instead of latching forever.
+      const delay = importRetryDelay(++importFailures) ?? 60_000;
       importRetryAt = Date.now() + delay;
       importAttempted.delete(sessionFile);
     };

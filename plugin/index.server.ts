@@ -1,7 +1,10 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { registerIndependentAgents } from "./server/independent-agents";
+import { registerCacheUsage } from "./server/cache-usage";
+import { registerSessionAccountUsage } from "./server/session-account-usage";
 import { createHandlers, readOperatorDescriptor } from "./server/operator";
 import { permissionGateSetRpc, permissionGateStatusRpc } from "./shared/permission-gate";
-import { harnessJobsListRpc, harnessJobsOutputRpc, harnessSubagentsListRpc, harnessSubagentReportRpc, harnessStatusRpc } from "./shared/harness-readonly";
+import { harnessJobsListRpc, harnessJobsOutputRpc, harnessSubagentsListRpc, harnessSubagentReportRpc, harnessSubagentConversationRpc, harnessStatusRpc } from "./shared/harness-readonly";
 import { observabilitySnapshotRpc } from './shared/observability';
 import { createHarnessReadOnlyHandlers } from "./server/harness-readonly";
 import { createForegroundTasksHandlers } from "./server/foreground-tasks";
@@ -14,6 +17,8 @@ import { btwStatusRpc, btwControlRpc } from "./shared/btw";
 import { accountControlsStatusRpc, accountControlsSwitchRpc } from "./shared/account-controls";
 
 export default function contribute(server: PluginServerContext) {
+  registerCacheUsage(server);
+  registerSessionAccountUsage(server);
   const handlers = createHandlers(readOperatorDescriptor);
   server.handle(permissionGateStatusRpc, handlers.status);
   server.handle(permissionGateSetRpc, handlers.set);
@@ -24,6 +29,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(harnessJobsOutputRpc, readonly.jobsOutput);
   server.handle(harnessSubagentsListRpc, readonly.subagentsList);
   server.handle(harnessSubagentReportRpc, readonly.subagentReport);
+  server.handle(harnessSubagentConversationRpc, readonly.subagentConversation);
   const foregroundTasks = createForegroundTasksHandlers();
   server.handle(foregroundTasksStatusRpc, foregroundTasks.status);
   server.handle(foregroundTasksRpc, foregroundTasks.control);
@@ -36,5 +42,5 @@ export default function contribute(server: PluginServerContext) {
   const accountControls = createAccountControlsHandlers();
   server.handle(accountControlsStatusRpc, accountControls.status);
   server.handle(accountControlsSwitchRpc, accountControls.switch);
-  return () => {};
+  return registerIndependentAgents(server);
 }

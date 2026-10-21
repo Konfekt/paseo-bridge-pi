@@ -9,19 +9,23 @@ import os from "node:os";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
-import { assertNoLiveRuntimeOwner, assertRuntimeNotReaped, matchingRuntimeRecords } from "./runtime-registry.js";
+import {
+	assertNoLiveRuntimeOwner,
+	assertRuntimeNotReaped,
+	matchingRuntimeRecords,
+} from "./runtime-registry.js";
 import { parseTmuxTarget } from "./tmux-target.js";
 import { topologyRelay } from "./topology-relay.js";
 import { createForkedSession, resolveForkPlan } from "./fork-support.js";
 import { startForkArchiveMonitor } from "./fork-lifecycle.js";
 import {
-  findForkRuntimeRecord,
-  findSourcePane,
-  forkStartupTimeoutMs,
-  killTmuxPane,
-  launchForkTui,
-  pipePathForAgent,
-  selectForkTuiBin,
+	findForkRuntimeRecord,
+	findSourcePane,
+	forkStartupTimeoutMs,
+	killTmuxPane,
+	launchForkTui,
+	pipePathForAgent,
+	selectForkTuiBin,
 } from "./tmux-fork.js";
 
 const CONNECT_TIMEOUT_MS = 500;
@@ -29,359 +33,468 @@ const args = process.argv.slice(2);
 
 // Keep in sync with extension/index.ts (pipePathForSession).
 function pipePathForSession(sessionFile) {
-  let normalized = path.resolve(sessionFile);
-  if (process.platform === "win32") normalized = normalized.toLowerCase();
-  const hash = crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 20);
-  if (process.platform === "win32") return `\\\\.\\pipe\\pi-paseo-bridge-${hash}`;
-  const dir = process.env.XDG_RUNTIME_DIR
-    ? path.join(process.env.XDG_RUNTIME_DIR, "pi-paseo")
-    : path.join(os.homedir(), ".pi", "paseo-bridge");
-  return path.join(dir, `${hash}.sock`);
+	let normalized = path.resolve(sessionFile);
+	if (process.platform === "win32") normalized = normalized.toLowerCase();
+	const hash = crypto
+		.createHash("sha256")
+		.update(normalized)
+		.digest("hex")
+		.slice(0, 20);
+	if (process.platform === "win32")
+		return `\\\\.\\pipe\\pi-paseo-bridge-${hash}`;
+	const dir = process.env.XDG_RUNTIME_DIR
+		? path.join(process.env.XDG_RUNTIME_DIR, "pi-paseo")
+		: path.join(os.homedir(), ".pi", "paseo-bridge");
+	return path.join(dir, `${hash}.sock`);
 }
 
 function extractSessionArg(argv) {
-  for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === "--session" && argv[i + 1]) return argv[i + 1];
-    if (argv[i].startsWith("--session=")) return argv[i].slice("--session=".length);
-  }
-  return null;
+	for (let i = 0; i < argv.length; i += 1) {
+		if (argv[i] === "--session" && argv[i + 1]) return argv[i + 1];
+		if (argv[i].startsWith("--session="))
+			return argv[i].slice("--session=".length);
+	}
+	return null;
 }
 
 function tryConnect(pipePath) {
-  return new Promise((resolve) => {
-    const socket = net.connect(pipePath);
-    const fail = () => {
-      socket.destroy();
-      resolve(null);
-    };
-    const timer = setTimeout(fail, CONNECT_TIMEOUT_MS);
-    socket.once("error", () => {
-      clearTimeout(timer);
-      fail();
-    });
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      resolve(socket);
-    });
-  });
+	return new Promise((resolve) => {
+		const socket = net.connect(pipePath);
+		const fail = () => {
+			socket.destroy();
+			resolve(null);
+		};
+		const timer = setTimeout(fail, CONNECT_TIMEOUT_MS);
+		socket.once("error", () => {
+			clearTimeout(timer);
+			fail();
+		});
+		socket.once("connect", () => {
+			clearTimeout(timer);
+			resolve(socket);
+		});
+	});
 }
 
 function writeJsonLine(obj) {
-  process.stdout.write(`${JSON.stringify(obj)}\n`);
+	process.stdout.write(`${JSON.stringify(obj)}\n`);
 }
 
 function sessionIdFromFile(sessionFile) {
-  const base = path.basename(sessionFile, ".jsonl");
-  const idx = base.lastIndexOf("_");
-  const id = idx >= 0 ? base.slice(idx + 1) : "";
-  return /^[0-9a-f-]{16,}$/i.test(id) ? id : null;
+	const base = path.basename(sessionFile, ".jsonl");
+	const idx = base.lastIndexOf("_");
+	const id = idx >= 0 ? base.slice(idx + 1) : "";
+	return /^[0-9a-f-]{16,}$/i.test(id) ? id : null;
 }
 
 function bridge(socket, sessionFile, agentId = null) {
-  socket.setNoDelay?.(true);
-  let tombstone = false;
-  const stopArchiveMonitor = agentId && findForkRuntimeRecord(agentId)
-    ? startForkArchiveMonitor(agentId, { onKilled: () => process.exit(0) })
-    : () => {};
-  process.stdin.pipe(socket);
-  socket.pipe(process.stdout);
-  process.stdin.on("end", () => {
-    if (tombstone) process.exit(0);
-    else socket.end();
-  });
-  // When the terminal pi dies, stay alive and answer RPC commands with a
-  // helpful error instead of exiting - a dead child would make Paseo show a
-  // bare "Pi RPC session is closed" with no way forward.
-  const enterTombstone = () => {
-    if (tombstone) return;
-    tombstone = true;
-    stopArchiveMonitor();
-    const resumeRef = sessionIdFromFile(sessionFile) ?? sessionFile;
-    const message = `The terminal pi session has ended. Resume it from the project directory with: pi --session ${resumeRef} - or use Fork in Paseo to continue from this conversation in a new session.`;
-    process.stdin.unpipe(socket);
-    // Fails any in-flight turn: Paseo treats process_exit as a fatal runtime event.
-    writeJsonLine({ type: "process_exit", error: message });
-    let buffer = "";
-    process.stdin.on("data", (chunk) => {
-      buffer += chunk.toString("utf8");
-      for (;;) {
-        const newline = buffer.indexOf("\n");
-        if (newline === -1) break;
-        const line = buffer.slice(0, newline).replace(/\r$/, "");
-        buffer = buffer.slice(newline + 1);
-        if (!line.trim()) continue;
-        let parsed;
-        try {
-          parsed = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if (parsed && typeof parsed === "object" && parsed.id) {
-          writeJsonLine({
-            type: "response",
-            id: parsed.id,
-            command: typeof parsed.type === "string" ? parsed.type : "unknown",
-            success: false,
-            error: message,
-          });
-        }
-      }
-    });
-    process.stdin.resume();
-  };
-  socket.on("close", enterTombstone);
-  socket.on("error", enterTombstone);
+	socket.setNoDelay?.(true);
+	let tombstone = false;
+	const stopArchiveMonitor =
+		agentId && findForkRuntimeRecord(agentId)
+			? startForkArchiveMonitor(agentId, { onKilled: () => process.exit(0) })
+			: () => {};
+	process.stdin.pipe(socket);
+	socket.pipe(process.stdout);
+	process.stdin.on("end", () => {
+		if (tombstone) process.exit(0);
+		else socket.end();
+	});
+	// When the terminal pi dies, stay alive and answer RPC commands with a
+	// helpful error instead of exiting - a dead child would make Paseo show a
+	// bare "Pi RPC session is closed" with no way forward.
+	const enterTombstone = () => {
+		if (tombstone) return;
+		tombstone = true;
+		stopArchiveMonitor();
+		const resumeRef = sessionIdFromFile(sessionFile) ?? sessionFile;
+		const message = `The terminal pi session has ended. Resume it from the project directory with: pi --session ${resumeRef} - or use Fork in Paseo to continue from this conversation in a new session.`;
+		process.stdin.unpipe(socket);
+		// Fails any in-flight turn: Paseo treats process_exit as a fatal runtime event.
+		writeJsonLine({ type: "process_exit", error: message });
+		let buffer = "";
+		process.stdin.on("data", (chunk) => {
+			buffer += chunk.toString("utf8");
+			for (;;) {
+				const newline = buffer.indexOf("\n");
+				if (newline === -1) break;
+				const line = buffer.slice(0, newline).replace(/\r$/, "");
+				buffer = buffer.slice(newline + 1);
+				if (!line.trim()) continue;
+				let parsed;
+				try {
+					parsed = JSON.parse(line);
+				} catch {
+					continue;
+				}
+				if (parsed && typeof parsed === "object" && parsed.id) {
+					writeJsonLine({
+						type: "response",
+						id: parsed.id,
+						command: typeof parsed.type === "string" ? parsed.type : "unknown",
+						success: false,
+						error: message,
+					});
+				}
+			}
+		});
+		process.stdin.resume();
+	};
+	socket.on("close", enterTombstone);
+	socket.on("error", enterTombstone);
 }
 
 function resolveRealPi() {
-  const override = process.env.PI_REAL_BIN;
-  if (override) {
-    if (override.endsWith(".js") || override.endsWith(".mjs") || override.endsWith(".cjs")) {
-      return { command: process.execPath, prefix: [override] };
-    }
-    return { command: override, prefix: [] };
-  }
-  const pathDirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
-  const names = process.platform === "win32" ? ["pi.cmd", "pi.bat", "pi.exe", "pi"] : ["pi"];
-  for (const dir of pathDirs) {
-    for (const name of names) {
-      const candidate = path.join(dir, name);
-      let stat;
-      try {
-        stat = fs.statSync(candidate);
-      } catch {
-        continue;
-      }
-      if (!stat.isFile()) continue;
-      // npm-style launcher (.cmd or extensionless sh script): spawn the JS
-      // entry directly with node, since Node refuses to spawn .cmd files
-      // without a shell and shell quoting is unsafe.
-      const npmEntry = path.join(dir, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
-      if (fs.existsSync(npmEntry) && !candidate.endsWith(".exe")) {
-        return { command: process.execPath, prefix: [npmEntry] };
-      }
-      if (process.platform === "win32" && !candidate.endsWith(".exe")) continue;
-      return { command: candidate, prefix: [] };
-    }
-  }
-  return null;
+	const override = process.env.PI_REAL_BIN;
+	if (override) {
+		if (
+			override.endsWith(".js") ||
+			override.endsWith(".mjs") ||
+			override.endsWith(".cjs")
+		) {
+			return { command: process.execPath, prefix: [override] };
+		}
+		return { command: override, prefix: [] };
+	}
+	const pathDirs = (process.env.PATH ?? "")
+		.split(path.delimiter)
+		.filter(Boolean);
+	const names =
+		process.platform === "win32"
+			? ["pi.cmd", "pi.bat", "pi.exe", "pi"]
+			: ["pi"];
+	for (const dir of pathDirs) {
+		for (const name of names) {
+			const candidate = path.join(dir, name);
+			let stat;
+			try {
+				stat = fs.statSync(candidate);
+			} catch {
+				continue;
+			}
+			if (!stat.isFile()) continue;
+			// npm-style launcher (.cmd or extensionless sh script): spawn the JS
+			// entry directly with node, since Node refuses to spawn .cmd files
+			// without a shell and shell quoting is unsafe.
+			const npmEntry = path.join(
+				dir,
+				"node_modules",
+				"@earendil-works",
+				"pi-coding-agent",
+				"dist",
+				"cli.js",
+			);
+			if (fs.existsSync(npmEntry) && !candidate.endsWith(".exe")) {
+				return { command: process.execPath, prefix: [npmEntry] };
+			}
+			if (process.platform === "win32" && !candidate.endsWith(".exe")) continue;
+			return { command: candidate, prefix: [] };
+		}
+	}
+	return null;
 }
 
 function passthrough() {
-  const real = resolveRealPi();
-  if (!real) {
-    process.stderr.write(
-      "pi-paseo-shim: could not locate the real pi binary. Set PI_REAL_BIN to the pi executable or its cli.js.\n",
-    );
-    process.exit(1);
-  }
-  const child = spawn(real.command, [...real.prefix, ...args], { stdio: "inherit" });
-  child.on("error", (err) => {
-    process.stderr.write(`pi-paseo-shim: failed to spawn real pi: ${err.message}\n`);
-    process.exit(1);
-  });
-  child.on("exit", (code, signal) => {
-    process.exit(signal ? 1 : (code ?? 1));
-  });
+	const real = resolveRealPi();
+	if (!real) {
+		process.stderr.write(
+			"pi-paseo-shim: could not locate the real pi binary. Set PI_REAL_BIN to the pi executable or its cli.js.\n",
+		);
+		process.exit(1);
+	}
+	const child = spawn(real.command, [...real.prefix, ...args], {
+		stdio: "inherit",
+	});
+	child.on("error", (err) => {
+		process.stderr.write(
+			`pi-paseo-shim: failed to spawn real pi: ${err.message}\n`,
+		);
+		process.exit(1);
+	});
+	child.on("exit", (code, signal) => {
+		process.exit(signal ? 1 : (code ?? 1));
+	});
+}
+
+/** Internal, non-persisted Paseo helpers must remain RPC-owned, never TUI-owned. */
+function ephemeralPassthrough() {
+	const real = resolveRealPi();
+	if (!real)
+		throw new Error("Could not locate real Pi for an internal RPC helper");
+	const child = spawn(real.command, [...real.prefix, ...args], {
+		stdio: ["pipe", "pipe", "pipe"],
+		env: { ...process.env, PASEO_TMUX_TOPOLOGY: "0" },
+	});
+	let stopping = false;
+	let killTimer;
+	const stop = () => {
+		if (stopping) return;
+		stopping = true;
+		process.stdin.unpipe(child.stdin);
+		child.stdin.end();
+		child.kill("SIGTERM");
+		killTimer = setTimeout(() => child.kill("SIGKILL"), 3000);
+		killTimer.unref();
+	};
+	process.stdin.pipe(child.stdin);
+	child.stdout.pipe(process.stdout);
+	child.stderr.pipe(process.stderr);
+	process.stdin.once("end", stop);
+	process.stdin.once("error", stop);
+	process.stdout.once("error", stop);
+	process.stderr.once("error", stop);
+	child.stdin.on("error", stop);
+	process.once("SIGTERM", stop);
+	process.once("SIGINT", stop);
+	child.once("error", (error) => {
+		process.stderr.write(
+			`pi-paseo-shim: internal RPC helper failed: ${error.message}\n`,
+		);
+		stop();
+	});
+	child.once("close", (code, signal) => {
+		clearTimeout(killTimer);
+		process.stdin.unpipe(child.stdin);
+		process.exit(signal ? 1 : (code ?? 1));
+	});
 }
 
 function commandFailure(command, error) {
-  writeJsonLine({
-    type: "response",
-    ...(command?.id ? { id: command.id } : {}),
-    command: typeof command?.type === "string" ? command.type : "prompt",
-    success: false,
-    error: error instanceof Error ? error.message : String(error),
-  });
+	writeJsonLine({
+		type: "response",
+		...(command?.id ? { id: command.id } : {}),
+		command: typeof command?.type === "string" ? command.type : "prompt",
+		success: false,
+		error: error instanceof Error ? error.message : String(error),
+	});
 }
 
 function commandSuccessWithoutAgent(command) {
-  writeJsonLine({
-    type: "response",
-    ...(command?.id ? { id: command.id } : {}),
-    command: "prompt",
-    success: true,
-    data: { agentInvoked: false },
-  });
+	writeJsonLine({
+		type: "response",
+		...(command?.id ? { id: command.id } : {}),
+		command: "prompt",
+		success: true,
+		data: { agentInvoked: false },
+	});
 }
 
 async function waitForSocket(socketPath, timeoutMs = forkStartupTimeoutMs()) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const socket = await tryConnect(socketPath);
-    if (socket) return socket;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error("timed out waiting for the forked Pi TUI bridge socket");
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const socket = await tryConnect(socketPath);
+		if (socket) return socket;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	throw new Error("timed out waiting for the forked Pi TUI bridge socket");
 }
 
 function forkAwarePassthrough() {
-  const real = resolveRealPi();
-  const targetAgentId = process.env.PASEO_AGENT_ID?.trim();
-  const supervisedTuiBin = process.env.PI_PASEO_TUI_BIN?.trim();
-  const unsafeTuiBin = process.env.PI_PASEO_UNSAFE_TUI_BIN?.trim();
-  if (!real || !targetAgentId || (!supervisedTuiBin && !unsafeTuiBin) || process.platform === "win32") {
-    passthrough();
-    return;
-  }
+	const real = resolveRealPi();
+	const targetAgentId = process.env.PASEO_AGENT_ID?.trim();
+	const supervisedTuiBin = process.env.PI_PASEO_TUI_BIN?.trim();
+	const unsafeTuiBin = process.env.PI_PASEO_UNSAFE_TUI_BIN?.trim();
+	if (
+		!real ||
+		!targetAgentId ||
+		(!supervisedTuiBin && !unsafeTuiBin) ||
+		process.platform === "win32"
+	) {
+		passthrough();
+		return;
+	}
 
-  const child = spawn(real.command, [...real.prefix, ...args], { stdio: ["pipe", "pipe", "pipe"] });
-  let backend = child.stdin;
-  let switched = false;
-  let firstPromptSeen = false;
-  let stopArchiveMonitor = () => {};
-  child.stdout.pipe(process.stdout);
-  child.stderr.pipe(process.stderr);
-  child.on("error", (error) => {
-    if (!switched) {
-      process.stderr.write(`pi-paseo-shim: failed to spawn real pi: ${error.message}\n`);
-      process.exit(1);
-    }
-  });
-  child.on("exit", (code, signal) => {
-    if (!switched) process.exit(signal ? 1 : (code ?? 1));
-  });
+	const child = spawn(real.command, [...real.prefix, ...args], {
+		stdio: ["pipe", "pipe", "pipe"],
+	});
+	let backend = child.stdin;
+	let switched = false;
+	let firstPromptSeen = false;
+	let stopArchiveMonitor = () => {};
+	child.stdout.pipe(process.stdout);
+	child.stderr.pipe(process.stderr);
+	child.on("error", (error) => {
+		if (!switched) {
+			process.stderr.write(
+				`pi-paseo-shim: failed to spawn real pi: ${error.message}\n`,
+			);
+			process.exit(1);
+		}
+	});
+	child.on("exit", (code, signal) => {
+		if (!switched) process.exit(signal ? 1 : (code ?? 1));
+	});
 
-  const switchToFork = async (command) => {
-    const plan = resolveForkPlan({ command, targetAgentId });
-    if (!plan) return false;
-    const sourcePane = findSourcePane(plan.sourceSessionFile);
-    const tuiBin = selectForkTuiBin(sourcePane, {
-      supervised: supervisedTuiBin,
-      unsafe: unsafeTuiBin,
-    });
-    if (plan.trimmedIncompleteTools) process.stderr.write("pi-paseo-shim: fork snapshot omitted the unfinished native tool-call batch; completed context was preserved.\n");
-    const forkSessionFile = createForkedSession(plan.sourceSessionFile, plan.sourceEntryId, plan.sourceSnapshot);
-    const launched = launchForkTui({
-      placement: plan.placement,
-      sourcePane,
-      sourceSessionFile: plan.sourceSessionFile,
-      forkSessionFile,
-      cwd: plan.fork.cwd || process.env.PASEO_AGENT_CWD || process.cwd(),
-      agentId: targetAgentId,
-      tuiBin,
-      rpcArgs: args,
-    });
-    let socket;
-    try {
-      socket = await waitForSocket(launched.socketPath);
-    } catch (error) {
-      killTmuxPane(launched.paneId, { socketPath: launched.tmuxSocket });
-      throw error;
-    }
+	const switchToFork = async (command) => {
+		const plan = resolveForkPlan({ command, targetAgentId });
+		if (!plan) return false;
+		const sourcePane = findSourcePane(plan.sourceSessionFile);
+		const tuiBin = selectForkTuiBin(sourcePane, {
+			supervised: supervisedTuiBin,
+			unsafe: unsafeTuiBin,
+		});
+		if (plan.trimmedIncompleteTools)
+			process.stderr.write(
+				"pi-paseo-shim: fork snapshot omitted the unfinished native tool-call batch; completed context was preserved.\n",
+			);
+		const forkSessionFile = createForkedSession(
+			plan.sourceSessionFile,
+			plan.sourceEntryId,
+			plan.sourceSnapshot,
+		);
+		const launched = launchForkTui({
+			placement: plan.placement,
+			sourcePane,
+			sourceSessionFile: plan.sourceSessionFile,
+			forkSessionFile,
+			cwd: plan.fork.cwd || process.env.PASEO_AGENT_CWD || process.cwd(),
+			agentId: targetAgentId,
+			tuiBin,
+			rpcArgs: args,
+		});
+		let socket;
+		try {
+			socket = await waitForSocket(launched.socketPath);
+		} catch (error) {
+			killTmuxPane(launched.paneId, { socketPath: launched.tmuxSocket });
+			throw error;
+		}
 
-    switched = true;
-    stopArchiveMonitor = startForkArchiveMonitor(targetAgentId, { onKilled: () => process.exit(0) });
-    child.stdout.unpipe(process.stdout);
-    child.kill("SIGTERM");
-    backend = socket;
-    socket.setNoDelay?.(true);
-    socket.pipe(process.stdout);
-    socket.on("close", () => {
-      backend = null;
-      writeJsonLine({ type: "process_exit", error: "The forked terminal Pi session has ended." });
-    });
-    socket.on("error", () => {
-      backend = null;
-    });
+		switched = true;
+		stopArchiveMonitor = startForkArchiveMonitor(targetAgentId, {
+			onKilled: () => process.exit(0),
+		});
+		child.stdout.unpipe(process.stdout);
+		child.kill("SIGTERM");
+		backend = socket;
+		socket.setNoDelay?.(true);
+		socket.pipe(process.stdout);
+		socket.on("close", () => {
+			backend = null;
+			writeJsonLine({
+				type: "process_exit",
+				error: "The forked terminal Pi session has ended.",
+			});
+		});
+		socket.on("error", () => {
+			backend = null;
+		});
 
-    if (plan.nextPrompt) {
-      socket.write(`${JSON.stringify({ ...command, message: plan.nextPrompt })}\n`);
-    } else {
-      commandSuccessWithoutAgent(command);
-    }
-    return true;
-  };
+		if (plan.nextPrompt) {
+			socket.write(
+				`${JSON.stringify({ ...command, message: plan.nextPrompt })}\n`,
+			);
+		} else {
+			commandSuccessWithoutAgent(command);
+		}
+		return true;
+	};
 
-  const handleLine = async (line) => {
-    if (!line.trim()) return;
-    let command;
-    try {
-      command = JSON.parse(line);
-    } catch {
-      backend?.write(`${line}\n`);
-      return;
-    }
-    if (!switched && !firstPromptSeen && command?.type === "prompt") {
-      firstPromptSeen = true;
-      try {
-        if (await switchToFork(command)) return;
-      } catch (error) {
-        commandFailure(command, error);
-        return;
-      }
-    }
-    if (!backend) {
-      commandFailure(command, "The terminal Pi session is no longer running");
-      return;
-    }
-    backend.write(`${line}\n`);
-  };
+	const handleLine = async (line) => {
+		if (!line.trim()) return;
+		let command;
+		try {
+			command = JSON.parse(line);
+		} catch {
+			backend?.write(`${line}\n`);
+			return;
+		}
+		if (!switched && !firstPromptSeen && command?.type === "prompt") {
+			firstPromptSeen = true;
+			try {
+				if (await switchToFork(command)) return;
+			} catch (error) {
+				commandFailure(command, error);
+				return;
+			}
+		}
+		if (!backend) {
+			commandFailure(command, "The terminal Pi session is no longer running");
+			return;
+		}
+		backend.write(`${line}\n`);
+	};
 
-  let buffer = "";
-  let queue = Promise.resolve();
-  process.stdin.on("data", (chunk) => {
-    buffer += chunk.toString("utf8");
-    for (;;) {
-      const newline = buffer.indexOf("\n");
-      if (newline === -1) break;
-      const line = buffer.slice(0, newline).replace(/\r$/, "");
-      buffer = buffer.slice(newline + 1);
-      queue = queue.then(() => handleLine(line)).catch((error) => {
-        process.stderr.write(`pi-paseo-shim: fork relay failed: ${String(error)}\n`);
-      });
-    }
-  });
-  process.stdin.on("end", () => {
-    queue = queue.then(async () => {
-      if (buffer.trim()) await handleLine(buffer.replace(/\r$/, ""));
-      backend?.end();
-    });
-  });
-  process.stdin.resume();
+	let buffer = "";
+	let queue = Promise.resolve();
+	process.stdin.on("data", (chunk) => {
+		buffer += chunk.toString("utf8");
+		for (;;) {
+			const newline = buffer.indexOf("\n");
+			if (newline === -1) break;
+			const line = buffer.slice(0, newline).replace(/\r$/, "");
+			buffer = buffer.slice(newline + 1);
+			queue = queue
+				.then(() => handleLine(line))
+				.catch((error) => {
+					process.stderr.write(
+						`pi-paseo-shim: fork relay failed: ${String(error)}\n`,
+					);
+				});
+		}
+	});
+	process.stdin.on("end", () => {
+		queue = queue.then(async () => {
+			if (buffer.trim()) await handleLine(buffer.replace(/\r$/, ""));
+			backend?.end();
+		});
+	});
+	process.stdin.resume();
 
-  const shutdown = () => {
-    stopArchiveMonitor();
-    if (!switched) child.kill("SIGTERM");
-    process.exit(0);
-  };
-  process.once("SIGTERM", shutdown);
-  process.once("SIGINT", shutdown);
+	const shutdown = () => {
+		stopArchiveMonitor();
+		if (!switched) child.kill("SIGTERM");
+		process.exit(0);
+	};
+	process.once("SIGTERM", shutdown);
+	process.once("SIGINT", shutdown);
 }
 
 async function main() {
-  let sessionFile = extractSessionArg(args);
-  const assignedAgentId = process.env.PASEO_AGENT_ID?.trim();
-  const runtimeRecords = matchingRuntimeRecords(sessionFile, assignedAgentId);
-  assertRuntimeNotReaped(runtimeRecords);
-  if (!sessionFile && runtimeRecords.length) sessionFile = runtimeRecords[0].sessionFile;
-  if (sessionFile) {
-    const candidatePaths = [
-      ...runtimeRecords.filter(record => typeof record.bridgeSocket === "string").map(record => record.bridgeSocket),
-      ...(assignedAgentId ? [pipePathForAgent(assignedAgentId)] : []),
-      pipePathForSession(sessionFile),
-    ];
-    for (const pipePath of [...new Set(candidatePaths)]) {
-      const socket = await tryConnect(pipePath);
-      if (socket) {
-        bridge(socket, sessionFile, assignedAgentId);
-        return;
-      }
-    }
-    // A failed connection can mean startup/reload, permissions, or a live
-    // managed runtime whose bridge is down. Never unlink another owner's
-    // endpoint or mistake transport failure for permission to spawn a writer.
-    assertNoLiveRuntimeOwner(sessionFile, { agentId: assignedAgentId, records: runtimeRecords });
-  }
-  const target = parseTmuxTarget();
-  if (target) {
-    await topologyRelay({ target, args, sessionFile, waitForSocket });
-    return;
-  }
-  forkAwarePassthrough();
+	// Paseo marks internal metadata generation with --no-session. Check before
+	// discovery/attach/topology so it cannot create or claim an interactive TUI.
+	if (args.includes("--no-session")) {
+		ephemeralPassthrough();
+		return;
+	}
+	let sessionFile = extractSessionArg(args);
+	const assignedAgentId = process.env.PASEO_AGENT_ID?.trim();
+	const runtimeRecords = matchingRuntimeRecords(sessionFile, assignedAgentId);
+	assertRuntimeNotReaped(runtimeRecords);
+	if (!sessionFile && runtimeRecords.length)
+		sessionFile = runtimeRecords[0].sessionFile;
+	if (sessionFile) {
+		const candidatePaths = [
+			...runtimeRecords
+				.filter((record) => typeof record.bridgeSocket === "string")
+				.map((record) => record.bridgeSocket),
+			...(assignedAgentId ? [pipePathForAgent(assignedAgentId)] : []),
+			pipePathForSession(sessionFile),
+		];
+		for (const pipePath of [...new Set(candidatePaths)]) {
+			const socket = await tryConnect(pipePath);
+			if (socket) {
+				bridge(socket, sessionFile, assignedAgentId);
+				return;
+			}
+		}
+		// A failed connection can mean startup/reload, permissions, or a live
+		// managed runtime whose bridge is down. Never unlink another owner's
+		// endpoint or mistake transport failure for permission to spawn a writer.
+		assertNoLiveRuntimeOwner(sessionFile, {
+			agentId: assignedAgentId,
+			records: runtimeRecords,
+		});
+	}
+	const target = parseTmuxTarget();
+	if (target) {
+		await topologyRelay({ target, args, sessionFile, waitForSocket });
+		return;
+	}
+	forkAwarePassthrough();
 }
 
-main().catch(error => {
-  process.stderr.write(`pi-paseo-shim: ${String(error.message ?? error)}\n`);
-  process.exitCode = 1;
+main().catch((error) => {
+	process.stderr.write(`pi-paseo-shim: ${String(error.message ?? error)}\n`);
+	process.exitCode = 1;
 });

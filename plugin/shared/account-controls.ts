@@ -9,7 +9,7 @@ export const accountControlsSnapshotSchema = z.object({
   defaultSelected: z.boolean(), activationStatus: z.enum(["active", "inactive", "activation-pending", "activation-failed"]),
   busy: z.boolean(), canSwitch: z.boolean(),
   usage: z.object({ effectiveCredential: z.enum(["api-key-configured", "chatgpt-grant-configured", "chatgpt-grant-matched-refreshed", "unavailable", "unknown"]),
-    status: z.enum(["local-binding-confirmed", "unavailable", "unknown"]), remoteEntitlement: z.literal("not-queried"), settingsUrl: z.enum(["https://platform.openai.com/settings/organization/usage", "https://chatgpt.com/settings/usage"]).nullable() }).strict(),
+    status: z.enum(["local-binding-confirmed", "unavailable", "unknown"]), remoteEntitlement: z.literal("not-queried"), accountKey: z.string().regex(/^[a-f0-9]{64}$/).optional(), nativeRegistrationKey: z.string().regex(/^[a-f0-9]{64}$/).optional(), nativeRegistrationVersion: z.literal(1).optional(), settingsUrl: z.enum(["https://platform.openai.com/settings/organization/usage", "https://chatgpt.com/settings/usage"]).nullable() }).strict(),
 }).strict();
 const switchRequest = z.object({ protocol: z.literal(1), requestId: z.string().uuid(), expectedSessionId: z.string().min(1).max(256),
   expectedServiceEpoch: z.string().min(1).max(256), expectedSelectionRevision: z.number().int().nonnegative(), accountId: z.string().min(1).max(256).nullable() }).strict();

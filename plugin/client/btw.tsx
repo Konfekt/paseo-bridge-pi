@@ -6,6 +6,7 @@ import {
   useRpc, type PluginAgentPanelProps, type PluginClientContext,
   type PluginButtonRegistration, type PluginButtonContentProps, type PluginButtonIconProps, type PluginButtonBehavior,
 } from "@getpaseo/plugin/client";
+import { isDormantIndependentAgent } from "../shared/independent-state";
 import { btwControlRpc, btwStatusRpc, type BtwRequest } from "../shared/btw";
 
 type Memory = {
@@ -267,7 +268,7 @@ export function contributeBtw(client: PluginClientContext) {
   const remove = (id: string) => { entries.get(id)?.button.remove(); entries.delete(id); };
   const register = (agent: { id: string; workspaceId?: string | null; provider?: string; archivedAt?: string | null }) => {
     if (stopped) return;
-    if (agent.provider !== "pi" || agent.archivedAt || !agent.workspaceId) { remove(agent.id); return; }
+    if (agent.provider !== "pi" || agent.archivedAt || !agent.workspaceId || isDormantIndependentAgent(agent)) { remove(agent.id); return; }
     if (entries.get(agent.id)?.workspace === agent.workspaceId) return;
     remove(agent.id);
     const workspaceId = agent.workspaceId;

@@ -28,6 +28,34 @@ type Selection = { agentId: string; sessionId: string; runtimeEpoch: string };
 const selectedSessions = new Map<string, Selection>();
 
 export function contributeAccountControls(client: PluginClientContext) {
+	let disposed = false;
+	let stop: (() => void) | undefined;
+	void client.paseo.config
+		.get()
+		.then(({ config }) => {
+			const plugins = config.plugins;
+			const entry =
+				plugins && typeof plugins === "object" && !Array.isArray(plugins)
+					? (plugins as Record<string, unknown>)["paseo-accounts"]
+					: undefined;
+			return (
+				!!entry &&
+				typeof entry === "object" &&
+				(entry as { enabled?: boolean }).enabled !== false
+			);
+		})
+		.catch(() => false)
+		.then((external) => {
+			if (!disposed && !external)
+				stop = contributeLegacyAccountControls(client);
+		});
+	return () => {
+		disposed = true;
+		stop?.();
+	};
+}
+
+function contributeLegacyAccountControls(client: PluginClientContext) {
 	const entries = new Map<
 		string,
 		{

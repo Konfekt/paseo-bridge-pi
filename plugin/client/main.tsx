@@ -10,6 +10,7 @@ import { Pressable, Text, View } from "react-native";
 import { permissionGateSetRpc, permissionGateStatusRpc } from "../shared/permission-gate";
 import { gateControlsDisabled, gateLabel, hasNativeAccessModes } from "../shared/ui-state";
 import { mayApplyAsyncResult } from "../shared/lifecycle";
+import { isDormantIndependentAgent } from "../shared/independent-state";
 
 type Agent = { id: string; workspaceId?: string | null; provider?: string; archivedAt?: string | null; availableModes?: { id: string }[] };
 type Entry = { agent: Agent; registration: PluginButtonRegistration; sequence: number };
@@ -40,7 +41,7 @@ export function contributeClient(client: PluginClientContext) {
     }
   };
   const register = (agent: Agent) => {
-    if (agent.provider !== "pi" || agent.archivedAt || !agent.workspaceId || hasNativeAccessModes(agent.availableModes)) { remove(agent.id); return; }
+    if (agent.provider !== "pi" || agent.archivedAt || !agent.workspaceId || hasNativeAccessModes(agent.availableModes) || isDormantIndependentAgent(agent)) { remove(agent.id); return; }
     if (stopped) return;
     const existing = entries.get(agent.id);
     if (existing && existing.agent.workspaceId === agent.workspaceId) {

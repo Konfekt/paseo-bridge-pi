@@ -21,7 +21,7 @@ export function paseoImportArgs(input: {
 /** Workspace rejection happens before import allocation. Do not retry unknown
  * CLI failures or ambiguous successful responses that may already have imported. */
 export function retryableWorkspaceImportFailure(code: number | null, output: string): boolean {
-  return code !== null && code !== 0 && /\bworkspace\b|\bwks_tmux_/i.test(output);
+  return code !== null && code !== 0 && /Import requires an explicit projected tmux workspaceId|(?:Workspace|Project) not found:\s*(?:wks_tmux_|prj_tmux_)/i.test(output);
 }
 
 export function importRetryDelay(failures: number): number | undefined {

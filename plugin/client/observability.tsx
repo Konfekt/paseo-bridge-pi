@@ -3,6 +3,7 @@ import type {
 	PluginButtonRegistration,
 } from "@getpaseo/plugin/client";
 import { ObservabilityPanel } from "./activity-dashboard";
+import { isDormantIndependentAgent } from "../shared/independent-state";
 export { ObservabilityPanel } from "./activity-dashboard";
 
 /** One Activity destination; no polling until the host mounts its dashboard. */
@@ -32,7 +33,7 @@ export function contributeObservability(client: PluginClientContext) {
 		archivedAt?: string | null;
 	}) => {
 		if (stopped) return;
-		if (agent.provider !== "pi" || agent.archivedAt || !agent.workspaceId) {
+		if (agent.provider !== "pi" || agent.archivedAt || !agent.workspaceId || isDormantIndependentAgent(agent)) {
 			remove(agent.id);
 			return;
 		}
