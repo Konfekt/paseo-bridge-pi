@@ -1147,6 +1147,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         let result: unknown;
         if (request?.operation === "snapshot" && request.sessionId === identity.sessionId) result = await service.getSnapshot({ sessionId: identity.sessionId });
         else if (request?.operation === "switch" && request.request?.expectedSessionId === identity.sessionId && request.request?.expectedServiceEpoch === identity.serviceEpoch) result = await service.switchAccount(request.request);
+        else if (request?.operation === "manage" && request.request?.sessionId === identity.sessionId) result = await service.manageAccount(request.request);
         else throw new Error("Invalid account-controls operation");
         if (transport !== t || latestCtx !== ctx || (globalThis as any).__paeAccountControlsV1 !== service || activeAccountControlsService() !== service || !t.connected
           || currentAgentId !== identity.agentId || currentSessionFile !== t.sessionFile || ctx.sessionManager.getSessionId() !== identity.sessionId || t.operatorEpoch !== identity.runtimeEpoch) throw new Error("Account-controls identity changed during request");
