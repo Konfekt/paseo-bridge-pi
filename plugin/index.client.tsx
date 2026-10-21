@@ -4,7 +4,6 @@ import { contributeHarness } from "./client/harness";
 import { contributeAccountControls } from "./client/account-controls";
 import { contributeBtw } from "./client/btw";
 import { contributeWorkflows } from "./client/workflows";
-import { contributeThinking } from "./client/thinking";
 
 export default function contribute(client: PluginClientContext) {
 	const stops: (() => void)[] = [];
@@ -17,7 +16,6 @@ export default function contribute(client: PluginClientContext) {
 		stops.push(contributeAccountControls(client));
 		stops.push(contributeBtw(client));
 		stops.push(contributeWorkflows(client));
-		stops.push(contributeThinking(client));
 		return cleanup;
 	} catch (error) {
 		cleanup();
