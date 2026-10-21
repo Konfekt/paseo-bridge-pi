@@ -8,7 +8,7 @@ import type {
 } from "@getpaseo/plugin/client";
 import { z } from "zod";
 
-const KIND = "paseo-bridge-pi.thinking";
+const KIND = "paseo-bridge-pi-thinking";
 
 type Data = { text: string; phase: "streaming" | "complete" };
 
