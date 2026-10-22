@@ -11,7 +11,7 @@ stdenvNoCC.mkDerivation {
   installPhase = ''
     runHook preInstall
     mkdir -p "$out"
-    cp -r extension shim plugin scripts package.json README.md "$out/"
+    cp -r extension shim plugin scripts docs nix package.json README.md "$out/"
     runHook postInstall
   '';
   passthru = {

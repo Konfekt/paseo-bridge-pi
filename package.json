@@ -22,6 +22,8 @@
     "extension",
     "plugin",
     "scripts",
+    "docs",
+    "nix",
     "README.md"
   ],
   "scripts": {
