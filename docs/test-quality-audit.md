@@ -50,6 +50,32 @@ resolution itself. No package install, provider, account, active session, tmux,
 network RPC, or service restart is needed. Production sources were unchanged:
 these regressions did not reveal a production bug.
 
+## Mutation-sensitivity evidence
+
+Two actual production-module mutants were run on disposable copies of
+`extension/`, `test/` and `package.json`, using Node 24 from
+`nix shell --inputs-from . nixpkgs#nodejs_24`. Each copied suite ran via
+`node --experimental-strip-types --test <suite>`; both returned exit 1. The
+copies were deleted afterward; neither checkout's production sources changed.
+
+- **Early abort settlement:** replaced the first
+  `if (context.isIdle()) return;` in `extension/abort-dispatch.ts` with an
+  unconditional `return;`. `test/abort-dispatch.test.ts` failed 3 of 5 tests:
+  “waits for Pi to become idle after fire-and-forget abort” failed
+  `assert.ok(polls >= 2)`; “lifetime invalidation never dispatches or
+  acknowledges a successor session” failed with **Missing expected rejection**
+  (`/context closed/`); “fails instead of falsely acknowledging an unsettled
+  abort” failed with **Missing expected rejection**
+  (`/Pi did not become idle after cancellation/`).
+- **Environment overrides persisted preference:** replaced `isAutoEnabled()`'s
+  boolean preference/fallback expression with just
+  `environmentBoolean("PI_PASEO_BRIDGE_DEFAULT_AUTO_CONNECT")`.
+  `test/bridge-settings.test.ts` failed 1 of 6 tests:
+  “environment parsing and persisted precedence preserve legacy opt-out
+  presence semantics” reported **true !== false** at the persisted
+  `auto: false` assertion (line 108). The other five settings tests passed,
+  showing the failure was specific to precedence rather than fixture setup.
+
 ## Remaining gaps
 
 The focused check intentionally does not run the full plugin/compiler or live
