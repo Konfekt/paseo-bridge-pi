@@ -10,6 +10,50 @@ function isPiRequestAbortError(error: unknown): boolean {
 
 const active = new AbortController().signal;
 
+test('malformed, synchronously throwing, and unrecognized capabilities fail closed', async () => {
+  for (const capability of [false, 'ready', {}, { ready: true, check: 1 },
+    { ready: 1, check: async () => 'continue' },
+    { ready: true, check() { throw new Error('sync failure'); } },
+    { ready: true, check: async () => 'unexpected' }]) {
+    const result = await dispatchAfterIdlePreflight(capability, active, async () => assert.fail('must not send'));
+    assert.equal(result.dispatched, false);
+    assert.ok(['error', 'cancel'].includes(result.outcome));
+  }
+});
+
+test('late continue after lifetime abort never dispatches and removes the listener', async () => {
+  const { getEventListeners } = await import('node:events');
+  const controller = new AbortController();
+  let resolve!: (value: string) => void;
+  let sends = 0;
+  const pending = dispatchAfterIdlePreflight({ ready: true, check(signal: AbortSignal) {
+    assert.equal(signal, controller.signal);
+    return new Promise<string>(done => { resolve = done; });
+  } }, controller.signal, async () => ++sends);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 1);
+  controller.abort();
+  assert.deepEqual(await pending, { outcome: 'cancel', dispatched: false });
+  resolve('continue');
+  await Promise.resolve();
+  assert.equal(sends, 0);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+});
+
+test('settled checks remove listeners; dispatch errors remain observable rather than retrying', async () => {
+  const { getEventListeners } = await import('node:events');
+  for (const check of [async () => 'continue', async () => 'cancel', async () => { throw new Error('check failed'); }]) {
+    const controller = new AbortController();
+    await dispatchAfterIdlePreflight({ ready: true, check }, controller.signal, async () => 1);
+    assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+  }
+  let sends = 0;
+  const failure = new Error('RPC send failed');
+  await assert.rejects(dispatchAfterIdlePreflight({ ready: true, check: async () => 'continue' }, active, async () => {
+    sends++; throw failure;
+  }), error => error === failure);
+  assert.equal(sends, 1);
+});
+
 test("bridge handshake safely dispatches when optional warning extension is absent", async () => {
   let sends = 0;
   const result = await dispatchAfterIdlePreflight(undefined, active, async () => ++sends);
