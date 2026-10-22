@@ -30,7 +30,6 @@ test("waits for Pi to become idle after fire-and-forget abort", async () => {
   };
 
   await abortAndWaitForIdle(context, {
-    timeoutMs: 100,
     pollMs: 1,
     sleep: async () => {
       idle = true;
@@ -38,6 +37,27 @@ test("waits for Pi to become idle after fire-and-forget abort", async () => {
   });
 
   assert.ok(polls >= 2);
+});
+
+test("default cancellation remains pending through slow cleanup rather than timing out", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1000 });
+  t.after(() => t.mock.timers.reset());
+  let idle = false;
+  let waits = 0;
+  let aborts = 0;
+  await abortAndWaitForIdle({
+    abort() { aborts++; },
+    isIdle() { return idle; },
+  }, {
+    sleep: async () => {
+      // Advance a controlled clock beyond the former short timeout while the
+      // context is still genuinely busy. No wall-clock sleep or provider call.
+      t.mock.timers.tick(2000);
+      if (++waits === 2) idle = true;
+    },
+  });
+  assert.equal(aborts, 1);
+  assert.equal(waits, 2);
 });
 
 test("lifetime invalidation never dispatches or acknowledges a successor session", async () => {
@@ -53,10 +73,14 @@ test("lifetime invalidation never dispatches or acknowledges a successor session
   const controller = new AbortController();
   let successor = false;
   await assert.rejects(abortAndWaitForIdle({
-    abort() { aborts++; }, isIdle() { idleReads++; return successor; },
+    abort() { aborts++; }, isIdle() {
+      assert.equal(successor, false, 'closed context must not inspect successor idle state');
+      idleReads++;
+      return false;
+    },
   }, { signal: controller.signal, sleep: async () => { successor = true; controller.abort(); } }), /context closed/);
   assert.equal(aborts, 1);
-  assert.equal(idleReads, 2, 'closed context must not read successor idle state');
+  assert.ok(idleReads > 0, 'the live context was genuinely observed busy before invalidation');
 });
 
 test("missing context and synchronous dispatch failures do not claim cancellation settled", async () => {

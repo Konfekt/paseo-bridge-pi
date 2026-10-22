@@ -11,7 +11,7 @@ import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 
 // The executable is supplied by native-rpc-check.nix, never a user wrapper.
-// No prompts/model streams are sent: the provider registers metadata only.
+// Model streams are forbidden; the ordinary fixture prompt is consumed by input.
 const executable = process.env.BRIDGE_NATIVE_PI;
 const root = fileURLToPath(new URL("../", import.meta.url));
 const fixtureProvider = `import { appendFileSync, writeFileSync } from "node:fs";

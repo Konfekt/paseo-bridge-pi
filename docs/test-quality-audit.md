@@ -1,6 +1,6 @@
 # Focused bridge check audit
 
-## Concrete gaps
+## Concrete gaps at initial audit
 
 - `flake.nix` previously exported packages but no checks. Building the source
   package did not exercise configuration or runtime helpers.
@@ -76,12 +76,47 @@ copies were deleted afterward; neither checkout's production sources changed.
   `auto: false` assertion (line 108). The other five settings tests passed,
   showing the failure was specific to precedence rather than fixture setup.
 
+## Additional boundary coverage
+
+The copied `isPiRequestAbortError` classifier was removed from the preflight
+suite: duplicating a private upstream function is not proof of compatibility.
+That integration still needs a check against the actual Paseo provider.
+
+The default abort-wait contract now advances a controlled clock beyond the old
+short deadline while the context remains busy, then settles it. This proves
+slow cleanup stays pending without a wall-clock sleep. The hermetic runner has
+a 30-second test deadline to bound failures, not to define product timeouts.
+
+## Native artifact/RPC follow-up
+
+The source-regex model/thinking/stats wiring assertions were removed. The
+reusable `nix/native-rpc-check.nix { pkgs; piPackage; src; }` constructor loads the
+BUILT bridge package into the caller's actual standalone Pi. Its offline tests
+exercise Unix-socket state/commands/stats, thinking changes, repeated same-model
+echoes, valid model changes, invalid-model non-effects, and reload preserving the
+fixture's process/session/socket. Stats are compared to Pi's native RPC result.
+An ordinary prompt is consumed by a real SDK input hook before any model turn;
+the receipt proves `source: extension` and absent streaming behavior.
+
+A writable artifact copy drops `get_session_stats` dispatch. The same integration
+must fail its named stats case with `Unknown command: get_session_stats`; arbitrary
+startup/import errors are not counted as a killed mutant. The previously skipped
+native-reload test is now required in this constructor, uses the artifact and an
+allowlisted temporary environment, and fails if its executable is not supplied.
+Native files use `.integration.ts`, outside the default unit-test glob;
+`test:native` is explicit. No silent optional-integration skips are added to a
+passing unit count. Reload occurs only in the disposable fixture process.
+
+The consumer exports this as `checks.x86_64-linux.pi-bridge-native-rpc`; keeping
+Pi selection at the constructor boundary avoids pinning a second Pi in this
+reusable bridge repository.
+
 ## Remaining gaps
 
-The focused check intentionally does not run the full plugin/compiler or live
-Pi integration suites, verify NixOS/Home Manager module evaluation, or prove
-end-to-end `index.ts` RPC routing. Race injection between mutable-file checks and
-rename, OS-level permission/ACL failures, and actual SDK path resolution remain
-outside this coverage. Abort polling uses an injected scheduler rather than
-real tool shutdown. Other advertised systems expose the check but need native
-builders to establish execution results.
+Neither focused check is the full plugin/compiler suite, live-provider suite,
+native-client rendering test or every `index.ts` command. Streaming prompt/Stop
+and full Goal/provider/session composition need separate integration coverage.
+Race injection between mutable-file checks and rename, OS-level permission/ACL
+failures, and actual SDK path resolution remain outside the pure-helper check.
+Its abort polling uses an injected scheduler rather than real tool shutdown.
+Other advertised systems need native builders to establish execution results.

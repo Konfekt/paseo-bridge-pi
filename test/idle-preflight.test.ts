@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dispatchAfterIdlePreflight, IDLE_PREFLIGHT_KEY, IDLE_PROMPT_CANCELLED } from "../extension/idle-preflight.ts";
-
-function isPiRequestAbortError(error: unknown): boolean {
-  const value = error as { name?: unknown; message?: unknown };
-  const diagnostic = `${String(value?.name ?? "")} ${String(value?.message ?? error)}`;
-  return value?.name === "AbortError" || /\brequest was aborted\b|\babort(ed)?\b/i.test(diagnostic);
-}
+import { dispatchAfterIdlePreflight, IDLE_PREFLIGHT_KEY } from "../extension/idle-preflight.ts";
 
 const active = new AbortController().signal;
 
@@ -74,7 +68,6 @@ test("registered extension Cancel stops dispatch; Ignore dispatches once", async
   );
   assert.deepEqual(cancelled, { outcome: "cancel", dispatched: false });
   assert.equal(sends, 0);
-  assert.equal(isPiRequestAbortError(new Error(IDLE_PROMPT_CANCELLED)), true);
 
   const ignored = await dispatchAfterIdlePreflight(
     { ready: true, check: async () => "continue" as const }, active, async () => ++sends,
