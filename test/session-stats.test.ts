@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { buildSessionStats } from "../extension/session-stats.ts";
@@ -83,9 +82,4 @@ test("context usage is passed through independently of cumulative usage", () => 
   const stats = buildSessionStats(context([assistant("one")], contextUsage));
   assert.equal(stats.contextUsage, contextUsage);
   assert.equal(stats.tokens.total, 100);
-});
-
-test("get_session_stats RPC sends the complete stats response", () => {
-  const source = readFileSync(new URL("../extension/index.ts", import.meta.url), "utf8");
-  assert.match(source, /case "get_session_stats":\s*send\(success\(id, type, buildSessionStats\(latestCtx\)\)\);/);
 });

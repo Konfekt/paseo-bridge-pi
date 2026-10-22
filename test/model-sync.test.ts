@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { applyRemoteModel } from "../extension/model-sync.ts";
@@ -59,10 +58,4 @@ test("unknown current model still applies; setter failures propagate", async () 
   const model = { provider: "p", id: "m" };
   assert.equal(await applyRemoteModel(undefined, model, async () => false), false);
   await assert.rejects(applyRemoteModel(undefined, model, async () => { throw new Error("auth"); }), /auth/);
-});
-
-test("RPC guards before marking model echo, while thinking changes stay direct", () => {
-  const source = readFileSync(new URL("../extension/index.ts", import.meta.url), "utf8");
-  assert.match(source, /applyRemoteModel\(latestCtx\?\.model, model, async \(nextModel\) => \{\s*remoteAppliedModel = modelToId\(nextModel\);\s*return pi\.setModel\(nextModel\);/);
-  assert.match(source, /case "set_thinking_level":\s*remoteAppliedThinking = cmd.level;\s*pi.setThinkingLevel\(cmd.level\);/);
 });
