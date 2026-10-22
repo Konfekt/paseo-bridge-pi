@@ -6,7 +6,6 @@ import {
 	SettingsSection,
 	SettingsCard,
 	SettingsSelect,
-	SettingsAction,
 } from "@getpaseo/plugin/client/ui";
 import { useRpc, type PluginAgentPanelProps } from "@getpaseo/plugin/client";
 import {
@@ -230,12 +229,34 @@ function WorkflowsView({
 			...extra,
 		});
 	const button = (label: string, onPress: () => void, disabled = false) => (
-		<SettingsAction
-			label=""
-			actionLabel={label}
-			onPress={onPress}
+		<Pressable
+			accessibilityRole="button"
+			accessibilityState={{ disabled }}
 			disabled={disabled}
-		/>
+			onPress={onPress}
+			style={({ pressed }) => ({
+				minHeight: 44,
+				alignSelf: "flex-start",
+				alignItems: "center",
+				justifyContent: "center",
+				paddingHorizontal: 14,
+				borderWidth: 1,
+				borderColor: colors.border,
+				borderRadius: 10,
+				backgroundColor: pressed ? colors.surface2 : "transparent",
+				opacity: disabled ? 0.5 : 1,
+			})}
+		>
+			<Text
+				style={{
+					color: disabled ? colors.foregroundMuted : colors.foreground,
+					fontSize: 14,
+					fontWeight: "500",
+				}}
+			>
+				{label}
+			</Text>
+		</Pressable>
 	);
 	const Container = embedded ? View : ScrollView;
 	const goalSection = (
