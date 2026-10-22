@@ -6,7 +6,8 @@ import {
   useRpc,
 } from "@getpaseo/plugin/client";
 import { useEffect, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
+import { Metadata, NativeRow, SectionHeading, Surface } from "./presentation";
 import { permissionGateSetRpc, permissionGateStatusRpc } from "../shared/permission-gate";
 import { gateControlsDisabled, gateLabel, hasNativeAccessModes } from "../shared/ui-state";
 import { mayApplyAsyncResult } from "../shared/lifecycle";
@@ -131,27 +132,21 @@ function PermissionGateControls({ workspaceId, agentId, theme }: { workspaceId: 
     available, enabled: enabled ?? null, fetching: status.isFetching, stale: status.isStale,
     error: status.isError, pending: mutation.isPending || status.isPending,
   });
-  const color = theme.colors.foreground;
-  const muted = theme.colors.foregroundMuted;
   const danger = theme.colors.statusDanger;
   return (
     <View style={{ gap: 12 }}>
-      <Text accessibilityRole="header" style={{ color, fontSize: 18 }}>Access mode</Text>
-      {status.isError ? <Text style={{ color: danger }}>Could not read permission state. Controls are disabled.</Text> : null}
-      {status.isPending ? <Text style={{ color: muted }}>Checking this agent…</Text> : null}
-      {status.data && !status.data.available ? <Text style={{ color: muted }}>{status.data.reason ?? "Permission control unavailable."}</Text> : null}
-      {available ? <Text style={{ color: muted }}>Applies to this agent and its children.</Text> : null}
-      <Text style={{ color: muted }}>Sandbox and authorization policy stay active.</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel="Use Dangerous ask" disabled={disabled || enabled === true} onPress={() => mutation.mutate(true)} style={{ padding: 12, opacity: disabled ? 0.5 : 1 }}>
-        <Text style={{ color }}>{enabled === true ? "✓ " : ""}Dangerous ask</Text>
-        <Text style={{ color: muted }}>Ask when an action needs approval.</Text>
-      </Pressable>
-      <Pressable accessibilityRole="button" accessibilityLabel="Use Full access" disabled={disabled || enabled === false} onPress={() => mutation.mutate(false)} style={{ padding: 12, opacity: disabled ? 0.5 : 1 }}>
-        <Text style={{ color }}>{enabled === false ? "✓ " : ""}Full access</Text>
-        <Text style={{ color: muted }}>Turn off approval prompts.</Text>
-      </Pressable>
-      {mutation.isPending ? <Text style={{ color: muted }}>Applying…</Text> : null}
-      {message ? <Text accessibilityRole="alert" style={{ color: danger }}>{message}</Text> : null}
+      <SectionHeading colors={theme.colors} title="Access mode" />
+      <Surface colors={theme.colors} padded>
+        {status.isError ? <Metadata colors={theme.colors} style={{ color: danger }}>Could not read permission state. Controls are disabled.</Metadata> : null}
+        {status.isPending ? <Metadata colors={theme.colors}>Checking this agent…</Metadata> : null}
+        {status.data && !status.data.available ? <Metadata colors={theme.colors}>{status.data.reason ?? "Permission control unavailable."}</Metadata> : null}
+        {available ? <Metadata colors={theme.colors}>Applies to this agent and its children.</Metadata> : null}
+        <Metadata colors={theme.colors}>Sandbox and authorization policy stay active.</Metadata>
+        <NativeRow colors={theme.colors} title={`${enabled === true ? "✓ " : ""}Dangerous ask`} detail="Ask when an action needs approval." disabled={disabled || enabled === true} selected={enabled === true} onPress={() => mutation.mutate(true)} />
+        <NativeRow colors={theme.colors} title={`${enabled === false ? "✓ " : ""}Full access`} detail="Turn off approval prompts." disabled={disabled || enabled === false} selected={enabled === false} onPress={() => mutation.mutate(false)} />
+        {mutation.isPending ? <Metadata colors={theme.colors}>Applying…</Metadata> : null}
+        {message ? <Metadata colors={theme.colors} style={{ color: danger }}>{message}</Metadata> : null}
+      </Surface>
     </View>
   );
 }

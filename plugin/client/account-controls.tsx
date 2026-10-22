@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Linking, Pressable, Text, View } from "react-native";
 import { SettingsCard, SettingsSection } from "@getpaseo/plugin/client/ui";
+import { Metadata, NativeRow, SectionHeading, Surface } from "./presentation";
 import { ScrollView } from "@getpaseo/plugin/client/react-native";
 import {
 	type PluginButtonContentProps,
@@ -257,45 +258,33 @@ function AccountsView({
 			style={{ maxHeight: 520 }}
 			contentContainerStyle={{ gap: 12, padding: 12 }}
 		>
-			<Text
-				accessibilityRole="header"
-				style={{ color: colors.foreground, fontSize: 18, fontWeight: "600" }}
-			>
-				Pi accounts
-			</Text>
+			<SectionHeading colors={colors} title="Pi accounts" />
 			{agents.length > 1 ? (
-				<Text style={{ color: colors.foregroundMuted, fontSize: 13 }}>
-					Choose the Pi session to manage.
-				</Text>
+				<Metadata colors={colors}>Choose the Pi session to manage.</Metadata>
 			) : null}
 			{agents.length === 0 ? (
-				<Text style={{ color: colors.foregroundMuted }}>
-					No Pi sessions in this workspace.
-				</Text>
+				<Surface colors={colors} padded>
+					<Metadata colors={colors}>No Pi sessions in this workspace.</Metadata>
+				</Surface>
 			) : null}
-			{agents.map((a) => (
-				<Pressable
-					key={a.id}
-					accessibilityRole="button"
-					accessibilityState={{ selected: selection?.agentId === a.id }}
-					onPress={() => choose(a)}
-					style={{
-						minHeight: 44,
-						paddingVertical: 10,
-						justifyContent: "center",
-					}}
-				>
-					<Text style={{ color: colors.accent }}>
-						{a.title || a.name || shortId(a.id)}
-						{selection?.agentId === a.id ? " · selected" : ""}
-					</Text>
-				</Pressable>
-			))}
+			{agents.length > 0 ? (
+				<Surface colors={colors}>
+					{agents.map((a) => (
+						<NativeRow
+							key={a.id}
+							colors={colors}
+							title={a.title || a.name || shortId(a.id)}
+							selected={selection?.agentId === a.id}
+							onPress={() => choose(a)}
+						/>
+					))}
+				</Surface>
+			) : null}
 			{selection && !boundAgent ? (
-				<Text style={{ color: colors.statusWarning }}>
+				<Metadata colors={colors} style={{ color: colors.statusWarning }}>
 					Selected Pi session is no longer in this workspace. Choose another
 					session explicitly.
-				</Text>
+				</Metadata>
 			) : null}
 			{chosen ? (
 				<AccountSection
@@ -536,14 +525,12 @@ function AccountSection({
 								? current
 								: "Account status unavailable"}
 					</Text>
-					<Pressable
-						accessibilityRole="button"
+					<NativeRow
+						colors={colors}
+						title="Refresh account status"
 						disabled={query.isFetching}
 						onPress={() => void query.refetch()}
-						style={{ minHeight: 44, justifyContent: "center" }}
-					>
-						<Text style={{ color: colors.accent }}>Refresh account status</Text>
-					</Pressable>
+					/>
 					{bound &&
 					query.data?.available &&
 					(query.data.sessionId !== bound.sessionId ||

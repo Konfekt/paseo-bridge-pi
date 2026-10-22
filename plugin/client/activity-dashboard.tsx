@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { ScrollView } from "@getpaseo/plugin/client/react-native";
 import { SettingsCard, SettingsSection } from "@getpaseo/plugin/client/ui";
+import { Metadata, NativeRow, SectionHeading } from "./presentation";
 import { useRpc, type PluginAgentPanelProps } from "@getpaseo/plugin/client";
 import type { RpcOutput } from "@getpaseo/plugin";
 import { harnessStatusRpc } from "../shared/harness-readonly";
@@ -33,31 +34,7 @@ function Toggle({
 	expanded?: boolean;
 	colors: Colors;
 }) {
-	return (
-		<Pressable
-			accessibilityRole="button"
-			accessibilityLabel={label}
-			accessibilityState={expanded === undefined ? undefined : { expanded }}
-			onPress={onPress}
-			style={{
-				minHeight: 44,
-				paddingVertical: 10,
-				flexDirection: "row",
-				alignItems: "center",
-				justifyContent: "space-between",
-				gap: 12,
-			}}
-		>
-			<Text style={{ color: colors.accent, fontSize: 13, fontWeight: "600" }}>
-				{label}
-			</Text>
-			{expanded === undefined ? null : (
-				<Text style={{ color: colors.foregroundMuted }}>
-					{expanded ? "⌃" : "⌄"}
-				</Text>
-			)}
-		</Pressable>
-	);
+	return <NativeRow colors={colors} title={label} trailing={expanded === undefined ? null : <Metadata colors={colors}>{expanded ? "⌃" : "⌄"}</Metadata>} expanded={expanded} onPress={onPress} />;
 }
 function Meter({
 	value,
@@ -734,22 +711,9 @@ export function ObservabilityPanel({
 			style={{ flex: 1, backgroundColor: colors.surface0 }}
 			contentContainerStyle={{ padding: 16, gap: 20 }}
 		>
-			<View
-				style={{
-					flexDirection: "row",
-					alignItems: "center",
-					justifyContent: "space-between",
-					gap: 12,
-				}}
-			>
-				<Text
-					accessibilityRole="header"
-					style={{ color: colors.foreground, fontSize: 22, fontWeight: "600" }}
-				>
-					Activity
-				</Text>
+			<SectionHeading colors={colors} title="Activity">
 				<Toggle colors={colors} label="Refresh" onPress={refresh} />
-			</View>
+			</SectionHeading>
 			{!ready ? (
 				<SettingsCard>
 					<View style={{ padding: 16 }}>

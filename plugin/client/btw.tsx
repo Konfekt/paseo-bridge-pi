@@ -7,6 +7,7 @@ import {
   type PluginButtonRegistration, type PluginButtonContentProps, type PluginButtonIconProps, type PluginButtonBehavior,
 } from "@getpaseo/plugin/client";
 import { isDormantIndependentAgent } from "../shared/independent-state";
+import { Metadata, OutputWell, Surface } from "./presentation";
 import { btwControlRpc, btwStatusRpc, type BtwRequest } from "../shared/btw";
 
 type Memory = {
@@ -195,12 +196,12 @@ function BtwView({ host, workspaceId, agentId, theme, layout, expanded = false }
       : { width: 340, maxWidth: "100%", height: 400, backgroundColor: colors.surface0 }}>
       <ScrollView ref={scroll} style={{ flex: 1 }} contentContainerStyle={{ padding: 12, gap: 14 }}
         onContentSizeChange={() => scroll.current?.scrollToEnd?.({ animated: false })}>
-        {query.isPending ? <Text style={{ color: colors.foregroundMuted }}>Connecting…</Text> : null}
-        {query.isError ? <Text style={{ color: colors.statusWarning }}>Connection unavailable.</Text> : null}
-        {!query.isPending && !query.isError && !data?.available ? <Text style={{ color: colors.foregroundMuted }}>Reload Pi to enable BTW.</Text> : null}
+        {query.isPending ? <Metadata colors={colors}>Connecting…</Metadata> : null}
+        {query.isError ? <Metadata colors={colors} style={{ color: colors.statusWarning }}>Connection unavailable.</Metadata> : null}
+        {!query.isPending && !query.isError && !data?.available ? <Metadata colors={colors}>Reload Pi to enable BTW.</Metadata> : null}
         {thread?.turns.map((turn, index) => <View key={`${thread.id}:${index}`} style={{ gap: 12 }}>
           {question(turn.question)}
-          <Text selectable style={{ color: colors.foreground, lineHeight: 22 }}>{turn.answer}</Text>
+          <OutputWell colors={colors} text={turn.answer} platform={layout.platform} />
           <Pressable accessibilityRole="button" accessibilityLabel="Copy response"
             style={{ alignSelf: "flex-start", padding: 8 }} onPress={() => {
               const generation = saved.generation;
@@ -215,20 +216,19 @@ function BtwView({ host, workspaceId, agentId, theme, layout, expanded = false }
         </View>)}
         {thread?.state === "running" ? <View style={{ gap: 12 }}>
           {question(saved.pendingQuestion ?? thread.question)}
-          <Text selectable style={{ color: colors.foreground, lineHeight: 22 }}>{thread.partial || "Thinking…"}</Text>
+          <OutputWell colors={colors} text={thread.partial || "Thinking…"} platform={layout.platform} />
         </View> : null}
         {current && selected && !thread ? <Text style={{ color: colors.foregroundMuted }}>{saved.busy || query.isFetching ? "Loading…" : "This chat is no longer available. Dismiss and reopen BTW to start again."}</Text> : null}
         {thread?.state === "cancelled" ? <Text style={{ color: colors.foregroundMuted }}>Response stopped.</Text> : null}
-        {thread?.error ? <Text style={{ color: colors.statusWarning }}>{thread.error}</Text> : null}
-        {saved.message ? <Text accessibilityRole="alert" style={{ color: saved.uncertain ? colors.statusWarning : colors.foregroundMuted }}>{saved.message}</Text> : null}
+        {thread?.error ? <Metadata colors={colors} style={{ color: colors.statusWarning }}>{thread.error}</Metadata> : null}
+        {saved.message ? <Metadata colors={colors} style={{ color: saved.uncertain ? colors.statusWarning : colors.foregroundMuted }}>{saved.message}</Metadata> : null}
         {saved.uncertain ? <View>
           {button("Refresh", () => void query.refetch(), query.isFetching)}
           {button("I reviewed the refreshed chat", () => { saved.uncertain = false; saved.message = undefined; refreshView(); },
             saved.busy || saved.refreshed <= saved.failedAt || query.isError || query.isFetching)}
         </View> : null}
       </ScrollView>
-      <View style={{ margin: 10, position: "relative", backgroundColor: colors.surface1,
-        borderWidth: 1, borderColor: colors.border, borderRadius: 10 }}>
+      <Surface colors={colors} style={{ margin: 10, position: "relative" }}>
         <TextInput accessibilityLabel="BTW message" placeholder="Ask a side question…" placeholderTextColor={colors.foregroundMuted} multiline maxLength={8000}
           editable={!blocked && thread?.state !== "running"} value={draft}
           onKeyPress={layout.platform === "web" ? event => {
@@ -256,7 +256,7 @@ function BtwView({ host, workspaceId, agentId, theme, layout, expanded = false }
               : <Icon name="ArrowUp" size={layout.platform === "web" ? 16 : 20} color={colors.accentForeground} />}
           </Pressable>
         </View>
-      </View>
+      </Surface>
     </View>
   );
 }
