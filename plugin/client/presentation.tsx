@@ -36,8 +36,8 @@ export function NativeRow({ colors, title, detail, leading, trailing, children, 
   return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? title}
     accessibilityState={{ disabled, selected, ...(expanded === undefined ? {} : { expanded }) }} disabled={disabled} onPress={onPress}
     onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
-    style={({ pressed }) => [{ paddingHorizontal: 12, paddingVertical: 10, gap: 6, opacity: disabled ? 0.5 : 1,
-      backgroundColor: !disabled && (pressed || selected) ? colors.surface2 : !disabled && hovered ? colors.surface1 : "transparent" }, style]}>
+    style={({ pressed }) => [{ paddingHorizontal: 12, paddingVertical: 10, gap: 6, opacity: disabled && !selected ? 0.5 : 1,
+      backgroundColor: selected || (!disabled && pressed) ? colors.surface2 : !disabled && hovered ? colors.surface1 : "transparent" }, style]}>
     <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minWidth: 0 }}>
       {leading}<View style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <Text style={{ ...nativeText, color: colors.foreground }}>{title}</Text>
@@ -61,8 +61,8 @@ export function NativeButton({ colors, label, onPress, disabled = false, danger 
 }
 
 /** A bounded selectable document, not a terminal or a new control surface. */
-export function OutputWell({ colors, text, monospace = false, platform, maxHeight = 320 }: {
-  colors: PresentationColors; text: string; monospace?: boolean; platform?: string; maxHeight?: number;
+export function OutputWell({ colors, text, monospace = false, platform, maxHeight = 320, copyable = true }: {
+  colors: PresentationColors; text: string; monospace?: boolean; platform?: string; maxHeight?: number; copyable?: boolean;
 }) {
   const [copyError, setCopyError] = useState(false);
   return <View style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, backgroundColor: colors.surface0, overflow: "hidden" }}>
@@ -70,12 +70,12 @@ export function OutputWell({ colors, text, monospace = false, platform, maxHeigh
       <Text selectable style={{ color: colors.foreground, fontSize: monospace ? 12 : 14, lineHeight: monospace ? 18 : 20,
         ...(monospace ? { fontFamily: platform === "ios" ? "Menlo" : "monospace" } : {}) }}>{text}</Text>
     </ScrollView>
-    <View style={{ flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: 8, paddingHorizontal: 8, paddingVertical: 6, borderTopWidth: 1, borderTopColor: colors.border }}>
+    {copyable ? <View style={{ flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: 8, paddingHorizontal: 8, paddingVertical: 6, borderTopWidth: 1, borderTopColor: colors.border }}>
       {copyError ? <Metadata colors={colors} alert style={{ color: colors.statusDanger }}>Could not copy. Select the text to copy it.</Metadata> : null}
       <NativeButton colors={colors} label="Copy" onPress={() => {
         setCopyError(false);
         void Promise.resolve().then(() => copyText(text)).catch(() => setCopyError(true));
       }} style={{ paddingVertical: 4, paddingHorizontal: 8, backgroundColor: "transparent" }} />
-    </View>
+    </View> : null}
   </View>;
 }

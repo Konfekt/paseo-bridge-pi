@@ -106,7 +106,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
   const pill = (host, id) => host.pills.find(pill => pill.id === 'work' && pill.agentId === id && !pill.removed);
   const click = (host, id) => { assert.equal(pill(host, id).button.behavior.kind, 'action'); pill(host, id).button.behavior.onPress(); };
   const panel = host => { const work = host.panels.filter(panel => panel.id === 'work'); assert.equal(work.length, 1); assert.equal(work[0].context, 'workspace'); assert.deepEqual(work[0].locations, ['workspace']); return work[0].Component; };
-  const props = { context: 'workspace', workspaceId: 'w', host: { id: 'host' }, theme: { colors: { foreground: '#fff', foregroundMuted: '#aaa' } }, layout: { platform: 'web', compact: false } };
+  const props = { context: 'workspace', workspaceId: 'w', host: { id: 'host' }, theme: { colors: { foreground: '#fff', foregroundMuted: '#aaa', surface0: '#111', surface1: '#222', surface2: '#333', border: '#444', statusSuccess: '#0f0', statusWarning: '#fa0', statusDanger: '#f00' } }, layout: { platform: 'web', compact: false } };
   const render = (host = first, overrides = {}) => { queries.length = 0; return ui.render(panel(host), { ...props, ...overrides }); };
   const select = (tree, section) => { const tab = nodes(tree).find(node => node.props?.accessibilityRole === 'tab' && node.props.children?.props?.children === section); assert.ok(tab, section); tab.props.onPress(); };
   const selected = tree => nodes(tree).find(node => node.props?.accessibilityRole === 'tab' && node.props.accessibilityState.selected)?.props.children.props.children;
@@ -118,6 +118,10 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.deepEqual(first.opened, Array(3).fill({ id: 'work', options: { workspaceId: 'w', location: 'workspace' } }), 'native workspace identity never contains an agent id');
     let tree = render();
     assert.match(text(tree), /Conversation B/);
+    const tabNodes = nodes(tree).filter(node => node.props?.accessibilityRole === 'tab');
+    assert.equal(tabNodes.length, 4, 'Work retains four native sections at narrow width');
+    assert.ok(tabNodes.every(node => (typeof node.props.style === 'function' ? node.props.style({pressed:false}) : node.props.style)?.minHeight >= 44), 'tabs retain accessible touch targets at narrow widths');
+    assert.ok(tabNodes.some(node => node.props.accessibilityState?.selected && (typeof node.props.style === 'function' ? node.props.style({pressed:false}) : node.props.style)?.borderBottomWidth === 2), 'selected section has native underline feedback');
     select(tree, 'Jobs'); tree = render();
     scroll(tree).props.onScroll({ nativeEvent: { contentOffset: { y: 321 } } });
     tree = render();

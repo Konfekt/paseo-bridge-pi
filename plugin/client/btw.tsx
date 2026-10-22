@@ -7,7 +7,7 @@ import {
   type PluginButtonRegistration, type PluginButtonContentProps, type PluginButtonIconProps, type PluginButtonBehavior,
 } from "@getpaseo/plugin/client";
 import { isDormantIndependentAgent } from "../shared/independent-state";
-import { Metadata, OutputWell, Surface } from "./presentation";
+import { Metadata, NativeButton, OutputWell, Surface } from "./presentation";
 import { btwControlRpc, btwStatusRpc, type BtwRequest } from "../shared/btw";
 
 type Memory = {
@@ -142,15 +142,11 @@ function BtwView({ host, workspaceId, agentId, theme, layout, expanded = false }
   const canSend = !blocked && !!draft.trim() && thread?.state !== "running" && (!selected || !!thread);
   const colors = theme.colors;
   const button = (label: string, action: () => void, disabled = false) => (
-    <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }}
-      disabled={disabled} onPress={action}
-      style={{ minHeight: 36, paddingHorizontal: 8, justifyContent: "center", opacity: disabled ? 0.45 : 1 }}>
-      <Text style={{ color: colors.accent }}>{label}</Text>
-    </Pressable>
+    <NativeButton colors={colors} label={label} onPress={action} disabled={disabled} style={{ minHeight: 36, paddingVertical: 4, paddingHorizontal: 8 }} />
   );
   const question = (text: string) => (
     <View style={{ alignSelf: "flex-end", maxWidth: "92%", backgroundColor: colors.surface1, borderRadius: 12, padding: 10 }}>
-      <Text selectable style={{ color: colors.foreground, lineHeight: 21 }}>{text}</Text>
+      <Text selectable style={{ color: colors.foreground, fontSize: 14, lineHeight: 20 }}>{text}</Text>
     </View>
   );
   async function mutate(operation: BtwRequest["operation"]) {
@@ -201,7 +197,7 @@ function BtwView({ host, workspaceId, agentId, theme, layout, expanded = false }
         {!query.isPending && !query.isError && !data?.available ? <Metadata colors={colors}>Reload Pi to enable BTW.</Metadata> : null}
         {thread?.turns.map((turn, index) => <View key={`${thread.id}:${index}`} style={{ gap: 12 }}>
           {question(turn.question)}
-          <OutputWell colors={colors} text={turn.answer} platform={layout.platform} />
+          <OutputWell colors={colors} text={turn.answer} platform={layout.platform} copyable={false} />
           <Pressable accessibilityRole="button" accessibilityLabel="Copy response"
             style={{ alignSelf: "flex-start", padding: 8 }} onPress={() => {
               const generation = saved.generation;
@@ -216,7 +212,7 @@ function BtwView({ host, workspaceId, agentId, theme, layout, expanded = false }
         </View>)}
         {thread?.state === "running" ? <View style={{ gap: 12 }}>
           {question(saved.pendingQuestion ?? thread.question)}
-          <OutputWell colors={colors} text={thread.partial || "Thinking…"} platform={layout.platform} />
+          <OutputWell colors={colors} text={thread.partial || "Thinking…"} platform={layout.platform} copyable={false} />
         </View> : null}
         {current && selected && !thread ? <Text style={{ color: colors.foregroundMuted }}>{saved.busy || query.isFetching ? "Loading…" : "This chat is no longer available. Dismiss and reopen BTW to start again."}</Text> : null}
         {thread?.state === "cancelled" ? <Text style={{ color: colors.foregroundMuted }}>Response stopped.</Text> : null}
@@ -240,7 +236,7 @@ function BtwView({ host, workspaceId, agentId, theme, layout, expanded = false }
           } : undefined}
           onChangeText={text => { saved.drafts[draftKey] = { text, revision: (saved.drafts[draftKey]?.revision ?? 0) + 1 }; refreshView(); }}
           style={{ color: colors.foreground, backgroundColor: "transparent", borderWidth: 0,
-            borderRadius: 10, padding: 10, paddingBottom: 44, minHeight: 88, maxHeight: 150 }} />
+            borderRadius: 8, fontSize: 14, lineHeight: 20, padding: 12, paddingBottom: 44, minHeight: 88, maxHeight: 150 }} />
         <View style={{ position: "absolute", bottom: 8, right: 8 }}>
           <Pressable accessibilityRole="button"
             accessibilityLabel={thread?.state === "running" ? "Stop response" : "Send message"}

@@ -18,6 +18,7 @@ import {
 } from "../shared/foreground-tasks";
 
 import { isActiveWorkStatus } from "../shared/work-display";
+import { Metadata, NativeButton, NativeRow, OutputWell } from "./presentation";
 
 type Agent = {
 	id: string;
@@ -354,9 +355,9 @@ export function ForegroundTasksSection({
 	const themeColors = theme.colors;
 	const style = useMemo(
 		() => ({
-			foreground: { color: themeColors.foreground },
-			muted: { color: themeColors.foregroundMuted },
-			danger: { color: themeColors.statusDanger },
+			foreground: { color: themeColors.foreground, fontSize: 14, lineHeight: 20 },
+			muted: { color: themeColors.foregroundMuted, fontSize: 12, lineHeight: 18 },
+			danger: { color: themeColors.statusDanger, fontSize: 14, lineHeight: 20 },
 			border: { borderColor: themeColors.border },
 			input: {
 				color: themeColors.foreground,
@@ -535,26 +536,7 @@ export function ForegroundTasksSection({
 		onPress: () => void,
 		disabled = false,
 		danger = false,
-	) => (
-		<Pressable
-			accessibilityRole="button"
-			accessibilityLabel={label}
-			disabled={disabled}
-			onPress={onPress}
-			style={[
-				{
-					padding: 10,
-					borderWidth: 1,
-					borderRadius: 10,
-					backgroundColor: theme.colors.surface1,
-					opacity: disabled ? 0.5 : 1,
-				},
-				style.border,
-			]}
-		>
-			<Text style={danger ? style.danger : style.foreground}>{label}</Text>
-		</Pressable>
-	);
+	) => <NativeButton colors={theme.colors} label={label} onPress={onPress} disabled={disabled} danger={danger} style={{ alignSelf: "flex-start", minHeight: 40 }} />;
 	const targetFor = (item: ForegroundTask) => ({
 		taskId: item.taskId,
 		childId: item.childId,
@@ -571,15 +553,15 @@ export function ForegroundTasksSection({
 		<View
 			style={{
 				width: "100%",
-				minWidth: 280,
+				minWidth: 0,
 				maxWidth:
 					viewMode !== "completed" &&
 					(layout.compact || layout.platform !== "web")
 						? 420
 						: undefined,
-				gap: viewMode === "completed" ? 8 : 10,
-				paddingHorizontal: viewMode === "completed" ? 4 : 12,
-				paddingVertical: viewMode === "completed" ? 0 : 12,
+				gap: 8,
+				paddingHorizontal: 8,
+				paddingVertical: viewMode === "completed" ? 0 : 8,
 			}}
 		>
 			{viewMode !== "completed" ? (
@@ -591,10 +573,10 @@ export function ForegroundTasksSection({
 				</Text>
 			) : null}
 			{status.isPending ? (
-				<Text style={style.muted}>Connecting to this Pi session…</Text>
+				<Metadata colors={theme.colors}>Connecting to this Pi session…</Metadata>
 			) : null}
 			{status.isError ? (
-				<Text style={style.danger}>
+				<Text accessibilityRole="alert" style={style.danger}>
 					Job status unavailable. Retrying automatically.
 				</Text>
 			) : null}
@@ -609,10 +591,7 @@ export function ForegroundTasksSection({
 						visibleTasks.map((task) => (
 							<View key={taskKey(task)}>
 								{task.workerEpoch ? (
-									button(
-										`${task.title}${(viewMode === "active" && ["running", "pending"].includes(task.status)) || task.status === "completed" ? "" : ` · ${task.status}`}${task.model ? ` · ${task.model}` : ""}${task.pendingInteractions ? ` · ${task.pendingInteractions} awaiting you` : ""}`,
-										() => selectTask(task),
-									)
+									<NativeRow colors={theme.colors} title={task.title} detail={[task.status, task.model, task.pendingInteractions ? `${task.pendingInteractions} awaiting you` : undefined].filter(Boolean).join(" · ")} trailing={<Text style={{ color: theme.colors.foregroundMuted, fontSize: 18 }}>›</Text>} onPress={() => selectTask(task)} style={{ borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8 }} />
 								) : (
 									<View
 										style={[
@@ -797,9 +776,7 @@ export function ForegroundTasksSection({
 								Recent activity · newest first
 							</Text>
 							{view.data.liveText ? (
-								<Text selectable style={style.foreground}>
-									Current streaming excerpt: {view.data.liveText}
-								</Text>
+								<OutputWell colors={theme.colors} text={`Current streaming excerpt: ${view.data.liveText}`} monospace platform={layout.platform} maxHeight={200} />
 							) : null}
 							{view.data.messages
 								.slice(-20)
@@ -878,7 +855,7 @@ function InteractionCard({
 		<View
 			key={interaction.id}
 			style={[
-				{ gap: 8, padding: 10, borderWidth: 1, borderRadius: 6 },
+				{ gap: 8, padding: 10, borderWidth: 1, borderRadius: 8 },
 				style.border,
 			]}
 		>

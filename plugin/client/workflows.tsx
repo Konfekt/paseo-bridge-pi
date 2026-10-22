@@ -8,6 +8,7 @@ import {
 	SettingsSelect,
 } from "@getpaseo/plugin/client/ui";
 import { useRpc, type PluginAgentPanelProps } from "@getpaseo/plugin/client";
+import { Metadata, NativeButton } from "./presentation";
 import {
 	workflowsStatusRpc,
 	workflowsControlRpc,
@@ -235,39 +236,11 @@ function WorkflowsView({
 			expectedGoalId: goal?.id ?? null,
 			...extra,
 		});
-	const button = (label: string, onPress: () => void, disabled = false) => (
-		<Pressable
-			accessibilityRole="button"
-			accessibilityState={{ disabled }}
-			disabled={disabled}
-			onPress={onPress}
-			style={({ pressed }) => ({
-				minHeight: 44,
-				alignSelf: "flex-start",
-				alignItems: "center",
-				justifyContent: "center",
-				paddingHorizontal: 14,
-				borderWidth: 1,
-				borderColor: colors.border,
-				borderRadius: 10,
-				backgroundColor: pressed ? colors.surface2 : "transparent",
-				opacity: disabled ? 0.5 : 1,
-			})}
-		>
-			<Text
-				style={{
-					color: disabled ? colors.foregroundMuted : colors.foreground,
-					fontSize: 14,
-					fontWeight: "500",
-				}}
-			>
-				{label}
-			</Text>
-		</Pressable>
-	);
+	const button = (label: string, onPress: () => void, disabled = false) =>
+		<NativeButton colors={colors} label={label} onPress={onPress} disabled={disabled} style={{ alignSelf: "flex-start", minHeight: 44 }} />;
 	const Container = embedded ? View : ScrollView;
 	const goalSection = (
-		<View style={{ padding: 4, gap: 8 }}>
+		<View style={{ padding: 4, gap: 8, minWidth: 0 }}>
 			{!goal ? (
 				<>
 					<TextInput
@@ -550,14 +523,14 @@ function WorkflowsView({
 	return (
 		<Container
 			{...(embedded
-				? { style: { padding: section === "worktrees" ? 8 : 4, gap: 8 } }
+				? { style: { padding: 8, gap: 8, minWidth: 0 } }
 				: {
-						style: { flex: 1, backgroundColor: colors.surface0 },
-						contentContainerStyle: { padding: 16, gap: 16 },
+						style: { flex: 1, backgroundColor: colors.surface0, minWidth: 0 },
+						contentContainerStyle: { padding: 12, gap: 12 },
 					})}
 		>
 			{query.isPending ? (
-				<Text style={{ color: colors.foregroundMuted }}>Connecting to Pi…</Text>
+				<Metadata colors={colors}>Connecting to Pi…</Metadata>
 			) : null}
 			{query.isError ? (
 				<Text style={{ color: colors.statusWarning }}>
@@ -565,9 +538,9 @@ function WorkflowsView({
 				</Text>
 			) : null}
 			{!query.isPending && !query.isError && !data?.available ? (
-				<Text style={{ color: colors.foregroundMuted }}>
+				<Metadata colors={colors}>
 					Reload Pi to enable Worktree and Goal.
-				</Text>
+				</Metadata>
 			) : null}
 			{binding && saved.binding !== binding ? (
 				<View>
@@ -829,15 +802,17 @@ function WorkflowsView({
 											onPress={() =>
 												setSelectedTree(selected ? undefined : tree.path)
 											}
-											style={{
+											style={({ pressed }) => ({
 												minHeight: 44,
 												justifyContent: "center",
-												paddingHorizontal: 8,
-											}}
+												paddingHorizontal: 12,
+												borderRadius: 8,
+												backgroundColor: pressed || selected ? colors.surface2 : "transparent",
+											})}
 										>
 											<Text
 												numberOfLines={1}
-												style={{ color: colors.foreground, fontWeight: "600" }}
+												style={{ color: colors.foreground, fontSize: 14, lineHeight: 20, fontWeight: "600" }}
 											>
 												{tree.main
 													? "Main checkout"
@@ -847,7 +822,7 @@ function WorkflowsView({
 											</Text>
 											<Text
 												numberOfLines={2}
-												style={{ color: colors.foregroundMuted, fontSize: 12 }}
+												style={{ color: colors.foregroundMuted, fontSize: 12, lineHeight: 18 }}
 											>
 												{tree.ownerTitle || tree.main
 													? `${tree.branch ?? "Detached"} · `

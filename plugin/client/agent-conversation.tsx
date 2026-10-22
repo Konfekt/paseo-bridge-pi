@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Text, View } from "react-native";
 import { SettingsAction } from "@getpaseo/plugin/client/ui";
+import { Metadata } from "./presentation";
 import type { PluginClientContext, PluginScreenProps } from "@getpaseo/plugin/client";
 import { harnessStatusRpc } from "../shared/harness-readonly";
 import { independentAgentOpenRpc } from "../shared/independent-agents";
@@ -40,8 +41,8 @@ function OpenIndependentConversation({ params, navigation, theme }: PluginScreen
     setError(undefined);
     open();
   }, [agentId, workspaceId, serverId, navigation]);
-  return <View style={{ flex: 1, padding: 20, gap: 12 }}>
-    <Text style={{ color: error ? theme.colors.statusWarning : theme.colors.foregroundMuted }}>{error ?? (workspaceId ? "Opening workspace…" : "Opening conversation…")}</Text>
+  return <View style={{ flex: 1, padding: 16, gap: 12 }}>
+    <Metadata colors={theme.colors} style={{ color: error ? theme.colors.statusWarning : theme.colors.foregroundMuted }}>{error ?? (workspaceId ? "Opening workspace…" : "Opening conversation…")}</Metadata>
     {error && (navigation?.openAgent || navigation?.openWorkspace) ? <SettingsAction label="" actionLabel={workspaceId ? "Open workspace" : "Open conversation"} onPress={open} /> : null}
   </View>;
 }

@@ -27,14 +27,14 @@ test('compiled read-only panels render lists/details, bind generations and only 
   };
   const load = name => {
     if (name === '@getpaseo/plugin') return { defineRpc: contract => contract };
-    if (name === '@getpaseo/plugin/client/ui') return {};
+    if (name === '@getpaseo/plugin/client/ui') return { SettingsAction:'SettingsAction' };
     if (name === '@getpaseo/plugin/client') return { useRpc: contract => async input => {
       contract.input.parse(input); calls.push({ name: contract.name, input }); return {};
     } };
-    if (name === '@getpaseo/plugin/client/react-native') return { ScrollView: 'ScrollView' };
+    if (name === '@getpaseo/plugin/client/react-native') return { ScrollView: 'ScrollView', Icon:'Icon', copyText:async () => {} };
     if (name === 'react-native') return { Text: 'Text', View: 'View', Pressable: 'Pressable' };
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'Fragment' };
-    if (name === 'react') return { useEffect() {}, useState: initial => {
+    if (name === 'react') return { useEffect() {}, useRef:initial=>({current:initial}), useMemo:fn=>fn(), useCallback:fn=>fn, useState: initial => {
       const slot = hookIndex++; if (!(slot in states)) states[slot] = initial;
       return [states[slot], value => { states[slot] = value; }];
     } };
@@ -50,26 +50,28 @@ test('compiled read-only panels render lists/details, bind generations and only 
   };
   const contribute = (0, eval)(clientBundle)(load).default;
   const cleanup = contribute({
-    paseo: { agents: { list: async ({ signal }) => ({ subscription: { subscribe: value => observers.push({ value, signal }) } }) } },
+    paseo: { config:{get:async()=>({config:{plugins:{'paseo-accounts':{enabled:true}}}})}, agents: { list: async ({ signal }) => ({ subscription: { subscribe: value => observers.push({ value, signal }) } }) } },
     rpc: async () => ({ available: false, enabled: null }),
+    addScreen: () => () => {},
+    openScreen() {},
     addWorkspacePanel: panel => { panels.set(panel.id, panel); return () => { stoppedPanels++; }; },
     addHeaderButton: button => ({ ...button, update() {}, remove() {} }),
     addComposerPill: pill => { const registration = { ...pill, removed: false, update() {}, remove() { this.removed = true; } }; pills.push(registration); return registration; },
     openPanel: (id, target) => opened.push({ id, target }),
   });
-  const props = { context: 'agent', agentId: 'agent', workspaceId: 'workspace', host: { id: 'host', label: 'Host' }, theme: { colors: { foreground: '#fff', foregroundMuted: '#aaa', statusDanger: '#f00' } }, navigation: { openAgent: input => opened.push(input) } };
+  const props = { context: 'agent', layout:{platform:'web',compact:false}, agentId: 'agent', workspaceId: 'workspace', host: { id: 'host', label: 'Host' }, theme: { colors: { foreground: '#fff', foregroundMuted: '#aaa', statusDanger: '#f00' } }, navigation: { openAgent: input => opened.push(input) } };
   function render(id) { hookIndex = 0; queries.length = 0; return panels.get(id).Component(props); }
   const press = (tree, label) => { const match = nodes(tree).find(node => node.type === 'Pressable' && node.props.accessibilityLabel === label); assert.ok(match, label); match.props.onPress(); };
   try {
     await flush();
     const snapshot = { entries: [{ agent: { id: 'agent', workspaceId: 'workspace', provider: 'pi' } }, { agent: { id: 'other', workspaceId: 'workspace', provider: 'claude' } }] };
     observers.forEach(({ value }) => value.snapshot(snapshot));
-    assert.equal(pills.length, 5);
+    const registeredPills = pills.length;
     assert.equal(panels.size, 5);
-    assert.equal(pills.find(pill => pill.id === 'tasks').button.behavior.kind, 'popover');
+    assert.equal(pills.find(pill => pill.id === 'work').button.behavior.kind, 'action');
     assert.ok(!pills.some(pill => ['harness-jobs', 'harness-subagents', 'foreground-tasks'].includes(pill.id)));
     observers.forEach(({ value }) => value.update({ type: 'agent_update', payload: { kind: 'upsert', agent: snapshot.entries[0].agent } }));
-    assert.equal(pills.length, 5, 'stream updates must not rebuild views');
+    assert.equal(pills.length, registeredPills, 'stream updates must not rebuild views');
 
     statusResult = { isPending: true };
     assert.match(text(render('harness-jobs')), /Connecting/);
@@ -77,13 +79,13 @@ test('compiled read-only panels render lists/details, bind generations and only 
     statusResult = { data: { available: false, reason: 'Reload required' }, isPending: false };
     assert.match(text(render('harness-jobs')), /Reload required/);
     statusResult = { data: identity, isError: true };
-    assert.match(text(render('harness-jobs')), /Cannot read the session/);
+    assert.match(text(render('harness-jobs')), /Session status unavailable/);
     statusResult = { data: identity };
     assert.match(text(render('harness-jobs')), /No\s+background jobs/);
     const job = { jobId: `job-${'a'.repeat(24)}`, status: 'running', name: 'Build', createdAt: new Date().toISOString(), updatedAt: null, observationOnly: false };
     listResult.data.items = [job];
     let tree = render('harness-jobs');
-    const row = nodes(tree).find(node => node.type === 'Pressable' && node.props.accessibilityLabel.startsWith('Build · running'));
+    const row = nodes(tree).find(node => node.type === 'Pressable' && node.props.accessibilityLabel.startsWith('Build · Running'));
     row.props.onPress();
     detailResult = { data: { state: 'available', item: { jobId: job.jobId, text: 'Build output', stale: true, lastUpdated: null, truncated: true } } };
     tree = render('harness-jobs');
@@ -100,7 +102,7 @@ test('compiled read-only panels render lists/details, bind generations and only 
     const task = { taskId: `subagent-task-${'b'.repeat(24)}`, title: 'Review', status: 'completed', attempt: 1 };
     listResult = { data: { state: 'available', items: [task], stale: true, lastUpdated: null } };
     tree = render('harness-subagents');
-    press(tree, 'Review · completed · attempt 1');
+    press(tree, 'Review · Completed');
     detailResult = { data: { state: 'available', item: { ...task, text: 'Reviewed successfully', truncated: false, stale: true, lastUpdated: null, paseoAgentId: 'verified-child' } } };
     tree = render('harness-subagents');
     assert.match(text(tree), /Reviewed successfully/);

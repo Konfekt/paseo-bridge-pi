@@ -30,6 +30,7 @@ import { foregroundTasksStatusRpc } from "../shared/foreground-tasks";
 import { isActiveAgent, isActiveWorkStatus } from "../shared/work-display";
 import { isDormantIndependentAgent } from "../shared/independent-state";
 import { WorkStatusRing } from "./work-status-ring";
+import { Metadata, NativeButton, NativeRow, OutputWell } from "./presentation";
 import {
 	createAgentConversationTabs,
 	type AgentConversationTarget,
@@ -88,9 +89,9 @@ export function contributeHarness(client: PluginClientContext) {
 		if (!agentId) {
 			return (
 				<View style={{ flex: 1, padding: 16 }}>
-					<Text style={{ color: props.theme.colors.foregroundMuted }}>
+					<Metadata colors={props.theme.colors}>
 						Select Work from a conversation to view its work.
-					</Text>
+					</Metadata>
 				</View>
 			);
 		}
@@ -428,13 +429,13 @@ function WorkOverview(
 		<View style={{ flex: 1, width: "100%", minWidth: 0, gap: 8 }}>
 			<Text
 				numberOfLines={1}
-				style={{ color: colors.foregroundMuted, paddingHorizontal: 12, paddingTop: 12 }}
+				style={{ color: colors.foregroundMuted, fontSize: 12, lineHeight: 18, paddingHorizontal: 12, paddingTop: 12 }}
 			>
 				{props.sourceTitle}
 			</Text>
 			<View
 				accessibilityRole="tablist"
-				style={{ flexDirection: "row", gap: 4 }}
+				style={{ flexDirection: "row", gap: 4, paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: colors.border }}
 			>
 				{(["jobs", "agents", "worktrees", "goals"] as const).map((value) => (
 					<Pressable
@@ -447,7 +448,8 @@ function WorkOverview(
 							setCompleted(false);
 							setSection(value);
 						}}
-						style={{
+						style={({ pressed }) => ({
+							backgroundColor: pressed ? colors.surface2 : "transparent",
 							flex: 1,
 							minWidth: 0,
 							minHeight: 44,
@@ -458,12 +460,14 @@ function WorkOverview(
 							borderBottomWidth: 2,
 							borderBottomColor:
 								section === value ? colors.foreground : "transparent",
-						}}
+						})}
 					>
 						<Text
 							numberOfLines={1}
 							style={{
 								textAlign: "center",
+								fontSize: 14,
+								fontWeight: section === value ? "600" : "500",
 								lineHeight: 20,
 								color:
 									section === value
@@ -787,27 +791,22 @@ function HarnessPanel({
 		disabled = false,
 		brief = false,
 		status?: string,
+		presentation?: { title: string; detail: string; expanded?: boolean; opensChat: boolean },
 	) => (
-		<Pressable
-			accessibilityRole="button"
+		<NativeRow
+			colors={theme.colors}
+			title={presentation?.title ?? label}
 			accessibilityLabel={label}
+			detail={presentation?.detail ?? status}
+			expanded={presentation?.expanded}
+			leading={status ? (['starting', 'launching', 'pending', 'running'].includes(status)
+				? <View accessibilityLabel="Running"><WorkStatusRing attention={false} foreground={fg} platform={layout.platform} /></View>
+				: <View accessibilityLabel="Idle" style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: theme.colors.statusSuccess }} />) : undefined}
+			trailing={<Icon name={presentation?.opensChat ? "ArrowUpRight" : presentation?.expanded ? "ChevronUp" : "ChevronDown"} size={14} color={muted} />}
 			disabled={disabled}
 			onPress={onPress}
-			style={{ padding: 10, opacity: disabled ? 0.5 : 1, flexDirection: "row", alignItems: "center", gap: 8 }}
-		>
-			{status ? (
-				["starting", "launching", "pending", "running"].includes(status) ? (
-					<View accessibilityLabel="Running">
-						<WorkStatusRing attention={false} foreground={fg} platform={layout.platform} />
-					</View>
-				) : (
-					<View accessibilityLabel="Idle" style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: theme.colors.statusSuccess }} />
-				)
-			) : null}
-			<Text numberOfLines={brief ? 1 : undefined} style={{ color: fg, flexShrink: 1 }}>
-				{label}
-			</Text>
-		</Pressable>
+			style={{ paddingVertical: 8, minHeight: 44 }}
+		/>
 	);
 	const rows =
 		ready && !list.isError && list.data?.state === "available"
@@ -849,38 +848,17 @@ function HarnessPanel({
 						{item.truncated ? (
 							<Text style={{ color: muted }}>Output truncated</Text>
 						) : null}
-						<View
-							style={{
-								borderWidth: 1,
-								borderColor: theme.colors.border,
-								borderRadius: 8,
-								backgroundColor: theme.colors.surface0,
-								padding: 12,
-							}}
-						>
-							<Text
-								selectable
-								style={{
-									color: fg,
-									fontFamily:
-										kind === "jobs"
-											? layout.platform === "ios"
-												? "Menlo"
-												: "monospace"
-											: undefined,
-									fontSize: kind === "jobs" ? 12 : undefined,
-									lineHeight: kind === "jobs" ? 18 : undefined,
-								}}
-							>
-								{item.text || "No output or answer recorded yet."}
-							</Text>
-						</View>
+						<OutputWell
+							colors={theme.colors}
+							text={item.text || "No output or answer recorded yet."}
+							monospace={kind === "jobs"}
+							platform={layout.platform}
+							maxHeight={320}
+						/>
 					</>
 				) : null}
 				{taskLink && navigation?.openAgent
-					? button("Open child chat", () =>
-							navigation.openAgent({ agentId: taskLink, serverId: host.id }),
-						)
+					? <NativeButton colors={theme.colors} label="Open child chat" onPress={() => navigation.openAgent({ agentId: taskLink, serverId: host.id })} />
 					: null}
 			</View>
 		) : null;
@@ -890,13 +868,13 @@ function HarnessPanel({
 				paddingHorizontal:
 					embedded && (kind === "subagents" || viewMode === "completed")
 						? 4
-						: 16,
+						: 12,
 				paddingVertical:
 					embedded && viewMode === "completed"
 						? 0
 						: embedded && kind === "subagents"
 							? 4
-							: 16,
+							: 12,
 				gap: viewMode === "completed" ? 8 : 6,
 			}}
 		>
@@ -938,10 +916,14 @@ function HarnessPanel({
 			) : null}
 			{rows.map((row) => {
 				const id = "jobId" in row ? row.jobId : row.taskId;
-				const label =
-					"jobId" in row
-						? `${row.name ?? row.jobId}${viewMode === "active" || row.status === "completed" ? "" : ` · ${row.status}`} · ${elapsed(row.createdAt, ["starting", "running"].includes(row.status) ? null : row.updatedAt)}${row.observationOnly ? " · observation only" : ""}`
-						: `${row.title}${viewMode === "active" ? (row.needsAttention ? " · needs attention" : "") : row.status === "completed" ? "" : ` · ${row.status}`}`;
+				const title = "jobId" in row ? row.name || "Background job" : row.title;
+				const state = kind === "subagents" && viewMode === "active" && row.status === "completed"
+					? "Idle" : row.status.replace(/[_-]/g, " ").replace(/^./, value => value.toUpperCase());
+				const metadata = "jobId" in row
+					? [state, elapsed(row.createdAt, ["starting", "running"].includes(row.status) ? null : row.updatedAt), row.observationOnly ? "Observation only" : ""].filter(Boolean).join(" · ")
+					: [state, row.needsAttention ? "Needs attention" : ""].filter(Boolean).join(" · ");
+				const label = `${title} · ${metadata}`;
+				const opensChat = kind === "subagents" && viewMode === "completed" && !!openConversation;
 				return (
 					<View
 						key={"childId" in row ? row.childId : id}
@@ -953,7 +935,7 @@ function HarnessPanel({
 											selectedId === id
 												? theme.colors.foregroundMuted
 												: theme.colors.border,
-										borderRadius: 10,
+										borderRadius: 8,
 										backgroundColor: theme.colors.surface1,
 										overflow: "hidden",
 										marginBottom: 0,
@@ -1007,6 +989,7 @@ function HarnessPanel({
 							!!openingId,
 							viewMode !== "completed",
 							kind === "subagents" && isActiveRow(row) ? row.status : undefined,
+							{ title, detail: metadata, opensChat, expanded: opensChat ? undefined : selectedId === id },
 						)}
 						{selectedId === id ? selectedDetail : null}
 					</View>

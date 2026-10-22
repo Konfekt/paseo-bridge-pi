@@ -137,7 +137,7 @@ function PermissionGateControls({ workspaceId, agentId, theme }: { workspaceId: 
     <View style={{ gap: 12 }}>
       <SectionHeading colors={theme.colors} title="Access mode" />
       <Surface colors={theme.colors} padded>
-        {status.isError ? <Metadata colors={theme.colors} style={{ color: danger }}>Could not read permission state. Controls are disabled.</Metadata> : null}
+        {status.isError ? <Metadata colors={theme.colors} alert style={{ color: danger }}>Could not read permission state. Controls are disabled.</Metadata> : null}
         {status.isPending ? <Metadata colors={theme.colors}>Checking this agent…</Metadata> : null}
         {status.data && !status.data.available ? <Metadata colors={theme.colors}>{status.data.reason ?? "Permission control unavailable."}</Metadata> : null}
         {available ? <Metadata colors={theme.colors}>Applies to this agent and its children.</Metadata> : null}
@@ -145,7 +145,7 @@ function PermissionGateControls({ workspaceId, agentId, theme }: { workspaceId: 
         <NativeRow colors={theme.colors} title={`${enabled === true ? "✓ " : ""}Dangerous ask`} detail="Ask when an action needs approval." disabled={disabled || enabled === true} selected={enabled === true} onPress={() => mutation.mutate(true)} />
         <NativeRow colors={theme.colors} title={`${enabled === false ? "✓ " : ""}Full access`} detail="Turn off approval prompts." disabled={disabled || enabled === false} selected={enabled === false} onPress={() => mutation.mutate(false)} />
         {mutation.isPending ? <Metadata colors={theme.colors}>Applying…</Metadata> : null}
-        {message ? <Metadata colors={theme.colors} style={{ color: danger }}>{message}</Metadata> : null}
+        {message ? <Metadata colors={theme.colors} alert style={{ color: danger }}>{message}</Metadata> : null}
       </Surface>
     </View>
   );

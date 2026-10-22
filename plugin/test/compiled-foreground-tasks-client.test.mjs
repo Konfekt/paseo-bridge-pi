@@ -1,19 +1,25 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { cp, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const compilerPath = process.env.PASEO_PLUGIN_COMPILER;
 const root = fileURLToPath(new URL('../', import.meta.url));
-const require = createRequire(import.meta.url);
+const require = createRequire(compilerPath ? resolve(compilerPath) : import.meta.url);
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const walk = node => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(walk)];
 const text = node => !node ? '' : typeof node === 'string' ? node : typeof node === 'number' ? String(node) : typeof node !== 'object' ? '' : [node.props?.children].flat(Infinity).map(text).join(' ');
 
-test('compiled foreground popover reports closed-state attention, persists interaction answers/drafts, and locks uncertain in-flight actions across reopen', { skip: !compilerPath }, async () => {
+test('compiled foreground section persists interaction answers/drafts and locks uncertain in-flight actions across reopen', { skip: !compilerPath }, async t => {
   const { compilePlugin } = await import(pathToFileURL(resolve(compilerPath)));
-  const { clientBundle } = await compilePlugin({ client: resolve(root, 'index.client.tsx') });
+  const fixture = await mkdtemp(resolve(tmpdir(),'bridge-foreground-ui-'));
+  t.after(() => rm(fixture,{recursive:true,force:true}));
+  for (const directory of ['client','shared']) await cp(resolve(root,directory),resolve(fixture,directory),{recursive:true});
+  await writeFile(resolve(fixture,'index.client.tsx'), 'export { ForegroundTasksSection } from "./client/foreground-tasks";');
+  const { clientBundle } = await compilePlugin({ client: resolve(fixture, 'index.client.tsx') });
   const observers = [], pills = [], calls = [], statusCalls = [], states = [], refs = [], effects = [];
   let stateIndex = 0, refIndex = 0, effectIndex = 0, deferPrompt = false, resolvePrompt, closes = 0;
   let viewState = { isStale: false, isFetching: false, isError: false };
@@ -40,7 +46,7 @@ test('compiled foreground popover reports closed-state attention, persists inter
       }
       throw new Error(`unexpected RPC ${contract.name}`);
     } };
-    if (name === '@getpaseo/plugin/client/react-native') return { TextInput: 'TextInput' };
+    if (name === '@getpaseo/plugin/client/react-native') return { TextInput: 'TextInput', ScrollView:'ScrollView', Icon:'Icon', copyText:async()=>{} };
     if (name === 'react-native') return { Text: 'Text', View: 'View', Pressable: 'Pressable' };
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'Fragment' };
     if (name === 'react') return {
@@ -66,17 +72,8 @@ test('compiled foreground popover reports closed-state attention, persists inter
     } };
     return require(name);
   };
-  const contribute = (0, eval)(clientBundle)(load).default;
-  const cleanup = contribute({
-    paseo: { agents: { list: async () => ({ subscription: { subscribe: value => observers.push(value) } }) } },
-    rpc: async (contract, input) => { statusCalls.push({ name: contract.name, input }); return status; },
-    addWorkspacePanel: () => () => {},
-    addHeaderButton: button => ({ ...button, update() {}, remove() {} }),
-    addComposerPill: pill => {
-      const registration = { ...pill, updates: [], update(patch) { this.updates.push(patch); this.button = { ...this.button, ...patch }; }, remove() {} };
-      pills.push(registration); return registration;
-    },
-  });
+  const { ForegroundTasksSection } = (0, eval)(clientBundle)(load);
+  const cleanup = () => {};
   const agent = { id: 'agent', workspaceId: 'workspace', provider: 'pi' };
   const props = { context: 'agent', agentId: 'agent', workspaceId: 'workspace', host: { id: 'host', label: 'Host' }, layout: { compact: true, platform: 'ios' },
     theme: { colors: { foreground: '#fff', foregroundMuted: '#aaa', statusDanger: '#f00', border: '#555', surface1: '#222' } }, close() { closes++; } };
@@ -86,7 +83,7 @@ test('compiled foreground popover reports closed-state attention, persists inter
   }
   function render() {
     stateIndex = 0; refIndex = 0; effectIndex = 0;
-    return pills.find(pill => pill.id === 'tasks').button.behavior.Content(props);
+    return ForegroundTasksSection(props);
   }
   const press = (tree, label) => {
     const item = walk(tree).find(node => node.type === 'Pressable' && node.props.accessibilityLabel === label);
@@ -94,20 +91,10 @@ test('compiled foreground popover reports closed-state attention, persists inter
   };
   const node = (tree, type, label) => walk(tree).find(item => item.type === type && item.props.accessibilityLabel === label);
   try {
-    await flush(); observers.forEach(observer => observer.snapshot({ entries: [{ agent }] })); await flush();
-    const pill = pills.find(item => item.id === 'tasks');
-    assert.ok(pill); assert.equal(pill.button.behavior.kind, 'popover');
-    assert.ok(!statusCalls.some(call => call.name === 'foreground_tasks_status'), 'hidden registrations do not poll foreground state');
-    pill.button.icon({ ...props, size: 14, color: '#aaa' });
-    assert.equal(pill.updates.at(-1).label, 'Tasks · attention');
-    assert.match(pill.updates.at(-1).title, /foreground: 0 running, 1 needing attention/);
-
     let tree = render();
-    assert.equal(walk(tree).some(item => item.type === 'ScrollView'), false, 'composer popover must use only the host surface scroll owner');
-    assert.ok(walk(tree).some(item => item.props?.style?.maxHeight === 410));
-    assert.match(text(tree), /Helper · waiting-permission/);
+    assert.match(text(tree), /Helper\s+waiting-permission/);
     assert.equal(calls.length, 0, 'opening a pending permission never submits a decision');
-    press(tree, 'Helper · waiting-permission · harness-test/mock:off · 2 awaiting you');
+    press(tree, 'Helper');
     tree = render(); assert.match(text(tree), /Working/);
     assert.match(text(tree), /harness-test\/mock:off/, 'task detail must display the resolved model');
     assert.equal(calls.length, 0, 'rendering pending interactions never submits a decision');
@@ -126,12 +113,11 @@ test('compiled foreground popover reports closed-state attention, persists inter
     assert.match(text(tree), /Earlier worker history was truncated and cannot be recovered/);
     view.nextCursor = 'history-cursor'; tree = render();
 
-    // Questionnaire choices survive popover dismissal/reopen.
+    // Questionnaire choices survive the native section unmounting and reopening.
     press(tree, 'Route A'); tree = render();
     assert.ok(node(tree, 'Pressable', '✓ Route A'));
     const input = node(tree, 'TextInput', 'Message foreground helper');
     input.props.onChangeText('unsent draft'); tree = render();
-    press(tree, 'Close'); assert.equal(closes, 1);
     resetMount(); tree = render();
     assert.equal(node(tree, 'TextInput', 'Message foreground helper').props.value, 'unsent draft');
     assert.ok(node(tree, 'Pressable', '✓ Route A'), 'questionnaire answer was not retained across reopen');
@@ -152,7 +138,7 @@ test('compiled foreground popover reports closed-state attention, persists inter
     // An accepted stop gets a fresh id after close/reopen and a new user turn.
     tree = render(); press(tree, 'Stop helper'); await flush();
     const firstStop = calls.filter(call => call.name === 'foreground_tasks_control' && call.input.request.operation === 'stop').at(-1);
-    press(tree, 'Close'); resetMount(); tree = render();
+    resetMount(); tree = render();
     node(tree, 'TextInput', 'Message foreground helper').props.onChangeText('fresh turn after stop'); tree = render();
     press(tree, 'Send message'); await flush();
     const freshPrompt = calls.filter(call => call.name === 'foreground_tasks_control' && call.input.request.operation === 'prompt').at(-1);
@@ -167,7 +153,7 @@ test('compiled foreground popover reports closed-state attention, persists inter
     deferPrompt = true; press(tree, 'Send message'); await flush();
     const submitted = calls.filter(call => call.name === 'foreground_tasks_control' && call.input.request.operation === 'prompt').at(-1);
     assert.equal(submitted.input.request.message, 'submitted draft');
-    press(tree, 'Close'); resetMount(); tree = render();
+    resetMount(); tree = render();
     assert.equal(node(tree, 'TextInput', 'Message foreground helper').props.value, 'submitted draft');
     assert.equal(node(tree, 'Pressable', 'Send message').props.disabled, true, 'reopen must not allow a duplicate while the original is pending');
     node(tree, 'TextInput', 'Message foreground helper').props.onChangeText('newer draft'); tree = render();
@@ -190,7 +176,7 @@ test('compiled foreground popover reports closed-state attention, persists inter
     tree = render();
     const staleApproval = node(tree, 'Pressable', 'allow');
     assert.ok(staleApproval); assert.equal(staleApproval.props.disabled, true, 'expired worker approval must be disabled');
-    press(tree, '← Tasks');
+    press(tree, 'Back');
     status.tasks = [{ ...task, workerEpoch: '', status: 'lost' }];
     tree = render();
     assert.match(text(tree), /worker no longer available/);
