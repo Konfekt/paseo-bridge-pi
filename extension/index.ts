@@ -305,6 +305,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     const file = currentSessionFile ?? latestCtx?.sessionManager.getSessionFile();
     if (!file || !latestCtx) return;
     reapedRuntime ??= { workerEpoch: event.workerEpoch, reapSealedAt: new Date().toISOString() };
+    preflightAbortController.abort();
     // Trusted lifecycle notification only: never inject a user/model message.
     writeRuntimeRecord(file, latestCtx.cwd);
   });
@@ -739,7 +740,9 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
           send(success(id, type));
           return;
         case "abort":
-          await abortAndWaitForIdle(latestCtx);
+          // Capture this lifecycle's context and signal. Never use ctx.signal:
+          // that signal belongs to turn work, not the lifetime of this waiter.
+          await abortAndWaitForIdle(latestCtx, { signal: preflightAbortController.signal });
           send(success(id, type));
           return;
         case "get_state":
@@ -1558,6 +1561,8 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async (event) => {
     lifecycleClosed = true;
+    preflightAbortController.abort();
+    latestCtx = null;
     unsubscribeReaping();
     if (placementTimer) clearInterval(placementTimer);
     placementTimer = undefined;
