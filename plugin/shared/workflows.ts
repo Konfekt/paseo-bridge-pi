@@ -105,6 +105,36 @@ export const workflowSnapshotSchema = z
 			})
 			.strict()
 			.nullable(),
+		completedGoals: z
+			.array(
+				z
+					.object({
+						id,
+						text: z.string().max(4000),
+						status: z.enum(["completed", "cleared"]),
+						endedAt: z.number().nonnegative(),
+						summary: z.string().max(4000).nullable(),
+						tasks: z
+							.array(
+								z
+									.object({
+										id: z.string().max(128).optional(),
+										text: z.string().max(503),
+										status: z.enum([
+											"pending",
+											"in_progress",
+											"completed",
+											"blocked",
+										]),
+									})
+									.strict(),
+							)
+							.max(50),
+					})
+					.strict(),
+			)
+			.max(50)
+			.optional(),
 		limits: z
 			.object({
 				automaticTurns: z.number().positive().nullable(),

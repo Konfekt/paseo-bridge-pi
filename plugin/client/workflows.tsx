@@ -76,7 +76,8 @@ function WorkflowsView({
 		[budgetText, setBudgetText] = useState(""),
 		[addingTask, setAddingTask] = useState(false),
 		[taskText, setTaskText] = useState(""),
-		[limitsOpen, setLimitsOpen] = useState(false);
+		[limitsOpen, setLimitsOpen] = useState(false),
+		[completedOpen, setCompletedOpen] = useState(false);
 	const status = useRpc(workflowsStatusRpc),
 		control = useRpc(workflowsControlRpc);
 	const [saved] = useState(() => {
@@ -146,6 +147,7 @@ function WorkflowsView({
 	});
 	const data = query.data,
 		snapshot = data?.snapshot,
+		completedGoals = snapshot?.completedGoals ?? [],
 		binding =
 			data?.available && snapshot
 				? JSON.stringify([
@@ -299,21 +301,6 @@ function WorkflowsView({
 							!snapshot?.idle,
 					)}
 
-					{snapshot?.lastCompletion ? (
-						<View style={{ gap: 4 }}>
-							<Text style={{ color: colors.statusSuccess }}>
-								Last goal completed
-							</Text>
-							<Text selectable style={{ color: colors.foreground }}>
-								{snapshot.lastCompletion.text}
-							</Text>
-							{snapshot.lastCompletion.summary ? (
-								<Text selectable style={{ color: colors.foregroundMuted }}>
-									{snapshot.lastCompletion.summary}
-								</Text>
-							) : null}
-						</View>
-					) : null}
 				</>
 			) : (
 				<>
@@ -711,9 +698,50 @@ function WorkflowsView({
 						</View>
 					) : null}
 					{section === "goal" ? (
-						dialog || snapshot.busy ? null : (
-							goalSection
-						)
+						<>
+							{dialog || snapshot.busy ? null : goalSection}
+							{completedGoals.length > 0 ? (
+								<View style={{ gap: 8 }}>
+									{button(
+										completedOpen
+											? `Hide completed (${completedGoals.length})`
+											: `Completed (${completedGoals.length})`,
+										() => setCompletedOpen((open) => !open),
+									)}
+									{completedOpen ? (
+										<SettingsCard>
+											<View style={{ padding: 12, gap: 12 }}>
+												{completedGoals.map((item) => (
+													<View key={item.id} style={{ gap: 4 }}>
+														<View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+															<Text style={{ color: item.status === "completed" ? colors.statusSuccess : colors.foregroundMuted, fontSize: 12, fontWeight: "600" }}>
+																{item.status === "completed" ? "Completed" : "Cleared"}
+															</Text>
+															<Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>
+																{new Date(item.endedAt).toLocaleDateString()}
+															</Text>
+														</View>
+														<Text selectable style={{ color: colors.foreground }}>
+															{item.text}
+														</Text>
+														{item.summary ? (
+															<Text selectable style={{ color: colors.foregroundMuted }}>
+																{item.summary}
+															</Text>
+														) : null}
+														{item.tasks.length ? (
+															<Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>
+																{item.tasks.filter((task) => task.status === "completed").length}/{item.tasks.length} subtasks completed
+															</Text>
+														) : null}
+													</View>
+												))}
+											</View>
+										</SettingsCard>
+									) : null}
+								</View>
+							) : null}
+						</>
 					) : (
 						<View style={{ gap: 4 }}>
 							{snapshot.worktreeLoading ? (
