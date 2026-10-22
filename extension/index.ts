@@ -290,6 +290,8 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   let commandsInFlight = 0;
   let lifecycleClosed = false;
   let preflightAbortController = new AbortController();
+  // Stop cancels pending prompt admission without closing the bridge lifetime.
+  let promptAbortController = new AbortController();
   let placementTimer: ReturnType<typeof setInterval> | undefined;
   let lastPlacement = "";
   let lastAgentTag = "";
@@ -652,14 +654,24 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     };
   }
 
-  async function preflightUserPrompt(id: string, commandType = "prompt"): Promise<boolean> {
+  async function preflightUserPrompt(id: string, commandType = "prompt"): Promise<() => boolean> {
     const capability = (globalThis as Record<string, unknown>)[IDLE_PREFLIGHT_KEY];
-    const gated = await dispatchAfterIdlePreflight(capability, preflightAbortController.signal, async () => true);
-    if (gated.dispatched) return true;
-    const error = gated.outcome === "cancel" ? IDLE_PROMPT_CANCELLED :
-      "Prompt not sent: pre-send confirmation could not complete.";
-    send(failure(id, commandType, error));
-    return false;
+    const signal = AbortSignal.any([preflightAbortController.signal, promptAbortController.signal]);
+    const gated = await dispatchAfterIdlePreflight(capability, signal, async () => true);
+    if (!gated.dispatched) {
+      const error = gated.outcome === "cancel" ? IDLE_PROMPT_CANCELLED :
+        "Prompt not sent: pre-send confirmation could not complete.";
+      send(failure(id, commandType, error));
+      return () => false;
+    }
+    // Recheck in the caller's dispatch stack: Stop may arrive after preflight
+    // resolved but before the caller resumes. No await may separate this guard
+    // from sendUserMessage, or a cancelled admission could start a new turn.
+    return () => {
+      if (!signal.aborted) return true;
+      send(failure(id, commandType, IDLE_PROMPT_CANCELLED));
+      return false;
+    };
   }
 
   async function handlePrompt(cmd: any): Promise<void> {
@@ -703,7 +715,10 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       ? [{ type: "text", text: message }, ...cmd.images]
       : message;
     const streaming = latestCtx ? !latestCtx.isIdle() : false;
-    if (!isExtensionCommand(pi, message) && !(await preflightUserPrompt(cmd.id))) return;
+    if (!isExtensionCommand(pi, message)) {
+      const canDispatch = await preflightUserPrompt(cmd.id);
+      if (!canDispatch()) return;
+    }
     const dispatch = () => dispatchPaseoPrompt(pi, content as any, message, streaming, (err) =>
       debugLog(`prompt failed after acceptance: ${String(err)}`),
     );
@@ -729,17 +744,29 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         case "prompt":
           await handlePrompt(cmd);
           return;
-        case "steer":
-          if (!isExtensionCommand(pi, cmd.message) && !(await preflightUserPrompt(id, type))) return;
+        case "steer": {
+          if (!isExtensionCommand(pi, cmd.message)) {
+            const canDispatch = await preflightUserPrompt(id, type);
+            if (!canDispatch()) return;
+          }
           pi.sendUserMessage(cmd.message, { deliverAs: "steer" });
           send(success(id, type));
           return;
-        case "follow_up":
-          if (!isExtensionCommand(pi, cmd.message) && !(await preflightUserPrompt(id, type))) return;
+        }
+        case "follow_up": {
+          if (!isExtensionCommand(pi, cmd.message)) {
+            const canDispatch = await preflightUserPrompt(id, type);
+            if (!canDispatch()) return;
+          }
           pi.sendUserMessage(cmd.message, { deliverAs: "followUp" });
           send(success(id, type));
           return;
+        }
         case "abort":
+          // Abort admitted-but-not-started prompts too. Otherwise idle abort
+          // could acknowledge while a preflight later launches the old run.
+          promptAbortController.abort();
+          promptAbortController = new AbortController();
           // Capture this lifecycle's context and signal. Never use ctx.signal:
           // that signal belongs to turn work, not the lifetime of this waiter.
           await abortAndWaitForIdle(latestCtx, { signal: preflightAbortController.signal });

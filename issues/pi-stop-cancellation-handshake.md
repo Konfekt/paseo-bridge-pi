@@ -29,6 +29,12 @@ identify `agent_settled`, not `agent_end`, as the final lifecycle boundary.
 - Do not use `ctx.signal`, which is turn-owned and is expected to abort during
   the operation being observed. Native session lifecycle events, documented in
   the extension API, provide the lifetime invalidation boundary instead.
+- Stop separately aborts and renews pending prompt-admission checks before it
+  aborts Pi. An admitted prompt waiting in idle preflight receives the existing
+  aborted-prompt response instead of starting after Stop was acknowledged.
+  A final synchronous dispatch guard closes the preflight-resolution race.
+  The abort waiter still uses the separate bridge-lifetime signal, not the
+  renewed prompt-admission signal.
 - No job cancellation, process signals, reloads, or runtime restarts are added.
 
 ## Required server coordination
