@@ -84,8 +84,10 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
   }));
   const session = path.join(temporary, "session.jsonl");
   const socketPath = path.join(runtime, "pi-paseo", createHash("sha256").update(session).digest("hex").slice(0, 20) + ".sock");
+  const bridgeEntry = process.env.BRIDGE_NATIVE_EXTENSION ?? path.join(root, "extension/index.ts");
+  t.diagnostic(`Pi executable: ${executable}; bridge entry: ${bridgeEntry}`);
   const child = spawn(executable!, ["--mode", "rpc", "--session", session,
-    "--no-extensions", "--extension", process.env.BRIDGE_NATIVE_EXTENSION ?? path.join(root, "extension/index.ts"),
+    "--no-extensions", "--extension", bridgeEntry,
     "--extension", provider, "--provider", "bridge-offline", "--model", "first", "--thinking", "low",
     "--no-skills", "--no-prompt-templates"], {
     cwd, detached: true, stdio: ["pipe", "pipe", "pipe"],
