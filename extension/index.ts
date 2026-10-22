@@ -51,6 +51,7 @@ import { normalizePiEventForPaseo } from "./tool-result-normalization.js";
 import { SubagentTaskProjection, projectSubagentMessages } from "./subagent-task-projection.js";
 import { TurnVisibilityProjection } from "./turn-visibility.js";
 import { resolvePaseoChildRuntimeLink } from "./read-only-runtime-link.js";
+import { bridgeSettingsFile, isAutoEnabled, isImportEnabled, isTitleGenerationEnabled, writeBridgeSettings, writeMutableJson } from "./bridge-settings.js";
 
 type RemoteUiSelectOptions = { signal?: AbortSignal };
 type RemoteUiBridgeV1 = {
@@ -108,26 +109,6 @@ function debugLog(message: string): void {
   }
 }
 
-const bridgeSettingsFile = path.join(os.homedir(), ".pi", "paseo-bridge", "settings.json");
-
-function readBridgeSettings(): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(bridgeSettingsFile, "utf8"));
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeBridgeSettings(patch: Record<string, unknown>): void {
-  fs.mkdirSync(path.dirname(bridgeSettingsFile), { recursive: true });
-  fs.writeFileSync(bridgeSettingsFile, `${JSON.stringify({ ...readBridgeSettings(), ...patch }, null, 2)}\n`);
-}
-
-function isAutoEnabled(): boolean {
-  return readBridgeSettings().auto !== false;
-}
-
 function bridgeShimPath(): string {
   // extension/index.ts lives in <package root>/extension/
   let here: string;
@@ -183,8 +164,7 @@ function installShimIntoPaseoConfig(): { ok: boolean; message: string } {
     ...(config.agents.providers.pi ?? {}),
     command: [process.execPath.replaceAll("\\", "/"), bridgeShimPath().replaceAll("\\", "/")],
   };
-  fs.mkdirSync(path.dirname(paseoConfigFile), { recursive: true });
-  fs.writeFileSync(paseoConfigFile, `${JSON.stringify(config, null, 2)}\n`);
+  writeMutableJson(paseoConfigFile, config);
   return { ok: true, message: "Paseo shim installed. Restart the Paseo daemon to apply: paseo restart" };
 }
 
@@ -205,7 +185,7 @@ function uninstallShimFromPaseoConfig(): { ok: boolean; message: string } {
   if (Object.keys(piProvider).length === 0) delete config.agents.providers.pi;
   if (Object.keys(config.agents.providers).length === 0) delete config.agents.providers;
   if (Object.keys(config.agents).length === 0) delete config.agents;
-  fs.writeFileSync(paseoConfigFile, `${JSON.stringify(config, null, 2)}\n`);
+  writeMutableJson(paseoConfigFile, config);
   return { ok: true, message: "Paseo shim removed. Restart the Paseo daemon to apply: paseo restart" };
 }
 
@@ -1433,7 +1413,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       adoptAgent(assignedAgentId, true);
       return;
     }
-    if (process.env.PI_PASEO_BRIDGE_NO_IMPORT) return;
+    if (!isImportEnabled()) return;
     const cli = resolvePaseoCli();
     if (!cli) {
       debugLog("paseo CLI not found; session will not auto-appear (set PASEO_CLI)");
@@ -1650,7 +1630,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   // the branch name), so generate one from the first user message.
   async function maybeGenerateSessionTitle(ctx: ExtensionContext): Promise<void> {
     if (titleAttempted || !currentAgentId) return;
-    if (process.env.PI_PASEO_BRIDGE_NO_TITLE) return;
+    if (!isTitleGenerationEnabled()) return;
     const existingName = ctx.sessionManager.getSessionName();
     if (existingName) {
       // Session already named (by the user or a previous run) - just make
@@ -1835,6 +1815,9 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
             const lines = [
               `shim: ${shimInstalled ? "installed" : "not installed (run /paseo-bridge install)"}`,
               `auto-connect: ${isAutoEnabled() ? "on" : "off"}`,
+              `settings: ${bridgeSettingsFile()}`,
+              `session import: ${isImportEnabled() ? "on" : "off"}`,
+              `title generation: ${isTitleGenerationEnabled() ? "on" : "off"}`,
               `session: ${transport ? (currentAgentId ? `bridged as Paseo agent ${currentAgentId}` : "bridged (not yet imported)") : "not bridged"}`,
             ];
             ctx.ui.notify(`Paseo bridge status\n${lines.join("\n")}`, "info");
