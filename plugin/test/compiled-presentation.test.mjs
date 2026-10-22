@@ -11,11 +11,12 @@ const { compilePlugin } = await import(pathToFileURL(resolve(compilerPath)));
 const { clientBundle } = await compilePlugin({ client: fileURLToPath(new URL('../client/presentation.tsx', import.meta.url)) });
 const jsx = (type, props) => ({ type, props: props ?? {} });
 let slots = [], cursor = 0;
+const clipboard = [];
 const load = name => {
   if (name === 'react') return { useState(initial) { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], value => { slots[i] = value; }]; } };
   if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx };
   if (name === 'react-native') return { View: 'View', Text: 'Text', Pressable: 'Pressable' };
-  if (name === '@getpaseo/plugin/client/react-native') return { ScrollView: 'ScrollView' };
+  if (name === '@getpaseo/plugin/client/react-native') return { ScrollView: 'ScrollView', copyText: async text => { clipboard.push(text); } };
   return require(name);
 };
 const components = (0, eval)(clientBundle)(load);
@@ -71,7 +72,7 @@ test('compiled native button keeps danger, disabled and press feedback distinct'
   assert.equal(style(button.props.style({ pressed: false })).borderRadius, 8);
 });
 
-test('compiled output remains bounded and selectable without altering payload text', () => {
+test('compiled output remains bounded and selectable and copies the exact payload', async () => {
   const text = 'literal JSON {"status":"preserve; punctuation"}\n' + 'output\n'.repeat(100);
   const tree = render(components.OutputWell, { colors: palettes[0], text, monospace: true, platform: 'ios', maxHeight: 240 });
   const all = nodes(tree);
@@ -82,4 +83,9 @@ test('compiled output remains bounded and selectable without altering payload te
   assert.equal(body.props.style.fontFamily, 'Menlo');
   assert.equal(body.props.style.fontSize, 12);
   assert.equal(body.props.style.lineHeight, 18);
+  const copy = all.find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Copy');
+  assert.ok(copy);
+  copy.props.onPress();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(clipboard.at(-1), text);
 });

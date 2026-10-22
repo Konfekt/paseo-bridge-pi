@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Pressable, Text, View, type TextStyle, type ViewStyle } from "react-native";
-import { ScrollView } from "@getpaseo/plugin/client/react-native";
+import { ScrollView, copyText } from "@getpaseo/plugin/client/react-native";
 import type { PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 
 /** Paseo 0.12 settings/control geometry. Domain state stays in each panel. */
@@ -22,18 +22,18 @@ export function SectionHeading({ colors, title, children }: {
   </View>;
 }
 
-export function Metadata({ colors, children, style, selectable = false }: {
-  colors: PresentationColors; children: ReactNode; style?: TextStyle; selectable?: boolean;
+export function Metadata({ colors, children, style, selectable = false, alert = false }: {
+  colors: PresentationColors; children: ReactNode; style?: TextStyle; selectable?: boolean; alert?: boolean;
 }) {
-  return <Text selectable={selectable} style={[{ ...secondaryText, color: colors.foregroundMuted }, style]}>{children}</Text>;
+  return <Text selectable={selectable} accessibilityRole={alert ? "alert" : undefined} style={[{ ...secondaryText, color: colors.foregroundMuted }, style]}>{children}</Text>;
 }
 
-export function NativeRow({ colors, title, detail, leading, trailing, children, onPress, disabled = false, selected = false, expanded, style }: {
+export function NativeRow({ colors, title, detail, leading, trailing, children, onPress, disabled = false, selected = false, expanded, style, accessibilityLabel }: {
   colors: PresentationColors; title: string; detail?: string; leading?: ReactNode; trailing?: ReactNode; children?: ReactNode;
-  onPress(): void; disabled?: boolean; selected?: boolean; expanded?: boolean; style?: ViewStyle;
+  onPress(): void; disabled?: boolean; selected?: boolean; expanded?: boolean; style?: ViewStyle; accessibilityLabel?: string;
 }) {
   const [hovered, setHovered] = useState(false);
-  return <Pressable accessibilityRole="button" accessibilityLabel={title}
+  return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? title}
     accessibilityState={{ disabled, selected, ...(expanded === undefined ? {} : { expanded }) }} disabled={disabled} onPress={onPress}
     onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
     style={({ pressed }) => [{ paddingHorizontal: 12, paddingVertical: 10, gap: 6, opacity: disabled ? 0.5 : 1,
@@ -64,10 +64,18 @@ export function NativeButton({ colors, label, onPress, disabled = false, danger 
 export function OutputWell({ colors, text, monospace = false, platform, maxHeight = 320 }: {
   colors: PresentationColors; text: string; monospace?: boolean; platform?: string; maxHeight?: number;
 }) {
+  const [copyError, setCopyError] = useState(false);
   return <View style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, backgroundColor: colors.surface0, overflow: "hidden" }}>
     <ScrollView nestedScrollEnabled style={{ maxHeight }} contentContainerStyle={{ padding: 12 }}>
       <Text selectable style={{ color: colors.foreground, fontSize: monospace ? 12 : 14, lineHeight: monospace ? 18 : 20,
         ...(monospace ? { fontFamily: platform === "ios" ? "Menlo" : "monospace" } : {}) }}>{text}</Text>
     </ScrollView>
+    <View style={{ flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: 8, paddingHorizontal: 8, paddingVertical: 6, borderTopWidth: 1, borderTopColor: colors.border }}>
+      {copyError ? <Metadata colors={colors} alert style={{ color: colors.statusDanger }}>Could not copy. Select the text to copy it.</Metadata> : null}
+      <NativeButton colors={colors} label="Copy" onPress={() => {
+        setCopyError(false);
+        void Promise.resolve().then(() => copyText(text)).catch(() => setCopyError(true));
+      }} style={{ paddingVertical: 4, paddingHorizontal: 8, backgroundColor: "transparent" }} />
+    </View>
   </View>;
 }
