@@ -61,7 +61,7 @@ bundles it at `.../Paseo/resources/bin/paseo.cmd` on Windows).
   UI. Background launches retain their real group/job handles; the task dashboard
   groups attempts, builds and alerts without fabricating separate provider sessions.
 - After your first message, a session title is generated with the current
-  model and applied to the Paseo agent, the workspace (prefixed `[TUI]`), and
+  model and applied to the Paseo agent, the workspace (without a prefix), and
   pi's session list.
 - Closing the TUI mid-conversation leaves a helpful error in Paseo with the
   exact `pi --session <id>` command to resume, and Paseo's Fork keeps working.

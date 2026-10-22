@@ -509,11 +509,11 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   }
 
   // The sidebar labels workspaces by branch name; give the workspace the
-  // session title, prefixed so it's clear the session started in a terminal.
+  // same plain session title as the conversation.
   async function setPaseoWorkspaceTitle(agentId: string, title: string): Promise<void> {
     const conn = openPaseoWs();
     if (!conn) return;
-    const workspaceTitle = `[TUI] ${title}`;
+    const workspaceTitle = title;
     try {
       const fetched = await conn.request((requestId) => ({ type: "fetch_agent_request", agentId, requestId }));
       const workspaceId = fetched?.agent?.workspaceId;
