@@ -161,6 +161,11 @@ function WorkflowsView({
 		goal = snapshot?.goal,
 		dialog = snapshot?.dialog,
 		colors = theme.colors;
+	const parsedBudget = budgetText.trim() ? Number(budgetText) : undefined;
+	const validBudget = parsedBudget === undefined || (
+		/^\d+$/.test(budgetText.trim()) && Number.isSafeInteger(parsedBudget) &&
+		parsedBudget >= 1 && parsedBudget <= 1_000_000
+	);
 	const goalIdentity = `${binding ?? ""}/${goal?.id ?? "none"}`;
 	useEffect(() => {
 		if (resetIdentity.current && resetIdentity.current !== goalIdentity) {
@@ -284,23 +289,41 @@ function WorkflowsView({
 							backgroundColor: colors.surface2,
 						}}
 					/>
-					{button(
-						"Create",
-						() => {
-							void post({
-								operation: "start",
-								action: "goal.create_paused",
-								expectedGoalId: null,
-								objective: objective.trim(),
-							});
-						},
-						locked ||
-							!snapshot?.capabilities?.createPausedGoal ||
-							!objective.trim() ||
-							!!snapshot?.busy ||
-							!snapshot?.idle,
-					)}
-
+					<View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+						{button(
+							"Create",
+							() => {
+								void post({
+									operation: "start",
+									action: "goal.create_paused",
+									expectedGoalId: null,
+									objective: objective.trim(),
+									...(parsedBudget === undefined ? {} : { tokenBudget: parsedBudget }),
+								});
+							},
+							locked ||
+								!snapshot?.capabilities?.createPausedGoal ||
+								!objective.trim() ||
+								!!snapshot?.busy ||
+								!snapshot?.idle ||
+								!validBudget,
+						)}
+						<TextInput
+							accessibilityLabel="New goal token budget"
+							placeholder="Token budget · unlimited"
+							placeholderTextColor={colors.foregroundMuted}
+							value={budgetText}
+							onChangeText={setBudgetText}
+							keyboardType="numeric"
+							editable={!locked && !snapshot?.busy}
+							style={{
+								minHeight: 44, minWidth: 160, flexGrow: 1, flexShrink: 1,
+								paddingHorizontal: 10, borderWidth: 1,
+								borderColor: colors.border, borderRadius: 8,
+								color: colors.foreground, backgroundColor: colors.surface2,
+							}}
+						/>
+					</View>
 				</>
 			) : (
 				<>
@@ -384,7 +407,7 @@ function WorkflowsView({
 							"Edit",
 							() => {
 								setObjective(goal.text);
-								setBudgetText(String(goal.tokenBudget ?? 250000));
+								setBudgetText(goal.tokenBudget === undefined || goal.tokenBudget === null ? "" : String(goal.tokenBudget));
 								setEditing(!editing);
 								setAddingTask(false);
 							},
@@ -428,6 +451,8 @@ function WorkflowsView({
 							</Text>
 							<TextInput
 								accessibilityLabel="Goal token budget"
+								placeholder={goal.tokenBudget == null ? "Unlimited" : "Keep current budget"}
+								placeholderTextColor={colors.foregroundMuted}
 								value={budgetText}
 								onChangeText={setBudgetText}
 								keyboardType="numeric"
@@ -441,16 +466,10 @@ function WorkflowsView({
 							{button(
 								"Save changes",
 								() => {
-									const budget = Number(budgetText);
-									if (
-										objective.trim() &&
-										Number.isSafeInteger(budget) &&
-										budget > 0 &&
-										budget <= 1_000_000
-									) {
+									if (objective.trim() && validBudget) {
 										void start("goal.edit", {
 											objective: objective.trim(),
-											tokenBudget: budget,
+											...(parsedBudget === undefined ? {} : { tokenBudget: parsedBudget }),
 										});
 									}
 								},
@@ -458,9 +477,7 @@ function WorkflowsView({
 									snapshot?.busy ||
 									!snapshot?.idle ||
 									!objective.trim() ||
-									!Number.isSafeInteger(Number(budgetText)) ||
-									Number(budgetText) <= 0 ||
-									Number(budgetText) > 1_000_000,
+									!validBudget,
 							)}
 							{button("Cancel", () => setEditing(false), locked)}
 						</View>
@@ -704,8 +721,8 @@ function WorkflowsView({
 								<View style={{ gap: 8 }}>
 									{button(
 										completedOpen
-											? `Hide completed (${completedGoals.length})`
-											: `Completed (${completedGoals.length})`,
+											? "Hide completed"
+											: "Completed",
 										() => setCompletedOpen((open) => !open),
 									)}
 									{completedOpen ? (

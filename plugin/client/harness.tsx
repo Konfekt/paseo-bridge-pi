@@ -27,7 +27,7 @@ import {
 	WorkflowsPanel,
 } from "./workflows";
 import { foregroundTasksStatusRpc } from "../shared/foreground-tasks";
-import { isActiveWorkStatus } from "../shared/work-display";
+import { isActiveAgent, isActiveWorkStatus } from "../shared/work-display";
 import { isDormantIndependentAgent } from "../shared/independent-state";
 import { WorkStatusRing } from "./work-status-ring";
 import {
@@ -36,6 +36,23 @@ import {
 } from "./agent-conversation";
 
 type Kind = "jobs" | "subagents";
+
+async function readSubagents<T extends { items: any[]; nextCursor?: string; sessionId: string; state: string }>(load: (cursor?: string) => Promise<T>): Promise<T> {
+	const first = await load();
+	const items = [...first.items];
+	let cursor = first.nextCursor;
+	const seen = new Set<string>();
+	while (cursor) {
+		if (seen.has(cursor) || seen.size >= 100) throw new Error("Invalid subagent pagination");
+		seen.add(cursor);
+		const page = await load(cursor);
+		if (page.state !== "available" || page.sessionId !== first.sessionId) throw new Error("Subagent inventory changed");
+		items.push(...page.items);
+		cursor = page.nextCursor;
+	}
+	const unique = new Map(items.map(item => [`${item.childId}/${item.attempt}`, item]));
+	return { ...first, items: [...unique.values()], nextCursor: undefined };
+}
 type Agent = {
 	id: string;
 	workspaceId?: string | null;
@@ -264,7 +281,7 @@ function useWorkSummary({ agentId, workspaceId, host }: JobScope) {
 			host.id,
 		],
 		enabled: ready,
-		queryFn: () => agentsCall({ ...bound, limit: 50 }),
+		queryFn: () => readSubagents(cursor => agentsCall({ ...bound, limit: 50, ...(cursor ? { cursor } : {}) })),
 		refetchInterval: 5000,
 		refetchOnReconnect: true,
 	});
@@ -281,13 +298,15 @@ function useWorkSummary({ agentId, workspaceId, host }: JobScope) {
 			: undefined;
 	const foregroundIds = new Set(foregroundRows?.map((row) => row.taskId));
 	const count = (
-		rows: readonly { status: string; needsAttention?: boolean }[] | undefined,
+		rows: readonly { status: string; reaped?: boolean; needsAttention?: boolean }[] | undefined,
+		agents = false,
 	) => {
-		const active = rows?.filter((row) => isActiveWorkStatus(row.status)) ?? [];
+		const active = rows?.filter((row) => agents ? isActiveAgent(row) : isActiveWorkStatus(row.status)) ?? [];
 		return {
 			available: rows !== undefined,
 			total: rows?.length ?? 0,
 			active: active.length,
+			running: active.some((row) => ["starting", "launching", "pending", "running"].includes(row.status)),
 			attention: active.some(
 				(row) => row.needsAttention || /waiting|blocked|needs/.test(row.status),
 			),
@@ -308,6 +327,7 @@ function useWorkSummary({ agentId, workspaceId, host }: JobScope) {
 							row.kind !== "foreground" && !foregroundIds.has(row.taskId),
 					)
 				: undefined,
+			true,
 		),
 	};
 }
@@ -339,7 +359,9 @@ function MountedWorkIndicator(
 	useEffect(() => {
 		props.report(label);
 	}, [label, props.report]);
-	return count ? (
+	return agents && !summary.agents.running ? (
+		<View accessibilityLabel="Idle agents" style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: props.theme.colors.statusSuccess }} />
+	) : count ? (
 		<WorkStatusRing
 			attention={attention}
 			foreground={props.theme.colors.foreground}
@@ -395,13 +417,13 @@ function WorkOverview(
 	const desktopWidth =
 		section === "jobs" && jobs > 0
 			? completed
-				? 960
-				: 880
+				? 1120
+				: 1040
 			: section === "agents" && agents > 0
 				? completed
-					? 1120
-					: 880
-				: undefined;
+					? 1200
+					: 1040
+				: 1040;
 	const width =
 		props.layout.platform === "web" && !props.layout.compact
 			? desktopWidth
@@ -684,10 +706,13 @@ function HarnessPanel({
 		queryFn: () =>
 			kind === "jobs"
 				? jobsCall({ ...bound, limit: 50 })
-				: tasksCall({ ...bound, limit: 50 }),
+				: readSubagents(cursor => tasksCall({ ...bound, limit: 50, ...(cursor ? { cursor } : {}) })),
+
 		refetchInterval: 5000,
 		refetchOnReconnect: true,
 	});
+	const isActiveRow = (row: { status: string; reaped?: boolean }) =>
+		kind === "subagents" ? isActiveAgent(row) : isActiveWorkStatus(row.status);
 	const selectedId =
 		selected &&
 		selected.session === session &&
@@ -696,7 +721,7 @@ function HarnessPanel({
 			list.data?.items.some(
 				(row) =>
 					("jobId" in row ? row.jobId : row.taskId) === selected.id &&
-					isActiveWorkStatus(row.status) === (viewMode === "active"),
+					isActiveRow(row) === (viewMode === "active"),
 			))
 			? selected.id
 			: undefined;
@@ -727,15 +752,25 @@ function HarnessPanel({
 		onPress: () => void,
 		disabled = false,
 		brief = false,
+		status?: string,
 	) => (
 		<Pressable
 			accessibilityRole="button"
 			accessibilityLabel={label}
 			disabled={disabled}
 			onPress={onPress}
-			style={{ padding: 10, opacity: disabled ? 0.5 : 1 }}
+			style={{ padding: 10, opacity: disabled ? 0.5 : 1, flexDirection: "row", alignItems: "center", gap: 8 }}
 		>
-			<Text numberOfLines={brief ? 1 : undefined} style={{ color: fg }}>
+			{status ? (
+				["starting", "launching", "pending", "running"].includes(status) ? (
+					<View accessibilityLabel="Running">
+						<WorkStatusRing attention={false} foreground={fg} platform={layout.platform} />
+					</View>
+				) : (
+					<View accessibilityLabel="Idle" style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: theme.colors.statusSuccess }} />
+				)
+			) : null}
+			<Text numberOfLines={brief ? 1 : undefined} style={{ color: fg, flexShrink: 1 }}>
 				{label}
 			</Text>
 		</Pressable>
@@ -749,7 +784,7 @@ function HarnessPanel({
 							row.kind !== "foreground") &&
 						(!("taskId" in row) || !excludeTaskIds?.has(row.taskId)) &&
 						(viewMode === "all" ||
-							isActiveWorkStatus(row.status) === (viewMode === "active")),
+							isActiveRow(row) === (viewMode === "active")),
 				)
 			: [];
 	const item =
@@ -877,7 +912,7 @@ function HarnessPanel({
 					<View
 						key={"childId" in row ? row.childId : id}
 						style={
-							!isActiveWorkStatus(row.status)
+							!isActiveRow(row)
 								? {
 										borderWidth: 1,
 										borderColor:
@@ -937,6 +972,7 @@ function HarnessPanel({
 							},
 							!!openingId,
 							viewMode !== "completed",
+							kind === "subagents" && isActiveRow(row) ? row.status : undefined,
 						)}
 						{selectedId === id ? selectedDetail : null}
 					</View>
