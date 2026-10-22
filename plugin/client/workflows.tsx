@@ -717,9 +717,11 @@ function WorkflowsView({
 															<Text style={{ color: item.status === "completed" ? colors.statusSuccess : colors.foregroundMuted, fontSize: 12, fontWeight: "600" }}>
 																{item.status === "completed" ? "Completed" : "Cleared"}
 															</Text>
-															<Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>
-																{new Date(item.endedAt).toLocaleDateString()}
-															</Text>
+															{item.endedAt > 0 ? (
+																<Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>
+																	{new Date(item.endedAt).toLocaleDateString()}
+																</Text>
+															) : null}
 														</View>
 														<Text selectable style={{ color: colors.foreground }}>
 															{item.text}

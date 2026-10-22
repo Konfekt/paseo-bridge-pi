@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { realpath } from "node:fs/promises";
@@ -14,6 +15,7 @@ import {
 	workflowSnapshotSchema,
 	workflowsStatusRpc,
 	workflowsControlRpc,
+	type WorkflowSnapshot,
 } from "../shared/workflows";
 export const readWorkflowsDescriptor = (agentId: string) =>
 	readAccountControlsDescriptor(
@@ -27,6 +29,32 @@ export const callWorkflows = (
 const responseSchema = workflowSnapshotSchema.extend({
 	openPath: z.string().max(4096).optional(),
 });
+
+/** Surface the previous clear notice as a history item from older Pi runtimes. */
+function archiveLegacyClearedGoal(
+	snapshot: WorkflowSnapshot,
+	agentId: string,
+): WorkflowSnapshot {
+	const prefix = "Goal cleared: ";
+	if (!snapshot.notice?.startsWith(prefix)) return snapshot;
+	const text = snapshot.notice.slice(prefix.length).trim().slice(0, 4000);
+	if (!text) return { ...snapshot, notice: null };
+	const completedGoals = [...(snapshot.completedGoals ?? [])];
+	if (
+		!completedGoals.some(
+			(goal) => goal.status === "cleared" && goal.text === text,
+		)
+	)
+		completedGoals.push({
+			id: `legacy-clear-${createHash("sha256").update(agentId).update(text).digest("hex").slice(0, 32)}`,
+			text,
+			status: "cleared",
+			endedAt: 0,
+			summary: null,
+			tasks: [],
+		});
+	return { ...snapshot, notice: null, completedGoals: completedGoals.slice(-50) };
+}
 export function createWorkflowsHandlers(
 	read = readWorkflowsDescriptor,
 	call = callWorkflows,
@@ -76,12 +104,15 @@ export function createWorkflowsHandlers(
 					runtimeEpoch: null,
 					snapshot: null,
 				};
-			const snapshot = workflowSnapshotSchema.parse(
-				await call(d, {
-					operation: "snapshot",
-					sessionId: d.sessionId,
-					serviceEpoch: d.serviceEpoch,
-				}),
+			const snapshot = archiveLegacyClearedGoal(
+				workflowSnapshotSchema.parse(
+					await call(d, {
+						operation: "snapshot",
+						sessionId: d.sessionId,
+						serviceEpoch: d.serviceEpoch,
+					}),
+				),
+				input.agentId,
 			);
 			await recheck(input, context, d);
 			if (
