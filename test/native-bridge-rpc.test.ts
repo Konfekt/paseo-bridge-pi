@@ -14,9 +14,19 @@ import { setTimeout as delay } from "node:timers/promises";
 // No prompts/model streams are sent: the provider registers metadata only.
 const executable = process.env.BRIDGE_NATIVE_PI;
 const root = fileURLToPath(new URL("../", import.meta.url));
-const fixtureProvider = `import { appendFileSync } from "node:fs";
+const fixtureProvider = `import { appendFileSync, writeFileSync } from "node:fs";
 export default function(pi) {
   pi.on("session_start", event => appendFileSync(process.env.OFFLINE_LIFECYCLE_FILE, event.reason + "\\n"));
+  pi.on("agent_start", () => appendFileSync(process.env.OFFLINE_LIFECYCLE_FILE, "AGENT_STARTED\\n"));
+  pi.on("input", event => {
+    if (event.text !== "ordinary offline bridge provenance fixture") return;
+    writeFileSync(process.env.OFFLINE_INPUT_RECEIPT, JSON.stringify({
+      source: event.source,
+      streamingBehavior: event.streamingBehavior ?? null,
+      streamingBehaviorIsUndefined: event.streamingBehavior === undefined,
+    }));
+    return { action: "handled" };
+  });
   pi.registerProvider("bridge-offline", {
     api: "bridge-offline-never-stream", baseUrl: "http://127.0.0.1:1",
     apiKey: "offline-fixture-not-a-secret",
@@ -85,6 +95,7 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       XDG_RUNTIME_DIR: runtime, XDG_CONFIG_HOME: path.join(home, ".config"),
       XDG_CACHE_HOME: path.join(home, ".cache"), XDG_DATA_HOME: path.join(home, ".local/share"),
       OFFLINE_LIFECYCLE_FILE: path.join(temporary, "lifecycle"),
+      OFFLINE_INPUT_RECEIPT: path.join(temporary, "input-receipt.json"),
       PI_CODING_AGENT_DIR: agent, PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0",
       PI_PASEO_BRIDGE_FORCE: "1", PI_PASEO_BRIDGE_NO_IMPORT: "1", PI_PASEO_BRIDGE_NO_TITLE: "1",
       PI_PASEO_BRIDGE_IMPORT_SESSIONS: "0", PI_PASEO_BRIDGE_GENERATE_TITLES: "0", PASEO_HOST: "fixture://offline" },
@@ -161,6 +172,32 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       const after = await ok("get_state");
       assert.deepEqual(after.model, before.model);
       assert.equal(after.thinkingLevel, before.thinkingLevel);
+    });
+    await t.test("idle bridge prompt reaches actual Pi input as extension provenance without streaming behavior", async () => {
+      assert.equal((await ok("get_state")).isStreaming, false);
+      const accepted = await ok("prompt", { message: "ordinary offline bridge provenance fixture" });
+      assert.equal(accepted.agentInvoked, true, "bridge delegates the ordinary prompt to Pi");
+      const deadline = Date.now() + 4000;
+      let receipt: any;
+      for (;;) {
+        try { receipt = JSON.parse(await readFile(path.join(temporary, "input-receipt.json"), "utf8")); break; }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          assert.ok(Date.now() < deadline, "Pi input handler must receive the bridge prompt");
+          await delay(20);
+        }
+      }
+      assert.deepEqual(receipt, {
+        source: "extension", streamingBehavior: null, streamingBehaviorIsUndefined: true,
+      });
+      // Barrier behind asynchronous sendUserMessage: Pi's native abort waits
+      // for idle. The fixture consumes input before any agent/model work.
+      assert.equal((await native("abort")).success, true);
+      assert.equal((await ok("get_state")).isStreaming, false);
+      const lifecycle = await readFile(path.join(temporary, "lifecycle"), "utf8");
+      assert.ok(!lifecycle.includes("AGENT_STARTED"));
+      assert.ok(!lifecycle.includes("PROVIDER_CALLED"));
+      assert.equal((await ok("get_session_stats")).totalMessages, 0);
     });
     await t.test("native remote-reload keeps the isolated Pi and attached bridge alive", async () => {
       const pid = child.pid;
