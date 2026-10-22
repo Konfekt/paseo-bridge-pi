@@ -57,7 +57,7 @@ export function createAgentConversationTabs(client: PluginClientContext) {
       selectedTarget = `workspace:${target.workspaceId}`;
       client.openScreen({ screenId: "independent-conversation", params: { workspaceId: target.workspaceId, ...(target.serverId ? { serverId: target.serverId } : {}) } });
     },
-    open(target: AgentConversationTarget): Promise<void> {
+    open(target: AgentConversationTarget, isCurrent: () => boolean = () => true): Promise<void> {
       if (disposed) return Promise.reject(new Error("Conversation navigation is unavailable"));
       const key = JSON.stringify(target);
       selectedTarget = key;
@@ -65,7 +65,7 @@ export function createAgentConversationTabs(client: PluginClientContext) {
       if (existing) return existing;
       const operation = (async () => {
         const identity = await client.rpc(harnessStatusRpc, { agentId: target.agentId, workspaceId: target.workspaceId });
-        if (disposed) throw new Error("Conversation navigation was closed");
+        if (disposed || !isCurrent()) throw new Error("The source conversation is no longer selected.");
         if (!identity.available || identity.sessionId !== target.sessionId || !identity.runtimeEpoch)
           throw new Error("The source session is unavailable or has changed.");
         const created = await client.rpc(independentAgentOpenRpc, {
@@ -73,7 +73,7 @@ export function createAgentConversationTabs(client: PluginClientContext) {
           expectedSessionId: target.sessionId, expectedRuntimeEpoch: identity.runtimeEpoch,
           taskId: target.taskId, childId: target.childId, attempt: target.attempt, runtimeId: target.runtimeId,
         });
-        if (!disposed && selectedTarget === key) client.openScreen({ screenId: "independent-conversation", params: { agentId: created.agentId } });
+        if (!disposed && isCurrent() && selectedTarget === key) client.openScreen({ screenId: "independent-conversation", params: { agentId: created.agentId } });
       })().finally(() => { pending.delete(key); });
       pending.set(key, operation);
       return operation;

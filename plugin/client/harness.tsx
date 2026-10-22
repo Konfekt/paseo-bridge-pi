@@ -1,14 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Pressable, Text, View, type ScrollView as NativeScrollView } from "react-native";
 import { Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
 import { SettingsAction } from "@getpaseo/plugin/client/ui";
 import {
 	useRpc,
 	type PluginAgentPanelProps,
-	type PluginButtonContentProps,
 	type PluginButtonIconProps,
 	type PluginClientContext,
+	type PluginWorkspacePanelProps,
 	type PluginButtonRegistration,
 } from "@getpaseo/plugin/client";
 import {
@@ -35,6 +35,8 @@ import {
 	type AgentConversationTarget,
 } from "./agent-conversation";
 
+import { createWorkTabState, type WorkViewState } from "./work-tab";
+
 type Kind = "jobs" | "subagents";
 
 async function readSubagents<T extends { items: any[]; nextCursor?: string; sessionId: string; state: string }>(load: (cursor?: string) => Promise<T>): Promise<T> {
@@ -58,18 +60,74 @@ type Agent = {
 	workspaceId?: string | null;
 	provider?: string;
 	archivedAt?: string | null;
+	title?: string | null;
 };
 
 /** Registration is local. Queries run only for a mounted button or open view. */
 export function contributeHarness(client: PluginClientContext) {
 	const entries = new Map<
 		string,
-		{ workspaceId: string; buttons: PluginButtonRegistration[] }
+		{
+			workspaceId: string;
+			title?: string | null;
+			buttons: PluginButtonRegistration[];
+		}
 	>();
 	const lifetime = new AbortController();
 	let stopped = false;
 	const conversations = createAgentConversationTabs(client);
+	const work = createWorkTabState();
+	function WorkPanel(props: PluginWorkspacePanelProps) {
+		const [, refresh] = useState(0);
+		useEffect(() => {
+			const unsubscribe = work.subscribe(() => refresh(value => value + 1));
+			refresh(value => value + 1);
+			return unsubscribe;
+		}, []);
+		const agentId = work.selected(props.workspaceId);
+		if (!agentId) {
+			return (
+				<View style={{ flex: 1, padding: 16 }}>
+					<Text style={{ color: props.theme.colors.foregroundMuted }}>
+						Select Work from a conversation to view its work.
+					</Text>
+				</View>
+			);
+		}
+		const workspaceId = props.workspaceId;
+		const entry = entries.get(agentId);
+		const current = () =>
+			!stopped && work.selected(workspaceId) === agentId &&
+			entries.get(agentId) === entry && entry?.workspaceId === workspaceId;
+		return (
+			<WorkOverview
+				{...props}
+				key={JSON.stringify([props.host.id, workspaceId, agentId])}
+				context="agent"
+				agentId={agentId}
+				view={work.view(workspaceId, agentId)}
+				sourceTitle={entry?.title || "Conversation work"}
+				openConversation={async (target) => {
+					if (!current() || target.agentId !== agentId ||
+						target.workspaceId !== workspaceId || target.hostId !== props.host.id)
+						throw new Error("The source conversation is no longer selected.");
+					await conversations.open(target, current);
+				}}
+				openWorkspace={(id) => {
+					if (current()) conversations.openWorkspace({ workspaceId: id, serverId: props.host.id });
+				}}
+			/>
+		);
+	}
 	const panels = [
+		client.addWorkspacePanel({
+			id: "work",
+			title: "Work",
+			icon: "Briefcase",
+			context: "workspace",
+			locations: ["workspace"],
+			Component: WorkPanel,
+		}),
 		client.addWorkspacePanel({
 			id: "harness-jobs",
 			title: "Background jobs",
@@ -104,8 +162,10 @@ export function contributeHarness(client: PluginClientContext) {
 		}),
 	];
 	const remove = (id: string) => {
-		entries.get(id)?.buttons.forEach((button) => button.remove());
+		const entry = entries.get(id);
+		entry?.buttons.forEach((button) => button.remove());
 		entries.delete(id);
+		if (entry) work.remove(entry.workspaceId, id);
 	};
 	const register = (agent: Agent) => {
 		if (stopped) return;
@@ -118,21 +178,24 @@ export function contributeHarness(client: PluginClientContext) {
 			remove(agent.id);
 			return;
 		}
-		if (entries.get(agent.id)?.workspaceId === agent.workspaceId) return;
+		const existing = entries.get(agent.id);
+		if (existing?.workspaceId === agent.workspaceId) {
+			if (existing.title !== agent.title) {
+				existing.title = agent.title;
+				work.refresh();
+			}
+			return;
+		}
 		remove(agent.id);
 		const workspaceId = agent.workspaceId;
-		const entry = { workspaceId, buttons: [] as PluginButtonRegistration[] };
+		const entry = {
+			workspaceId,
+			title: agent.title,
+			buttons: [] as PluginButtonRegistration[],
+		};
 		const report = (label: string) => {
 			if (!stopped && entries.get(agent.id) === entry)
 				entry.buttons[0]?.update({ label });
-		};
-		let width: number | undefined;
-		const reportContent = (nextWidth: number | undefined) => {
-			if (stopped || entries.get(agent.id) !== entry || width === nextWidth)
-				return;
-			width = nextWidth;
-			// Presentation-only: changing the behavior would close the host popover.
-			entry.buttons[0]?.update({ desktopPopoverWidth: nextWidth });
 		};
 		entry.buttons.push(
 			client.addComposerPill({
@@ -144,49 +207,12 @@ export function contributeHarness(client: PluginClientContext) {
 					label: "Work",
 					icon: (props) => <WorkIndicator {...props} report={report} />,
 					behavior: {
-						kind: "popover",
-						Content: (props) => (
-							<WorkPopover
-								{...props}
-								reportContent={reportContent}
-								openConversation={async (target) => {
-									if (
-										stopped ||
-										entries.get(agent.id) !== entry ||
-										target.agentId !== agent.id ||
-										target.workspaceId !== workspaceId
-									)
-										throw new Error(
-											"The source conversation is no longer selected.",
-										);
-									await conversations.open(target);
-									if (!stopped && entries.get(agent.id) === entry)
-										props.close();
-								}}
-								openWorkspace={(id) => {
-									if (!stopped && entries.get(agent.id) === entry) {
-										conversations.openWorkspace({
-											workspaceId: id,
-											serverId: props.host.id,
-										});
-										props.close();
-									}
-								}}
-								openPanel={(kind) => {
-									if (!stopped && entries.get(agent.id) === entry) {
-										client.openPanel(
-											kind === "goals"
-												? "pi-workflows"
-												: kind === "worktrees"
-													? "pi-worktrees"
-													: `harness-${kind}`,
-											{ workspaceId, agentId: agent.id },
-										);
-										props.close();
-									}
-								}}
-							/>
-						),
+						kind: "action",
+						onPress: () => {
+							if (stopped || entries.get(agent.id) !== entry) return;
+							work.select(workspaceId, agent.id);
+							client.openPanel("work", { workspaceId, location: "workspace" });
+						},
 					},
 				},
 			}),
@@ -371,84 +397,41 @@ function MountedWorkIndicator(
 		<Icon name="Briefcase" size={props.size} color={props.color} />
 	);
 }
-type WorkPanelKind = Kind | "worktrees" | "goals";
-type WorkContentSize = { reportContent(width: number | undefined): void };
 type CompletedView = { completed: boolean; toggleCompleted(): void };
-function WorkPopover(
-	props: PluginButtonContentProps &
-		WorkContentSize & {
-			openPanel(kind: WorkPanelKind): void;
-			openConversation(target: AgentConversationTarget): Promise<void>;
-			openWorkspace(id: string): void;
-		},
-) {
-	if (props.context !== "agent") return <View />;
-	return <WorkOverview {...props} />;
-}
 function WorkOverview(
-	props: Extract<PluginButtonContentProps, { context: "agent" }> &
-		WorkContentSize & {
-			openPanel(kind: WorkPanelKind): void;
-			openConversation(target: AgentConversationTarget): Promise<void>;
-			openWorkspace(id: string): void;
-		},
+	props: PluginAgentPanelProps & {
+		view: WorkViewState;
+		sourceTitle: string;
+		openConversation(target: AgentConversationTarget): Promise<void>;
+		openWorkspace(id: string): void;
+	},
 ) {
 	const summary = useWorkSummary(props);
 	const [section, setSection] = useState<
 		"jobs" | "agents" | "worktrees" | "goals"
-	>(() =>
-		summary.agents.active
-			? "agents"
-			: summary.jobs.active || summary.foreground.active
-				? "jobs"
-				: "goals",
-	);
+	>(() => props.view.section ?? (
+		summary.agents.active ? "agents" :
+			summary.jobs.active || summary.foreground.active ? "jobs" : "goals"
+	));
 	const colors = props.theme.colors;
-	const [completed, setCompleted] = useState(false);
-	const jobs = completed
-		? summary.jobs.total -
-			summary.jobs.active +
-			summary.foreground.total -
-			summary.foreground.active
-		: summary.jobs.active + summary.foreground.active;
-	const agents = completed
-		? summary.agents.total - summary.agents.active
-		: summary.agents.active;
-	const desktopWidth =
-		section === "jobs" && jobs > 0
-			? completed
-				? 1120
-				: 1040
-			: section === "agents" && agents > 0
-				? completed
-					? 1200
-					: 1040
-				: 1040;
-	const width =
-		props.layout.platform === "web" && !props.layout.compact
-			? desktopWidth
-			: undefined;
-	// One owner prevents a departing tab's cleanup from overriding the new tab's width.
-	useEffect(() => {
-		props.reportContent(width);
-	}, [width, props.reportContent]);
-	useEffect(() => () => props.reportContent(undefined), [props.reportContent]);
+	const [completed, setCompleted] = useState(props.view.completed);
+	props.view.section = section;
+	props.view.completed = completed;
 	const completedView = {
 		completed,
-		toggleCompleted: () => setCompleted((value) => !value),
+		toggleCompleted: () => {
+			props.view.completed = !completed;
+			setCompleted(!completed);
+		},
 	};
 	return (
-		<View
-			style={{
-				width: "100%",
-				minWidth: 280,
-				maxWidth:
-					props.layout.compact || props.layout.platform !== "web"
-						? 520
-						: undefined,
-				gap: 8,
-			}}
-		>
+		<View style={{ flex: 1, width: "100%", minWidth: 0, gap: 8 }}>
+			<Text
+				numberOfLines={1}
+				style={{ color: colors.foregroundMuted, paddingHorizontal: 12, paddingTop: 12 }}
+			>
+				{props.sourceTitle}
+			</Text>
 			<View
 				accessibilityRole="tablist"
 				style={{ flexDirection: "row", gap: 4 }}
@@ -459,6 +442,8 @@ function WorkOverview(
 						accessibilityRole="tab"
 						accessibilityState={{ selected: section === value }}
 						onPress={() => {
+							props.view.completed = false;
+							props.view.section = value;
 							setCompleted(false);
 							setSection(value);
 						}}
@@ -497,26 +482,75 @@ function WorkOverview(
 					</Pressable>
 				))}
 			</View>
-			{section === "jobs" ? (
-				<JobsOverview {...props} {...completedView} />
-			) : section === "agents" ? (
-				<AgentsOverview {...props} {...completedView} />
-			) : section === "worktrees" ? (
-				<WorktreesSection {...props} onOpenWorkspace={props.openWorkspace} />
-			) : (
-				<WorkflowsSectionEmbed {...props} />
-			)}
+			<WorkScroll key={`${section}/${completed}`} view={props.view} scrollKey={`${section}/${completed}`}>
+				{section === "jobs" ? (
+					<JobsOverview {...props} {...completedView} />
+				) : section === "agents" ? (
+					<AgentsOverview {...props} {...completedView} />
+				) : section === "worktrees" ? (
+					<WorktreesSection {...props} onOpenWorkspace={props.openWorkspace} />
+				) : (
+					<WorkflowsSectionEmbed {...props} />
+				)}
+			</WorkScroll>
 		</View>
 	);
 }
+/** Native panel bodies are bounded, not scroll containers. Keep the section bar
+ * fixed and retain each section's offset outside the mounted tab. */
+function WorkScroll({ view, scrollKey, children }: {
+	view: WorkViewState;
+	scrollKey: string;
+	children: ReactNode;
+}) {
+	const scroll = useRef<NativeScrollView | null>(null);
+	const offset = useRef(view.scroll.get(scrollKey) ?? 0);
+	const restoring = useRef(offset.current > 0);
+	const viewportHeight = useRef(0);
+	const contentHeight = useRef(0);
+	const restore = () => {
+		if (!restoring.current || !viewportHeight.current ||
+			contentHeight.current - viewportHeight.current < offset.current) return;
+		scroll.current?.scrollTo({ y: offset.current, animated: false });
+		restoring.current = false;
+	};
+	return (
+		<ScrollView
+			ref={scroll}
+			style={{ flex: 1, minWidth: 0 }}
+			contentOffset={{ x: 0, y: offset.current }}
+			scrollEventThrottle={16}
+			onLayout={(event) => {
+				viewportHeight.current = event.nativeEvent.layout.height;
+				restore();
+			}}
+			onContentSizeChange={(_width, height) => {
+				contentHeight.current = height;
+				restore();
+			}}
+			onTouchStart={() => { restoring.current = false; }}
+			onScrollBeginDrag={() => { restoring.current = false; }}
+			onScroll={(event) => {
+				// Loading placeholders can clamp the initial offset to zero. Keep
+				// the saved position until hydrated content can accommodate it.
+				if (!restoring.current) {
+					offset.current = event.nativeEvent.contentOffset.y;
+					view.scroll.set(scrollKey, offset.current);
+				}
+			}}
+		>
+			{children}
+		</ScrollView>
+	);
+}
 function WorkflowsSectionEmbed(
-	props: Extract<PluginButtonContentProps, { context: "agent" }>,
+	props: PluginAgentPanelProps,
 ) {
 	return <WorkflowsSection {...props} />;
 }
 
 function JobsOverview(
-	props: Extract<PluginButtonContentProps, { context: "agent" }> &
+	props: PluginAgentPanelProps &
 		CompletedView,
 ) {
 	const { completed } = props;
@@ -573,7 +607,7 @@ function JobsOverview(
 }
 
 function AgentsOverview(
-	props: Extract<PluginButtonContentProps, { context: "agent" }> &
+	props: PluginAgentPanelProps &
 		CompletedView & {
 			openConversation(target: AgentConversationTarget): Promise<void>;
 		},

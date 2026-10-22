@@ -1,6 +1,6 @@
 # Paseo Pi controls
 
-A Paseo plugin with account controls, native access modes, one Work composer popover, and cache metrics in native context/usage. Install from this repository with:
+A Paseo plugin with account controls, native access modes, a Work composer indicator that opens a native workspace tab, and cache metrics in native context/usage. Install from this repository with:
 
 ```sh
 paseo plugin install github:taugoust/paseo-bridge-pi --path plugin
@@ -12,7 +12,16 @@ The pill is registered against each non-archived Pi agent's `agentId` and worksp
 
 On the patched Paseo server, Pi's existing native mode selector beside thinking displays **Dangerous ask** (approval prompts on) or **Full access** (approval prompts off). Reads reflect the authoritative permission-gate service; only an explicit selection changes it. Existing sandbox/authorization policy stays active. Session/runtime-bound writes are read back, and unsupported runtimes expose no native modes. A renamed plugin control remains as a fallback until the active Pi bridge is reloaded; it disappears once both native modes are advertised.
 
-**Work** groups Jobs (foreground and background), Agents, Worktrees, and Goals. Its badge prioritizes active subagents (`n subagents`), then active foreground/background jobs (`m jobs`), otherwise `Work`. Active work uses Paseo's dot-and-ring appearance, blue while running and amber/yellow when the displayed category needs attention. The adapted ring geometry and animation are attributed in `client/work-status-ring.tsx`, with the upstream Apache-2.0 license in `client/PASEO-LICENSE`. Completed items do not count, and foreground helpers are not counted again as subagents. The native n/m checklist is unchanged and remains separate. Hidden registrations do not poll. The separate Goal pill and Activity entry are removed; btw and Accounts retain their existing placement. On the patched desktop client, Work expands to an 880px preferred width (clamped to the viewport) only while the selected Jobs or Agents view has rows, including selected completed views. Empty views, Goals/Worktrees, and compact/iOS layouts keep their existing sizing. Width updates are presentation-only and do not close the popup or reset its selection.
+**Work** groups Jobs (foreground and background), Agents, Worktrees, and Goals. Its badge prioritizes active subagents (`n subagents`), then active foreground/background jobs (`m jobs`), otherwise `Work`. Active work uses Paseo's dot-and-ring appearance, blue while running and amber/yellow when the displayed category needs attention. The adapted ring geometry and animation are attributed in `client/work-status-ring.tsx`, with the upstream Apache-2.0 license in `client/PASEO-LICENSE`. Completed items do not count, and foreground helpers are not counted again as subagents. The native n/m checklist is unchanged and remains separate. Hidden registrations do not poll. The separate Goal pill and Activity entry are removed; btw and Accounts retain their existing placement. Clicking the pill opens or focuses the workspace's native **Work** tab. The tab follows the conversation whose pill was clicked, keeps its selected section and scroll position, and uses the available workspace area instead of a popover width. Closing it closes only the view, never the underlying work.
+
+### Work tab regression
+
+```sh
+PASEO_PLUGIN_COMPILER=/path/to/paseo/lib/paseo/packages/server/dist/server/server/plugins/compiler.js \
+  npm run test:work-tab
+```
+
+This compiles the production plugin with the host compiler and exercises native panel registration, source changes, view-state restoration, delayed scroll hydration, stale navigation and UI-only unmounts. Missing compiler dependencies fail rather than silently skip. The test does not replace a visual client review.
 
 ## Worktree and Goal
 
@@ -50,17 +59,17 @@ Requires Paseo 0.11.4 with the companion session-usage patch and Pi's `cache-hit
 
 The shared Nix Paseo package also maps successful `update_progress` version-5 results into native conversation task cards, including persisted-history replay. Paseo's task protocol has no blocked state, so blocked rows retain `completed: false` and an explicit “Blocked” label. Failed, running, malformed, and unsupported results retain ordinary tool rendering. This mapper needs the corresponding daemon package update; the iOS application uses its existing task-card renderer.
 
-Native context usage refreshes while mounted; provider quota retains its own cache and native manual refresh. Context cards are delivered together in deterministic source/account order, so OpenAI stays above Prompt cache regardless of request completion timing. Plan labels and relative resets use native window rendering; duplicate app reset windows are omitted, and distinct app resets use native rows without exposing app percentages. There are no mutations, approvals or prompt dispatch from usage cards. Use Pi's `/stamp`, `/progress`, and `/cache-hit-monitor` commands for terminal settings/display. This review batch does not run test suites; live visual and identity confirmation remains a user-review step.
+Native context usage refreshes while mounted; provider quota retains its own cache and native manual refresh. Context cards are delivered together in deterministic source/account order, so OpenAI stays above Prompt cache regardless of request completion timing. Plan labels and relative resets use native window rendering; duplicate app reset windows are omitted, and distinct app resets use native rows without exposing app percentages. There are no mutations, approvals or prompt dispatch from usage cards. Use Pi's `/stamp`, `/progress`, and `/cache-hit-monitor` commands for terminal settings/display. Live visual and identity confirmation remains a user-review step.
 
 ## Interactive foreground tasks
 
 The **Jobs** section in **Work** stacks Foreground and Background active jobs, or shows `No active jobs`. A bottom `Completed` button switches to retained, non-active jobs. Category tabs, Close/Refresh buttons, the background-panel shortcut, and background snapshot timestamps are omitted; status and output refresh automatically. It lists foreground helpers owned directly by the selected parent Pi session, streams their conversation, and supports explicit user prompts, individual permission/questionnaire answers, and Stop. Closing or dismissing the surface only hides it; it does not stop the helper. Unsent prompt drafts and questionnaire selections are retained client-side across close/reopen for that host, agent, parent session, and task.
 
-Foreground control requires the companion `pi-agent-extensions` runtime to publish `__paeForegroundTasksV1` protocol 1. Control uses its own private socket and capability descriptor; it is not added to the read-only Jobs/Subagents transport or permission-mode operator. Requests bind the Paseo agent, parent session, bridge runtime epoch, service epoch, and task/worker epoch. Request IDs are stable across uncertain outcomes; nothing is automatically replayed or approved. Stale worker interactions are disabled. Background workers may start foreground helpers, but those helpers do not delegate, so the view is the parent's direct task list rather than a recursive tree. No tmux object, Paseo agent, workspace tab, or nested Modal is created for this UI.
+Foreground control requires the companion `pi-agent-extensions` runtime to publish `__paeForegroundTasksV1` protocol 1. Control uses its own private socket and capability descriptor; it is not added to the read-only Jobs/Subagents transport or permission-mode operator. Requests bind the Paseo agent, parent session, bridge runtime epoch, service epoch, and task/worker epoch. Request IDs are stable across uncertain outcomes; nothing is automatically replayed or approved. Stale worker interactions are disabled. Background workers may start foreground helpers, but those helpers do not delegate, so the view is the parent's direct task list rather than a recursive tree. No per-helper tmux object, Paseo agent, workspace tab, or nested Modal is created for this UI.
 
 ## Read-only Jobs and Pi subagents
 
-The Jobs and Agents views in **Work** are agent-bound, with compact active lists and a native Completed toggle. Worktrees provide a compact inventory and native workspace navigation directly from the popover. Data refreshes automatically while its view is mounted. Jobs and Agents show up to 50 direct session-owned records, not a recursive tree.
+The Jobs and Agents views in **Work** are agent-bound, with compact active lists and a native Completed toggle. Worktrees provide an inventory and native workspace navigation directly from the Work tab. Data refreshes automatically while its view is mounted. Jobs and Agents show up to 50 direct session-owned records, not a recursive tree.
 
 - Jobs: status, elapsed time, observation-only labels, and bounded output.
 - Native subagents: status, attempt, bounded answer-only report, and **Open child chat** only when the backend verifies an exact live Paseo runtime match.

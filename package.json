@@ -31,6 +31,7 @@
     "dev-uninstall": "node scripts/uninstall.js",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "test:native": "node --experimental-strip-types --test test/*.integration.ts",
+    "test:work-tab": "node --test plugin/test/compiled-work-tab.test.mjs",
     "test:plugin": "node --experimental-strip-types --test plugin/test/*.test.ts plugin/test/compiled-*.test.mjs",
     "typecheck": "tsc --noEmit --module nodenext --moduleResolution nodenext --target es2022 --skipLibCheck extension/index.ts extension/pi-ai-compat.d.ts"
   },
