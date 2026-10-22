@@ -86,6 +86,6 @@ in
   integration = mkOption {
     type = types.attrs;
     readOnly = true;
-    description = "Reusable artifacts: package, rpcPackage, shimPackage, environment, extensionPath, pluginPath, providerCommand, pluginSettings. Host merges the last two into native Paseo settings.";
+    description = "Reusable artifacts: package, rpcPackage, shimPackage, environment, shimEnvironment, extensionPath, pluginPath, providerCommand, pluginSettings. Host merges the last two into native Paseo settings.";
   };
 }

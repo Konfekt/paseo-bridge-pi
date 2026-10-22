@@ -61,7 +61,8 @@ The constructor takes the same options except `enable`/`integration` and uses
 | `package` | Pi package artifact; add to your native Pi package list |
 | `rpcPackage` | `bin/pi-paseo`: fixed environment and explicit RPC extensions |
 | `shimPackage` | `bin/pi-paseo-shim`: provider, with fixed launcher trust |
-| `environment` | Shared bridge/endpoint/defaults/launcher environment |
+| `environment` | Shared bridge/endpoint/defaults/topology environment; safe as input to wrapped Pi |
+| `shimEnvironment` | Shared environment plus shim-only root trust, launcher paths and startup timeout |
 | `extensionPath` | Explicit bridge `extension/index.ts` |
 | `pluginPath` | Native Paseo plugin directory |
 | `providerCommand` | List for native `agents.providers.pi.command` |
@@ -89,6 +90,36 @@ additional package list. Alternatively add the artifact to native Pi settings
 `packages`. The modules deliberately do not own or overwrite Pi `settings.json`.
 Use the same bridge settings for HM and the daemon; session variables alone do
 not configure a system daemon. These modules create no service.
+
+`environment` deliberately contains no Pi launcher paths and accessing it does
+not validate or force those paths. Store-backed Pi launchers may therefore refer
+back to the wrapped package without a Nix recursion:
+
+```nix
+let
+  piWithPaseo = pkgs.pi-supervised.override {
+    environment = bridge.environment;
+    unsafeEnvironment = bridge.environment;
+    piAdditionalPackages = [ bridge.package ];
+  };
+  bridge = import "${inputs.paseo-bridge-pi}/nix/mk-bridge.nix" {
+    inherit pkgs;
+    paseoPackage = myNativePaseo;
+    rootTrustMode = "unsafe";
+    topology = true;
+    supervisedLauncher = "${piWithPaseo}/bin/pi";
+    unsafeLauncher = "${piWithPaseo}/bin/pi-unsafe";
+    rpcExecutable = "${piWithPaseo}/bin/pi-unsafe";
+    permissionGateExtension = myPermissionGateExtension;
+    rpcExtensions = myExplicitProviderExtensions;
+  };
+in bridge
+```
+
+Do **not** pass `shimEnvironment` into `piWithPaseo`: it intentionally refers to
+that package. The shim wrapper pins `shimEnvironment` before launch, while the
+RPC wrapper pins only shared `environment`. Launcher/RPC-extension validation
+is lazy on the corresponding wrapper outputs, not the constructor attrset.
 
 ## Boundaries and precedence
 
