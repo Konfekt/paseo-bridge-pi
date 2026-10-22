@@ -140,8 +140,12 @@ is lazy on the corresponding wrapper outputs, not the constructor attrset.
   These booleans accept `1/true/on` and `0/false/off` (case-insensitive); unset or
   unrecognized values use `true`. Legacy truthy `PI_PASEO_BRIDGE_NO_IMPORT` and
   `PI_PASEO_BRIDGE_NO_TITLE` override the new settings, preserving the old
-  presence semantics even for a string value of `0`. Disabling import does not
-  prevent adoption of an already assigned Paseo agent (fork/root handoff).
+  presence semantics even for a string value of `0`. `generateTitles = false`
+  prevents model-generated titles (and their model cost), but still synchronizes
+  an existing Pi session name without a model call. Legacy `NO_TITLE` retains its
+  stronger behavior, disabling both generation and existing-name synchronization.
+  Disabling import does not prevent adoption of an already assigned Paseo agent
+  (fork/root handoff).
 - RPC always disables extension discovery with `--no-extensions` (early RPC
   workaround) and explicitly loads permission-gate, bridge, then the supplied
   provider extensions. The caller must supply a real permission-gate extension
@@ -176,7 +180,7 @@ is lazy on the corresponding wrapper outputs, not the constructor attrset.
 | --- | --- |
 | `autoConnect` | `isAutoEnabled()` at new TUI session start; mutable canonical/legacy boolean wins over `PI_PASEO_BRIDGE_DEFAULT_AUTO_CONNECT` |
 | `importSessions` | `isImportEnabled()` gates CLI import/reconnect allocation in `registerWithPaseo`; assigned-agent adoption is preserved |
-| `generateTitles` | `isTitleGenerationEnabled()` gates automatic title generation/sync in `maybeGenerateSessionTitle` |
+| `generateTitles` | `isTitleGenerationEnabled()` gates model title generation in `maybeGenerateSessionTitle`, after cost-free existing-name sync; legacy `NO_TITLE` gates both |
 | `debug` | Existing `PI_PASEO_BRIDGE_DEBUG` enables runtime logging |
 | `paseoPackage` | Pins `PASEO_CLI` used by extension and shim CLI requests |
 | `host` | `PASEO_HOST` selects native CLI import/inspect and connection endpoint |

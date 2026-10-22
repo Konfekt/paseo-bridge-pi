@@ -1630,7 +1630,9 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   // the branch name), so generate one from the first user message.
   async function maybeGenerateSessionTitle(ctx: ExtensionContext): Promise<void> {
     if (titleAttempted || !currentAgentId) return;
-    if (!isTitleGenerationEnabled()) return;
+    // Legacy NO_TITLE disables all automatic title handling. The declarative
+    // generation option only prevents a model call, not cost-free name sync.
+    if (process.env.PI_PASEO_BRIDGE_NO_TITLE) return;
     const existingName = ctx.sessionManager.getSessionName();
     if (existingName) {
       // Session already named (by the user or a previous run) - just make
@@ -1644,6 +1646,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       void setPaseoWorkspaceTitle(agentId, existingName);
       return;
     }
+    if (!isTitleGenerationEnabled()) return;
     const firstMessage = capturedUserEntries(ctx)[0]?.text?.trim();
     if (!firstMessage) {
       debugLog("title generation: no user message in session yet");

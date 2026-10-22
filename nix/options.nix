@@ -41,7 +41,7 @@ in
   generateTitles = mkOption {
     type = types.bool;
     default = true;
-    description = "Allow generated session titles.";
+    description = "Allow model-generated session titles. Existing Pi session names still synchronize without a model call; legacy NO_TITLE disables both.";
   };
   debug = mkOption {
     type = types.bool;
