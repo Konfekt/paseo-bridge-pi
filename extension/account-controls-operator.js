@@ -37,8 +37,26 @@ export function validateAccountControlsEnvelope(value, identity) {
   if (a.length !== b.length || !timingSafeEqual(a, b)) return false;
   if (value.agentId !== identity.agentId || value.sessionId !== identity.sessionId || value.runtimeEpoch !== identity.runtimeEpoch || value.serviceEpoch !== identity.serviceEpoch) return false;
   const r = value.request;
-  if (r.operation === "snapshot") return exactKeys(r, ["operation", "sessionId"]) && r.sessionId === identity.sessionId;
-  if (r.operation === "switch") return exactKeys(r, ["operation", "request"]) && r.request?.protocol === 1 && r.request.expectedSessionId === identity.sessionId && r.request.expectedServiceEpoch === identity.serviceEpoch;
+  if (r.operation === "snapshot") return (exactKeys(r, ["operation", "sessionId"]) || (exactKeys(r, ["operation", "sessionId", "providerId"]) && ["openai", "openai-codex"].includes(r.providerId))) && r.sessionId === identity.sessionId;
+  if (r.operation === "switch") return exactKeys(r, ["operation", "request"]) && r.request?.protocol === 1 && r.request.expectedSessionId === identity.sessionId && r.request.expectedServiceEpoch === identity.serviceEpoch
+    && (r.request.providerId === undefined || ["openai", "openai-codex"].includes(r.request.providerId));
+  if (r.operation === "manage") {
+    if (!exactKeys(r, ["operation", "request"])) return false;
+    const m = r.request;
+    if (!m || typeof m !== "object" || Array.isArray(m) || m.sessionId !== identity.sessionId
+      || (m.providerId !== undefined && !["openai", "openai-codex"].includes(m.providerId))) return false;
+    const fields = {
+      add: ["accountName", "method"], "cancel-login": ["accountName"],
+      rename: ["accountId", "label"], remove: ["accountId"], default: ["accountId"],
+    }[m.operation];
+    if (!Array.isArray(fields) || Object.keys(m).some(key => !["operation", "sessionId", "providerId", ...fields].includes(key))) return false;
+    if (m.operation === "add") return ["oauth", "api_key"].includes(m.method)
+      && (m.accountName === undefined || (typeof m.accountName === "string" && /^[A-Za-z0-9._-]{1,64}$/.test(m.accountName)));
+    if (m.operation === "cancel-login") return typeof m.accountName === "string" && /^[A-Za-z0-9._-]{1,64}$/.test(m.accountName);
+    if (m.operation === "default" && m.accountId === null) return true;
+    return typeof m.accountId === "string" && /^[A-Za-z0-9._-]{1,64}$/.test(m.accountId)
+      && (m.operation !== "rename" || (typeof m.label === "string" && m.label.trim().length > 0 && m.label.length <= 256));
+  }
   return false;
 }
 export function accountControlsCapability() { return randomBytes(32).toString("hex"); }

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Linking, Pressable, Text, View } from "react-native";
-import { SettingsCard, SettingsSection } from "@getpaseo/plugin/client/ui";
+import { SettingsCard, SettingsSection, SettingsSelect } from "@getpaseo/plugin/client/ui";
 import { Metadata, NativeRow, SectionHeading, Surface } from "./presentation";
 import { ScrollView } from "@getpaseo/plugin/client/react-native";
 import {
@@ -14,6 +14,7 @@ import {
 	accountControlsStatusRpc,
 	accountControlsSwitchRpc,
 	type AccountControlsSnapshot,
+	type AccountProviderId,
 } from "../shared/account-controls";
 import type { Colors } from "./activity-dashboard";
 
@@ -308,7 +309,21 @@ const locks = new Map<
 	}
 >();
 let sequence = 0;
-function AccountSection({
+type AccountSectionProps = {
+  agentId: string; workspaceId: string; hostId: string; colors: Colors;
+  onBinding: (selection: Selection) => void;
+};
+function AccountSection(props: AccountSectionProps) {
+  const [providerId, setProviderId] = useState<AccountProviderId>("openai");
+  return <View style={{ gap: 8 }}>
+    <SettingsSelect label="Provider" value={providerId} onValueChange={setProviderId}
+      options={[{label:"OpenAI",value:"openai"},{label:"OpenAI Codex",value:"openai-codex"}]} />
+    <Metadata colors={props.colors}>Account selections are independent. Choose a model from the matching provider to use its account.</Metadata>
+    <ProviderAccountSection key={`${props.agentId}/${providerId}`} {...props} providerId={providerId} />
+  </View>;
+}
+function ProviderAccountSection({
+  providerId,
 	agentId,
 	workspaceId,
 	hostId,
@@ -320,6 +335,7 @@ function AccountSection({
 	hostId: string;
 	colors: Colors;
 	onBinding: (s: Selection) => void;
+  providerId: AccountProviderId;
 }) {
 	const status = useRpc(accountControlsStatusRpc),
 		change = useRpc(accountControlsSwitchRpc);
@@ -337,10 +353,10 @@ function AccountSection({
 			: undefined,
 	);
 	const query = useQuery({
-		queryKey: ["pi-account-controls", hostId, agentId, workspaceId],
+		queryKey: ["pi-account-controls", hostId, agentId, workspaceId, providerId],
 		queryFn: async () => {
 			const n = ++sequence;
-			const d = await status({ agentId, workspaceId });
+			const d = await status({ agentId, workspaceId, ...(providerId === "openai-codex" ? { providerId } : {}) });
 			if (d.available && d.sessionId && d.runtimeEpoch) {
 				if (
 					bound?.sessionId &&
@@ -362,6 +378,7 @@ function AccountSection({
 							d.sessionId,
 							d.runtimeEpoch,
 							d.snapshot.serviceEpoch,
+              providerId,
 						),
 						l = locks.get(k);
 					if (
@@ -393,6 +410,7 @@ function AccountSection({
 				bound!.sessionId,
 				bound!.runtimeEpoch,
 				raw.serviceEpoch,
+        providerId,
 			)
 		: undefined;
 	const lock = lk ? locks.get(lk) : undefined;
@@ -440,6 +458,7 @@ function AccountSection({
 					bound!.sessionId,
 					bound!.runtimeEpoch,
 					fresh.serviceEpoch,
+          providerId,
 				) !== c.key ||
 				(c.id !== null && !fresh.accounts.some((a) => a.id === c.id))
 			) {
@@ -464,6 +483,7 @@ function AccountSection({
 						expectedSessionId: bound!.sessionId,
 						expectedServiceEpoch: fresh.serviceEpoch,
 						expectedSelectionRevision: fresh.selectionRevision,
+            ...(providerId === "openai-codex" ? { providerId } : {}),
 						accountId: c.id,
 					},
 				});

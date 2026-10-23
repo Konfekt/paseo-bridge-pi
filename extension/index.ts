@@ -1154,13 +1154,25 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       async accountControls(request: any) {
         const service = activeAccountControlsService(), identity = activeAccountControlsDescriptor(), t = transport, ctx = latestCtx;
         if (!service || !identity || !t || !ctx) throw new Error("Account-controls service unavailable or stale");
+        const assertCurrent = () => {
+          if (transport !== t || latestCtx !== ctx || (globalThis as any).__paeAccountControlsV1 !== service || activeAccountControlsService() !== service || !t.connected
+            || currentAgentId !== identity.agentId || currentSessionFile !== t.sessionFile || ctx.sessionManager.getSessionId() !== identity.sessionId || t.operatorEpoch !== identity.runtimeEpoch)
+            throw new Error("Account-controls identity changed during request");
+        };
+        // An older producer can ignore extra fields. Never let a Codex mutation
+        // fall through to that producer's OpenAI-only management implementation.
+        if ((request?.operation === "switch" || request?.operation === "manage") && request.request?.providerId === "openai-codex") {
+          const snapshot = await service.getSnapshot({ sessionId: identity.sessionId, providerId: "openai-codex" });
+          assertCurrent();
+          if (snapshot?.providerId !== "openai-codex" || !snapshot.supportedProviders?.includes("openai-codex") || snapshot.sessionId !== identity.sessionId || snapshot.serviceEpoch !== identity.serviceEpoch)
+            throw new Error("Codex account controls require a provider-aware Pi account service. Reload Pi.");
+        }
         let result: unknown;
-        if (request?.operation === "snapshot" && request.sessionId === identity.sessionId) result = await service.getSnapshot({ sessionId: identity.sessionId });
+        if (request?.operation === "snapshot" && request.sessionId === identity.sessionId && (request.providerId === undefined || request.providerId === "openai" || request.providerId === "openai-codex")) result = await service.getSnapshot({ sessionId: identity.sessionId, ...(request.providerId === undefined ? {} : { providerId: request.providerId }) });
         else if (request?.operation === "switch" && request.request?.expectedSessionId === identity.sessionId && request.request?.expectedServiceEpoch === identity.serviceEpoch) result = await service.switchAccount(request.request);
         else if (request?.operation === "manage" && request.request?.sessionId === identity.sessionId) result = await service.manageAccount(request.request);
         else throw new Error("Invalid account-controls operation");
-        if (transport !== t || latestCtx !== ctx || (globalThis as any).__paeAccountControlsV1 !== service || activeAccountControlsService() !== service || !t.connected
-          || currentAgentId !== identity.agentId || currentSessionFile !== t.sessionFile || ctx.sessionManager.getSessionId() !== identity.sessionId || t.operatorEpoch !== identity.runtimeEpoch) throw new Error("Account-controls identity changed during request");
+        assertCurrent();
         return result;
       },
       foregroundTasksIdentity() {
