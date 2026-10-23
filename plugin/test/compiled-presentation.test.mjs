@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
+import { cp, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -13,7 +15,7 @@ const jsx = (type, props) => ({ type, props: props ?? {} });
 let slots = [], cursor = 0;
 const clipboard = [];
 const load = name => {
-  if (name === 'react') return { useState(initial) { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], value => { slots[i] = value; }]; } };
+  if (name === 'react') return { useState(initial) { const i = cursor++; if (!(i in slots)) slots[i] = typeof initial === 'function' ? initial() : initial; return [slots[i], value => { slots[i] = value; }]; } };
   if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx };
   if (name === 'react-native') return { View: 'View', Text: 'Text', Pressable: 'Pressable' };
   if (name === '@getpaseo/plugin/client/react-native') return { ScrollView: 'ScrollView', copyText: async text => { clipboard.push(text); } };
@@ -23,6 +25,47 @@ const components = (0, eval)(clientBundle)(load);
 const render = (Component, props, reset = true) => { if (reset) slots = []; cursor = 0; return Component(props); };
 const style = value => Object.assign({}, ...[value].flat(Infinity).filter(Boolean));
 const nodes = value => Array.isArray(value) ? value.flatMap(nodes) : !value || typeof value !== 'object' ? [] : typeof value.type === 'function' ? nodes(value.type(value.props)) : [value, ...nodes(value.props.children)];
+test('compiled Goals uses the same action-row chrome as Agents and Jobs without altering actions', async t => {
+  const fixture = await mkdtemp(resolve(tmpdir(),'native-goal-row-'));
+  t.after(() => rm(fixture,{recursive:true,force:true}));
+  const source = fileURLToPath(new URL('../',import.meta.url));
+  for (const directory of ['client','shared']) await cp(resolve(source,directory),resolve(fixture,directory),{recursive:true});
+  await writeFile(resolve(fixture,'index.client.tsx'),'export { WorkflowsPanel } from "./client/workflows";');
+  const {clientBundle} = await compilePlugin({client:resolve(fixture,'index.client.tsx')});
+  const reply = {available:true,sessionId:'fixture-session',runtimeEpoch:'fixture-epoch',snapshot:{serviceEpoch:'fixture-service',goal:null,idle:true,busy:false,capabilities:{createPausedGoal:true},completedGoals:[],limits:{},worktrees:[]}};
+  const calls=[];
+  const localLoad = name => {
+    if(name==='react') { const react=load(name); return {...react,useEffect(){},useRef:initial=>react.useState(()=>({current:initial}))[0]}; }
+    if(name==='@getpaseo/plugin') return {defineRpc:contract=>contract};
+    if(name==='@getpaseo/plugin/client') return {useRpc:contract=>async input=>{calls.push({name:contract.name,input}); return reply;}};
+    if(name==='@getpaseo/plugin/client/ui') return {SettingsSection:'SettingsSection',SettingsCard:'SettingsCard',SettingsSelect:'SettingsSelect'};
+    if(name==='@getpaseo/plugin/client/react-native') return {ScrollView:'ScrollView',TextInput:'TextInput'};
+    if(name==='@tanstack/react-query') return {useQuery:options=>({data:reply,isPending:false,isError:false,isFetching:false,refetch:()=>options.queryFn()})};
+    return load(name);
+  };
+  const {WorkflowsPanel}=(0,eval)(clientBundle)(localLoad);
+  const props={agentId:'agent',workspaceId:'workspace',host:{id:'host'},theme:{colors:palettes[0]}};
+  slots=[];
+  const draw=()=>{cursor=0;return nodes(WorkflowsPanel(props));};
+  let all=draw();
+  const connect=all.find(n=>n.type==='Pressable' && n.props.accessibilityLabel==='Connect current session');
+  assert.ok(connect); connect.props.onPress(); await new Promise(resolve=>setImmediate(resolve));
+  all=draw();
+  const objective=all.find(n=>n.type==='TextInput' && n.props.accessibilityLabel==='New goal');
+  assert.ok(objective); objective.props.onChangeText('Keep the existing goal action');
+  all=draw();
+  const create=all.find(n=>n.type==='Pressable' && n.props.accessibilityLabel==='Create');
+  assert.ok(create); assert.equal(create.props.disabled,false);
+  const normal=style(create.props.style({pressed:false}));
+  assert.equal(normal.width,'100%'); assert.equal(normal.minHeight,44);
+  assert.equal(normal.backgroundColor,'transparent'); assert.equal(normal.borderWidth,undefined);
+  assert.equal(style(create.props.style({pressed:true})).backgroundColor,palettes[0].surface2);
+  create.props.onPress(); await new Promise(resolve=>setImmediate(resolve));
+  const control=calls.find(c=>c.name==='workflows_control');
+  assert.ok(control); assert.equal(control.input.request.action,'goal.create_paused');
+  assert.equal(control.input.request.objective,'Keep the existing goal action');
+});
+
 const palettes = [
   { foreground: '#eeeeee', foregroundMuted: '#999999', surface0: '#151619', surface1: '#1d1e22', surface2: '#28292d', border: '#333438', statusDanger: '#ef8888' },
   { foreground: '#202124', foregroundMuted: '#6b6e76', surface0: '#ffffff', surface1: '#f7f7f8', surface2: '#ededf0', border: '#dddddf', statusDanger: '#b73030' },
