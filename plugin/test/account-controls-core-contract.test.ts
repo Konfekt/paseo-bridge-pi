@@ -10,7 +10,8 @@ test("bridge mirror covers snapshots from the real core implementation and its c
  const owner:any={sessionId:"core-session",signal:new AbortController().signal,selections:{openai:null},results:new Map(),pendingSyncTasks:new Set(),context:{isIdle:()=>true},switchReserved:0,openAIRequestCount:0,selectionRevisions:new Map()};
  const store:any={readAsync:async()=>({providers:{}})};
  const ctx:any={modelRegistry:{getProvider:()=>({getModels:()=>[{id:"gpt"}]}),getProviderAuthStatus:()=>({configured:true}),isUsingOAuth:()=>true}};
- owner.context={...ctx,isIdle:()=>true};
+ owner.sessionManager={getSessionId:()=>owner.sessionId};
+ owner.context={...ctx,isIdle:()=>true,sessionManager:owner.sessionManager};
  const coreSnapshot=await createAccountControlsSnapshot(owner,store,"core-epoch");
  assert.equal(coreSnapshot.usage.effectiveCredential,"chatgpt-grant-configured");
  assert.equal(coreSnapshot.usage.status,"local-binding-confirmed");

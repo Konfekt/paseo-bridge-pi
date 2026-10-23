@@ -70,17 +70,28 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
   const ui = renderer();
   const calls = [], queries = [];
   let rpcResponse = async () => ({ available: false });
+  let workAgents;
+  const pillUpdates = [];
   const load = name => {
     if (name === '@getpaseo/plugin') return { defineRpc: contract => contract };
     if (name === '@getpaseo/plugin/client') return { useRpc: contract => async input => { calls.push({ name: contract.name, input }); return {}; } };
     if (name === '@getpaseo/plugin/client/ui') return { SettingsAction: 'SettingsAction', SettingsSection: 'SettingsSection', SettingsRow: 'SettingsRow', SettingsToggle: 'SettingsToggle' };
     if (name === '@getpaseo/plugin/client/react-native') return { ScrollView: 'ScrollView', Icon: 'Icon', TextInput: 'TextInput' };
-    if (name === 'react-native') return { View: 'View', Text: 'Text', Pressable: 'Pressable' };
+    if (name === 'react-native') return { View: 'View', Text: 'Text', Pressable: 'Pressable',
+      Animated: { Value: class { interpolate() { return 'rotation'; } }, View: 'AnimatedView' },
+      Easing: { linear: value => value },
+      AccessibilityInfo: { isReduceMotionEnabled: async () => true, addEventListener: () => ({ remove() {} }) },
+    };
     if (name === 'react/jsx-runtime') return { jsx: ui.jsx, jsxs: ui.jsx, Fragment: 'Fragment' };
-    if (name === 'react') return { ...ui.hooks, createElement: (type, props, ...children) => ui.jsx(type, { ...props, ...(children.length ? { children } : {}) }, props?.key) };
+    if (name === 'react') return { ...ui.hooks, useLayoutEffect: ui.hooks.useEffect, createElement: (type, props, ...children) => ui.jsx(type, { ...props, ...(children.length ? { children } : {}) }, props?.key) };
     if (name === '@tanstack/react-query') return { useQuery(options) {
       queries.push(options);
-      return { data: options.queryKey[0] === 'harness-status' ? { available: false } : undefined, isPending: false, isError: false, refetch() {} };
+      const key = options.queryKey;
+      const data = workAgents === undefined ? (key[0] === 'harness-status' ? { available: false } : undefined)
+        : key[0] === 'harness-status' ? { available: true, sessionId: 's', runtimeEpoch: 'e' }
+        : key[0] === 'harness-list' ? { state: 'available', items: key[1] === 'subagents' ? workAgents : [] }
+        : undefined;
+      return { data, isPending: false, isError: false, refetch() {} };
     }, useMutation() { return { isPending: false, mutate() { throw Error('Unexpected mutation'); } }; } };
     return require(name);
   };
@@ -92,7 +103,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
       addScreen: () => () => {}, openScreen: value => screens.push(value),
       addWorkspacePanel: panel => { panels.push(panel); return () => {}; },
       addHeaderButton: () => ({ update() {}, remove() {} }),
-      addComposerPill: pill => { const registration = { ...pill, update() {}, remove() { this.removed = true; } }; pills.push(registration); return registration; },
+      addComposerPill: pill => { const registration = { ...pill, update(value) { pillUpdates.push(value); }, remove() { this.removed = true; } }; pills.push(registration); return registration; },
       openPanel: (id, options) => opened.push({ id, options }),
       rpc: async (contract, input) => { calls.push({ name: contract.name, input }); return rpcResponse(contract, input); },
     });
@@ -112,6 +123,29 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
   const selected = tree => nodes(tree).find(node => node.props?.accessibilityRole === 'tab' && node.props.accessibilityState.selected)?.props.children.props.children;
   const scroll = tree => nodes(tree).find(node => node.type === 'ScrollView');
   try {
+    const icon = pill(first, 'a').button.icon;
+    const iconProps = { ...props, context: 'agent', agentId: 'a', size: 16, color: '#fff' };
+    workAgents = [
+      { taskId: 'running', status: 'running', reaped: false },
+      ...Array.from({ length: 4 }, (_, i) => ({ taskId: `idle-${i}`, status: 'completed', reaped: false })),
+      { taskId: 'reaped', status: 'completed', reaped: true },
+    ];
+    let indicator = ui.render(icon, iconProps);
+    assert.equal(pillUpdates.at(-1).label, '1 subagent', 'spinner counts only running agents, not four retained idle agents');
+    assert.ok(!nodes(indicator).some(n => n.props?.accessibilityLabel === 'Idle agents'));
+    workAgents[0].status = 'completed';
+    indicator = ui.render(icon, iconProps);
+    assert.equal(pillUpdates.at(-1).label, '5 subagents', 'green dot counts all retained idle agents, excluding reaped');
+    assert.ok(nodes(indicator).some(n => n.props?.accessibilityLabel === 'Idle agents'));
+    workAgents[0].status = 'pending';
+    workAgents[1].status = 'starting';
+    ui.render(icon, iconProps);
+    assert.equal(pillUpdates.at(-1).label, '2 subagents', 'pending and starting workers count as running');
+    workAgents = [];
+    ui.render(icon, iconProps);
+    assert.equal(pillUpdates.at(-1).label, 'Work');
+    workAgents = undefined;
+    ui.unmount();
     assert.match(text(render()), /Select Work/);
     assert.equal(queries.length, 0, 'unbound native tab never queries an arbitrary agent');
     click(first, 'a'); click(first, 'a'); click(first, 'b');

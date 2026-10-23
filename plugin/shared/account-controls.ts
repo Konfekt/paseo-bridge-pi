@@ -7,7 +7,7 @@ export type AccountProviderId = z.infer<typeof accountProviderSchema>;
 const account = z.object({ id: z.string().min(1).max(256), label: z.string().min(1).max(256), authKind: z.enum(["oauth", "api-key"]) }).strict();
 export const accountControlsSnapshotSchema = z.object({
   protocol: z.literal(1), serviceEpoch: z.string().min(1).max(256), selectionRevision: z.number().int().nonnegative(),
-  sessionId: z.string().min(1).max(256), providerId: accountProviderSchema.optional(), supportedProviders: z.array(accountProviderSchema).max(2).optional(), accounts: z.array(account).max(100), currentAccountId: z.string().min(1).max(256).nullable(),
+  sessionId: z.string().min(1).max(256), providerId: accountProviderSchema.optional(), supportedProviders: z.array(accountProviderSchema).max(2).optional(), pendingAccountNames: z.array(z.string().min(1).max(64)).max(20).optional(), accounts: z.array(account).max(100), currentAccountId: z.string().min(1).max(256).nullable(),
   defaultSelected: z.boolean(), activationStatus: z.enum(["active", "inactive", "activation-pending", "activation-failed"]),
   busy: z.boolean(), canSwitch: z.boolean(),
   usage: z.object({ effectiveCredential: z.enum(["api-key-configured", "chatgpt-grant-configured", "chatgpt-grant-matched-refreshed", "unavailable", "unknown"]),

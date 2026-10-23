@@ -25,11 +25,13 @@ test('compiled contribution preserves Pi pills, isolates installations and ignor
     const registrations = [];
     const calls = [];
     const client = {
-      paseo: { agents: { list: async options => {
+      paseo: { config: { get: async () => ({ config: { plugins: { 'paseo-accounts': { enabled: true } } } }) }, agents: { list: async options => {
         signal = options.signal;
         return { subscription: { subscribe: value => { observer ??= value; } } };
       } } },
       rpc: (contract, input) => new Promise(resolve => calls.push({ contract, input, resolve })),
+      addScreen: () => () => {},
+      openScreen() {},
       addWorkspacePanel: () => () => {},
       addComposerPill: input => {
         const registration = { input, updates: [], removed: false,

@@ -163,6 +163,8 @@ test("compiled Workflows controls use the private engine, explicit confirmations
 		).default({
 			handle: (contract, handler) =>
 				handlers.set(contract.name, { contract, handler }),
+			registerUsageSource: () => () => {},
+			before: () => () => {},
 		});
 		let wrongWorkspace = false,
 			loseReply = false;
@@ -293,12 +295,15 @@ test("compiled Workflows controls use the private engine, explicit confirmations
 		stop = (0, eval)(clientBundle)(load).default({
 			rpc: async () => ({ available: false }),
 			paseo: {
+				config: { get: async () => ({ config: { plugins: { "paseo-accounts": { enabled: true } } } }) },
 				agents: {
 					list: async () => ({
 						subscription: { subscribe: (s) => observers.push(s) },
 					}),
 				},
 			},
+			addScreen: () => () => {},
+			openScreen() {},
 			addWorkspacePanel: (p) => {
 				panels.set(p.id, p);
 				return () => panels.delete(p.id);

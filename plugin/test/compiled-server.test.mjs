@@ -47,7 +47,7 @@ test('compiled plugin backend operates the real bridge without prompt dispatch o
     return require(name);
   };
   const contribute = (0, eval)(serverBundle)(load).default;
-  const cleanup = contribute({ handle: (contract, handler) => handlers.set(contract.name, { contract, handler }) });
+  const cleanup = contribute({ handle: (contract, handler) => handlers.set(contract.name, { contract, handler }), registerUsageSource: () => () => {}, before: () => () => {} });
   let descriptor;
   try {
     transport.bind({

@@ -131,6 +131,8 @@ test("compiled BTW UI → compiled server → private socket → copied side eng
 		backend({
 			handle: (contract, handler) =>
 				handlers.set(contract.name, { contract, handler }),
+			registerUsageSource: () => () => {},
+			before: () => () => {},
 		});
 		let wrongWorkspace = false,
 			loseReply = false;
@@ -253,12 +255,15 @@ test("compiled BTW UI → compiled server → private socket → copied side eng
 		stop = contribute({
 			rpc: async () => ({ available: false }),
 			paseo: {
+				config: { get: async () => ({ config: { plugins: { "paseo-accounts": { enabled: true } } } }) },
 				agents: {
 					list: async () => ({
 						subscription: { subscribe: (s) => subscriptions.push(s) },
 					}),
 				},
 			},
+			addScreen: () => () => {},
+			openScreen() {},
 			addWorkspacePanel: (p) => {
 				panels.set(p.id, p);
 				return () => panels.delete(p.id);

@@ -37,8 +37,8 @@ test('compiled Tasks replaces three pills, lazily reports category attention and
   };
   const contribute=(0,eval)(clientBundle)(load).default;
   const cleanup=contribute({
-    paseo:{agents:{list:async()=>({subscription:{subscribe:observer=>observers.push(observer)}})}},
-    addWorkspacePanel:()=>()=>{},addHeaderButton:()=>({update(){},remove(){}}), openPanel:(id,target)=>opened.push({id,target}),
+    paseo:{config:{get:async()=>({config:{plugins:{'paseo-accounts':{enabled:true}}}})},agents:{list:async()=>({subscription:{subscribe:observer=>observers.push(observer)}})}},
+    addScreen:()=>()=>{},openScreen(){},addWorkspacePanel:()=>()=>{},addHeaderButton:()=>({update(){},remove(){}}), openPanel:(id,target)=>opened.push({id,target}),
     addComposerPill: pill=>{const registration={...pill,updates:[],removed:false,update(value){assert.equal(this.removed,false);this.updates.push(value);},remove(){this.removed=true;}};pills.push(registration);return registration;},
     rpc:async(contract,input)=>{calls.push({name:contract.name,input});return {available:false};},
   });

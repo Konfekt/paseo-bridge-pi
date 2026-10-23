@@ -183,6 +183,7 @@ async function selection(agentId: string, provider: "openai" | "openai-codex" = 
 		await callAccountControls(descriptor, {
 			operation: "snapshot",
 			sessionId: descriptor.sessionId,
+			...(provider === "openai-codex" ? { providerId: provider } : {}),
 		}),
 	);
 	const current = await readAccountControlsDescriptor(agentId);
@@ -194,8 +195,8 @@ async function selection(agentId: string, provider: "openai" | "openai-codex" = 
 	)
 		throw new Error("Selection changed");
 	if (
-		provider === "openai-codex" &&
-		(snapshot.providerId !== "openai-codex" ||
+		(snapshot.providerId ?? "openai") !== provider ||
+		(provider === "openai-codex" &&
 			!snapshot.supportedProviders?.includes("openai-codex"))
 	)
 		throw new Error("Provider selection unavailable");

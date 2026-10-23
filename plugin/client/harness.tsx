@@ -332,6 +332,7 @@ function useWorkSummary({ agentId, workspaceId, host }: JobScope) {
 			available: rows !== undefined,
 			total: rows?.length ?? 0,
 			active: active.length,
+			runningCount: active.filter((row) => ["starting", "launching", "pending", "running"].includes(row.status)).length,
 			running: active.some((row) => ["starting", "launching", "pending", "running"].includes(row.status)),
 			attention: active.some(
 				(row) => row.needsAttention || /waiting|blocked|needs/.test(row.status),
@@ -371,7 +372,7 @@ function MountedWorkIndicator(
 	},
 ) {
 	const summary = useWorkSummary(props);
-	const agents = summary.agents.active,
+	const agents = summary.agents.runningCount || summary.agents.active,
 		jobs = summary.jobs.active + summary.foreground.active;
 	const count = agents || jobs;
 	const attention = agents

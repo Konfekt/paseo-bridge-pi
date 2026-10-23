@@ -57,7 +57,7 @@ async function fixture({ provider = 'openai-codex', defaultSelected = false, acc
       accounts: [{ id: accountId, label: 'Work', authKind: 'oauth' }], currentAccountId: defaultSelected ? null : accountId,
       defaultSelected, activationStatus: defaultSelected ? 'inactive' : 'active', busy: false, canSwitch: true,
       usage: { effectiveCredential: defaultSelected ? 'chatgpt-grant-configured' : 'chatgpt-grant-matched-refreshed', status: 'local-binding-confirmed', remoteEntitlement: 'not-queried', accountKey: current.accountKey ?? providerKey,
-        ...(includeOpenai ? { nativeRegistrationKey: hash(JSON.stringify(['openai-native', 'native-client', 'native-subject'])), nativeRegistrationVersion: 1 } : {}), settingsUrl: 'https://chatgpt.com/settings/usage' },
+        ...(includeOpenai && activeProvider === 'openai' ? { nativeRegistrationKey: hash(JSON.stringify(['openai-native', 'native-client', 'native-subject'])), nativeRegistrationVersion: 1 } : {}), settingsUrl: 'https://chatgpt.com/settings/usage' },
       ...current,
     };
   };
@@ -67,6 +67,7 @@ async function fixture({ provider = 'openai-codex', defaultSelected = false, acc
       data += chunk.toString();
       const end = data.indexOf('\n'); if (end < 0) return;
       const request = JSON.parse(data.slice(0, end));
+      activeProvider = request.request?.providerId ?? 'openai';
       const result = baseSnapshot();
       socket.end(`${JSON.stringify({ v: 1, type: 'account_controls', id: request.id, success: true, agentId: 'agent', sessionId: 'session-1', runtimeEpoch: '123e4567-e89b-42d3-a456-426614174000', serviceEpoch: 'service-1', data: result })}\n`);
     });
@@ -132,6 +133,13 @@ test('Codex refuses missing/wrong provider metadata and mismatched account or su
     assert.notEqual((await f.fetchUsage(item.input)).status, 'available');
     assert.deepEqual(f.calls, []);
   }
+});
+
+test('OpenAI rejects an explicitly mismatched provider even if native registration metadata is present', async t => {
+  const f = await fixture({ includeOpenai:true, snapshots:[{providerId:'openai-codex'}] }); t.after(f.close);
+  const item = await f.discover('openai/gpt-test');
+  assert.notEqual((await f.fetchUsage(item.input)).status,'available');
+  assert.deepEqual(f.calls,[]);
 });
 
 test('stale Codex selection revision/session changes invalidate usage after discovery', async t => {

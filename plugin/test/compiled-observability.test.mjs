@@ -188,6 +188,7 @@ test("native Activity dashboard shows every section, accessible meters and expan
 	const stop = contribute({
 		rpc: async () => ({ available: false }),
 		paseo: {
+			config: { get: async () => ({ config: { plugins: { "paseo-accounts": { enabled: true } } } }) },
 			agents: {
 				list: async (o) => {
 					signal = o.signal;
@@ -196,6 +197,8 @@ test("native Activity dashboard shows every section, accessible meters and expan
 				},
 			},
 		},
+		addScreen: () => () => {},
+		openScreen() {},
 		addWorkspacePanel: (p) => {
 			if (p.id === "pi-activity") panel = p;
 			return () => { if (p.id === "pi-activity") removed = true; };
