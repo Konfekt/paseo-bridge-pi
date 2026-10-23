@@ -193,12 +193,10 @@ async function selection(agentId: string, provider: "openai" | "openai-codex" = 
 		snapshot.serviceEpoch !== descriptor.serviceEpoch
 	)
 		throw new Error("Selection changed");
-	const selectedProvider = snapshot.providerId ?? "openai";
 	if (
-		selectedProvider !== provider ||
-		(provider === "openai-codex" &&
-			(snapshot.providerId !== "openai-codex" ||
-				!snapshot.supportedProviders?.includes("openai-codex")))
+		provider === "openai-codex" &&
+		(snapshot.providerId !== "openai-codex" ||
+			!snapshot.supportedProviders?.includes("openai-codex"))
 	)
 		throw new Error("Provider selection unavailable");
 	if (provider === "openai-codex") {
@@ -520,6 +518,8 @@ const missing = (reason?: UnavailableReason) =>
 /** Read-only, session-selected OAuth quota. Never refreshes or switches credentials. */
 export function registerSessionAccountUsage(server: PluginServerContext) {
 	const locators = new Map<string, Locator>();
+	const locatorKey = (agentId: string, provider: Locator["provider"]) =>
+		JSON.stringify([agentId, provider]);
 	server.registerUsageSource({
 		id: "pi-selected-openai",
 		label: "OpenAI / Codex",
@@ -552,7 +552,8 @@ export function registerSessionAccountUsage(server: PluginServerContext) {
 			}
 			const fingerprint =
 				found?.fingerprint ?? `unavailable:${dir}:${reason ?? "binding"}`;
-			const previous = locators.get(agentId);
+			const key = locatorKey(agentId, provider);
+			const previous = locators.get(key);
 			const locator: Locator =
 				previous?.fingerprint === fingerprint
 					? previous
@@ -566,8 +567,8 @@ export function registerSessionAccountUsage(server: PluginServerContext) {
 							reason,
 						};
 			locator.touched = Date.now();
-			locators.delete(agentId);
-			locators.set(agentId, locator);
+			locators.delete(key);
+			locators.set(key, locator);
 			while (locators.size > 1000)
 				locators.delete(locators.keys().next().value!);
 			return [
@@ -583,8 +584,10 @@ export function registerSessionAccountUsage(server: PluginServerContext) {
 		async fetch(raw): Promise<UsageReport> {
 			try {
 				const input = inputSchema.parse(raw);
-				const locator = locators.get(input.agentId);
-				if (!locator || locator.handle !== input.handle) return missing();
+				const locator = (["openai", "openai-codex"] as const)
+					.map((provider) => locators.get(locatorKey(input.agentId, provider)))
+					.find((item) => item?.handle === input.handle);
+				if (!locator) return missing();
 				if (!locator.verified) return missing(locator.reason);
 				const check = async () => {
 					const current =
@@ -592,7 +595,7 @@ export function registerSessionAccountUsage(server: PluginServerContext) {
 							? await codexBinding(input.agentId, locator.dir)
 							: await binding(input.agentId, locator.dir);
 					if (
-						locators.get(input.agentId) !== locator ||
+						locators.get(locatorKey(input.agentId, locator.provider)) !== locator ||
 						current.fingerprint !== locator.fingerprint
 					)
 						throw new Error("Binding changed");
