@@ -54,7 +54,7 @@ pkgs.runCommand "paseo-bridge-pi-native-rpc"
       exit 1
     fi
     # Do not count arbitrary startup/fixture failures as mutation evidence.
-    grep -F 'not ok 2 - native bridge routes session stats' "$out/mutant.tap"
+    grep -E 'not ok [0-9]+ - native bridge routes session stats' "$out/mutant.tap"
     grep -F 'Unknown command: get_session_stats' "$out/mutant.tap"
     echo 'Production integration passed; dropped-dispatch mutant failed its named case.'
   ''

@@ -14,16 +14,25 @@ import { setTimeout as delay } from "node:timers/promises";
 // Model streams are forbidden; the ordinary fixture prompt is consumed by input.
 const executable = process.env.BRIDGE_NATIVE_PI;
 const root = fileURLToPath(new URL("../", import.meta.url));
-const fixtureProvider = `import { appendFileSync, writeFileSync } from "node:fs";
+const fixtureProvider = `import { appendFileSync, writeFileSync, existsSync } from "node:fs";
 export default function(pi) {
+  let syntheticCompactionAttempt = 0;
   pi.on("session_start", event => appendFileSync(process.env.OFFLINE_LIFECYCLE_FILE, event.reason + "\\n"));
   pi.on("agent_start", () => appendFileSync(process.env.OFFLINE_LIFECYCLE_FILE, "AGENT_STARTED\\n"));
+  pi.on("session_before_compact", event => {
+    appendFileSync(process.env.OFFLINE_LIFECYCLE_FILE, "SYNTHETIC_COMPACTION:" + event.reason + "\\n");
+    syntheticCompactionAttempt += 1;
+    if (syntheticCompactionAttempt === 2) return { cancel: true };
+    return { compaction: { summary: "offline synthetic summary", firstKeptEntryId: event.preparation.firstKeptEntryId, tokensBefore: event.preparation.tokensBefore, details: { offline: true } } };
+  });
   pi.on("input", event => {
-    if (event.text !== "ordinary offline bridge provenance fixture") return;
-    writeFileSync(process.env.OFFLINE_INPUT_RECEIPT, JSON.stringify({
+    if (event.text !== "ordinary offline bridge provenance fixture" && event.text !== "offline remote image fixture") return;
+    const imageProbe = event.text === "offline remote image fixture";
+    writeFileSync(process.env.OFFLINE_INPUT_RECEIPT + (imageProbe ? ".images" : ""), JSON.stringify({
       source: event.source,
       streamingBehavior: event.streamingBehavior ?? null,
       streamingBehaviorIsUndefined: event.streamingBehavior === undefined,
+      ...(imageProbe ? { images: event.images } : {}),
     }));
     return { action: "handled" };
   });
@@ -39,6 +48,47 @@ export default function(pi) {
       contextWindow: 32768, maxTokens: 1024 }))
   });
   pi.registerCommand("offline-fixture-command", { description: "metadata only", handler: async () => {} });
+  pi.registerCommand("offline-fixture-seed-compaction", { description: "seed compactable local history", handler: async (_args, ctx) => {
+    const huge = "local compaction fixture ".repeat(60000);
+    ctx.sessionManager.appendMessage({ role: "user", content: huge, timestamp: Date.now() });
+    ctx.sessionManager.appendMessage({ role: "user", content: huge, timestamp: Date.now() });
+  }});
+  pi.registerCommand("offline-fixture-command", { description: "offline command outcome", handler: async (args, ctx) => {
+    ctx.ui.notify("literal command notice: " + args, "warning");
+    if (args === "fail") throw new Error("literal command failure\\n  detail");
+    if (args === "reload" || args === "reload-dialog") {
+      const pending = args === "reload-dialog" ? globalThis.__piPaseoRemoteUiV1.input("Pending reload fixture", "Answer") : undefined;
+      await ctx.reload();
+      await pending;
+      return;
+    }
+    const release = process.env.OFFLINE_INPUT_RECEIPT + ".command-release";
+    while (!existsSync(release)) await new Promise(resolve => setTimeout(resolve, 10));
+    ctx.ui.notify("settled command notice: " + args, "info");
+    writeFileSync(process.env.OFFLINE_INPUT_RECEIPT + ".command", JSON.stringify({ args }));
+  }});
+  pi.registerCommand("offline-fixture-seed-history", { description: "seed local history", handler: async (_args, ctx) => {
+    const sm = ctx.sessionManager;
+    const first = sm.appendMessage({ role: "user", content: "original user text", timestamp: Date.now() });
+    sm.appendContextEdit(first, { content: "projected replacement text" });
+    sm.appendCustomMessageEntry("offline-notice", "visible notice", true);
+    const omitted = sm.appendMessage({ role: "user", content: "deleted user text", timestamp: Date.now() });
+    sm.appendContextEdit(omitted, null);
+    writeFileSync(process.env.OFFLINE_LIFECYCLE_FILE + ".history", JSON.stringify({ first, omitted }));
+  }});
+  pi.registerCommand("offline-fixture-dialog", { description: "offline dialog probe", handler: async (args) => {
+    const remote = globalThis.__piPaseoRemoteUiV1;
+    if (!remote) throw new Error("Offline remote UI global missing");
+    const method = args.trim();
+    if (!remote.isConnected()) throw new Error("Offline remote UI disconnected");
+    const settings = { paseoQuestionnaire: { v: 1, toolCallId: "fixture-tool", index: 0, input: true } };
+    const value = method === "confirm" ? await remote.confirm("Confirm fixture", "Continue?")
+      : method === "editor" ? await remote.editor("Editor fixture", "Initial text")
+      : method === "correlated" ? await remote.select("Correlated fixture", ["One"], settings)
+      : method === "correlated-input" ? await remote.input("Correlated input", "Literal response", settings)
+      : await remote.input("Input fixture", "Literal response");
+    writeFileSync(process.env.OFFLINE_INPUT_RECEIPT + ".dialog", JSON.stringify({ method, value: value ?? null }));
+  }});
 }`;
 
 function rpc(stream: Socket | NodeJS.ReadableStream, write: (line: string) => void) {
@@ -123,6 +173,26 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
         await delay(50);
       }
     }
+    const dialogs: any[] = [];
+    const extensionNotices: string[] = [];
+    const compactionEvents: any[] = [];
+    const dialogCancellations: string[] = [];
+    let dialogBuffer = "";
+    socket.on("data", chunk => {
+      dialogBuffer += chunk.toString();
+      for (;;) {
+        const end = dialogBuffer.indexOf("\n");
+        if (end < 0) break;
+        const line = dialogBuffer.slice(0, end); dialogBuffer = dialogBuffer.slice(end + 1);
+        try {
+          const event = JSON.parse(line);
+          if (event.type === "extension_ui_request" && ["select", "input", "confirm", "editor"].includes(event.method)) dialogs.push(event);
+          if (event.type === "extension_ui_request" && event.method === "notify" && typeof event.message === "string") extensionNotices.push(event.message);
+          if (event.type === "compaction_start" || event.type === "compaction_end") compactionEvents.push(event);
+          if (event.type === "extension_ui_cancel") dialogCancellations.push(event.id);
+        } catch { /* Other protocol traffic is owned by the RPC fixture. */ }
+      }
+    });
     const bridge = rpc(socket, line => socket!.write(line));
     const ok = async (type: string, fields = {}) => {
       const result = await bridge(type, fields);
@@ -139,6 +209,21 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       const { commands } = await ok("get_commands");
       assert.ok(commands.some((c: any) => c.name === "offline-fixture-command"));
       assert.ok(commands.some((c: any) => c.name === "remote-reload"));
+    });
+    await t.test("native and bridge compaction semantics and explicit capabilities", async () => {
+      const state = await ok("get_state");
+      assert.equal(Object.hasOwn(state, "autoCompactionEnabled"), false, "unknown runtime setting must be omitted");
+      assert.deepEqual(state.bridgeCapabilities, { supportsRewindConversation: false, supportsAutoCompactionControl: false });
+      const nativeCompact = await native("compact");
+      const bridgeCompact = await bridge("compact");
+      assert.equal(nativeCompact.success, false, JSON.stringify(nativeCompact));
+      assert.match(nativeCompact.error, /Nothing to compact/i);
+      assert.equal(bridgeCompact.success, false, JSON.stringify(bridgeCompact));
+      assert.match(bridgeCompact.error, /Nothing to compact/i);
+      const setter = await bridge("set_auto_compaction", { enabled: true });
+      assert.equal(setter.success, false, JSON.stringify(setter));
+      assert.match(setter.error, /unsupported/i);
+      assert.equal((await ok("get_state")).autoCompactionEnabled, undefined);
     });
     await t.test("native bridge routes session stats", async () => {
       const stats = await ok("get_session_stats");
@@ -178,7 +263,7 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
     await t.test("idle bridge prompt reaches actual Pi input as extension provenance without streaming behavior", async () => {
       assert.equal((await ok("get_state")).isStreaming, false);
       const accepted = await ok("prompt", { message: "ordinary offline bridge provenance fixture" });
-      assert.equal(accepted.agentInvoked, true, "bridge delegates the ordinary prompt to Pi");
+      assert.equal(accepted.agentInvoked, false, "Pi's input hook consumed the prompt without starting a model turn");
       const deadline = Date.now() + 4000;
       let receipt: any;
       for (;;) {
@@ -201,6 +286,148 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       assert.ok(!lifecycle.includes("PROVIDER_CALLED"));
       assert.equal((await ok("get_session_stats")).totalMessages, 0);
     });
+    await t.test("prompt, steering and follow-up preserve images through actual Pi input", async () => {
+      const images = [{ type: "image", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==", mimeType: "image/png" }];
+      const receiptPath = path.join(temporary, "input-receipt.json.images");
+      for (const type of ["prompt", "steer", "follow_up"]) {
+        await rm(receiptPath, { force: true });
+        await ok(type, { message: "offline remote image fixture", images });
+        const deadline = Date.now() + 4000;
+        let receipt: any;
+        for (;;) {
+          try { receipt = JSON.parse(await readFile(receiptPath, "utf8")); break; }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            assert.ok(Date.now() < deadline, `${type} must reach Pi input`);
+            await delay(20);
+          }
+        }
+        assert.deepEqual(receipt.images, images, `${type} must preserve attached images`);
+        assert.equal(receipt.source, "extension");
+        assert.equal((await native("abort")).success, true);
+      }
+      const lifecycle = await readFile(path.join(temporary, "lifecycle"), "utf8");
+      assert.ok(!lifecycle.includes("PROVIDER_CALLED"));
+      assert.ok(!lifecycle.includes("AGENT_STARTED"));
+    });
+    await t.test("extension command outcomes and live notices work on every delivery channel", async () => {
+      const release = path.join(temporary, "input-receipt.json.command-release");
+      const receipt = path.join(temporary, "input-receipt.json.command");
+      for (const type of ["prompt", "steer", "follow_up"]) {
+        await rm(release, { force: true }); await rm(receipt, { force: true });
+        let settled = false;
+        const pending = bridge(type, { message: `/offline-fixture-command ${type}` }).then(result => { settled = true; return result; });
+        const deadline = Date.now() + 4000;
+        while (!extensionNotices.includes(`literal command notice: ${type}`)) {
+          assert.ok(Date.now() < deadline, "notification must arrive while command is still awaiting completion");
+          await delay(10);
+        }
+        assert.equal(settled, false);
+        await assert.rejects(readFile(receipt), { code: "ENOENT" });
+        await writeFile(release, "release");
+        const result = await pending;
+        assert.equal(result.success, true);
+        assert.equal(result.data.agentInvoked, false);
+        assert.deepEqual(JSON.parse(await readFile(receipt, "utf8")), { args: type });
+        const failed = await bridge(type, { message: "/offline-fixture-command fail" });
+        assert.equal(failed.success, false);
+        assert.equal(failed.error, "literal command failure\n  detail");
+      }
+      for (const type of ["steer", "follow_up"]) {
+        const rejected = await bridge(type, { message: "/remote-reload" });
+        assert.equal(rejected.success, false);
+        assert.match(rejected.error, /ordinary prompt/);
+      }
+      const lifecycle = await readFile(path.join(temporary, "lifecycle"), "utf8");
+      assert.ok(!lifecycle.includes("PROVIDER_CALLED"));
+      assert.ok(!lifecycle.includes("AGENT_STARTED"));
+    });
+    await t.test("Stop cancels an awaited command RPC without claiming its underlying work stopped", async () => {
+      const release = path.join(temporary, "input-receipt.json.command-release");
+      const receipt = path.join(temporary, "input-receipt.json.command");
+      await rm(release, { force: true }); await rm(receipt, { force: true });
+      const pending = bridge("prompt", { message: "/offline-fixture-command cancel" });
+      const deadline = Date.now() + 4000;
+      while (!extensionNotices.includes("literal command notice: cancel")) {
+        assert.ok(Date.now() < deadline, "command must start before Stop"); await delay(10);
+      }
+      await ok("abort");
+      const canceled = await pending;
+      assert.equal(canceled.success, false);
+      assert.match(canceled.error, /wait aborted.*may still be running/);
+      await assert.rejects(readFile(receipt), { code: "ENOENT" });
+      await writeFile(release, "release local work");
+      for (;;) {
+        try { assert.deepEqual(JSON.parse(await readFile(receipt, "utf8")), { args: "cancel" }); break; }
+        catch (error: any) { if (error.code !== "ENOENT") throw error; }
+        assert.ok(Date.now() < deadline, "local work must remain inspectable after wait cancellation"); await delay(10);
+      }
+      assert.ok(!extensionNotices.includes("settled command notice: cancel"), "settled wait cannot leak later notifications");
+      assert.ok((await ok("get_state")).sessionId);
+    });
+    await t.test("remote dialogs use stock-native frames and a non-destructive editor fallback", async () => {
+      const literal = "  literal {\"x\":1}\nsecond line  ";
+      const cases = [
+        { method: "input", response: { value: literal }, expected: literal },
+        { method: "correlated", response: { value: literal }, expected: literal },
+        { method: "correlated-input", response: { value: literal }, expected: literal },
+        { method: "editor", choice: "Write replacement", response: { value: literal }, expected: literal },
+        { method: "editor", choice: "Keep existing text", response: {}, expected: "Initial text" },
+        { method: "editor", choice: "cancel", response: {}, expected: null },
+        { method: "confirm", response: { confirmed: true }, expected: true },
+        { method: "confirm", response: { confirmed: false }, expected: false },
+        { method: "input", response: { cancelled: true }, expected: null },
+      ];
+      for (const probe of cases) {
+        const receiptPath = path.join(temporary, "input-receipt.json.dialog");
+        await rm(receiptPath, { force: true });
+        const dispatched = ok("prompt", { message: `/offline-fixture-dialog ${probe.method}` });
+        const deadline = Date.now() + 4000;
+        while (!dialogs.length) {
+          if (Date.now() >= deadline) {
+            let started = "not invoked";
+            try { started = await readFile(path.join(temporary, "input-receipt.json.dialog-start"), "utf8"); } catch {}
+            assert.fail(`${probe.method} must publish a native dialog request; start=${started}; stderr=${stderr}`);
+          }
+          await delay(10);
+        }
+        let request = dialogs.shift();
+        if (probe.method === "editor") {
+          assert.equal(request.method, "select");
+          assert.match(request.title, /Current text:\nInitial text/);
+          assert.deepEqual(request.options, ["Keep existing text", "Write replacement"]);
+          socket!.write(JSON.stringify({ type: "extension_ui_response", id: request.id,
+            ...(probe.choice === "cancel" ? { cancelled: true } : { value: probe.choice }) }) + "\n");
+          if (probe.choice === "Write replacement") {
+            while (!dialogs.length) {
+              assert.ok(Date.now() < deadline, "replacement text must use the stock input dialog");
+              await delay(10);
+            }
+            request = dialogs.shift();
+            assert.equal(request.method, "input");
+            socket!.write(JSON.stringify({ type: "extension_ui_response", id: request.id, ...probe.response }) + "\n");
+          }
+        } else {
+          assert.equal(request.method, probe.method === "correlated" ? "select" : probe.method === "correlated-input" ? "input" : probe.method);
+          if (probe.method.startsWith("correlated")) {
+            assert.deepEqual(request.paseoQuestionnaire, { v: 1, toolCallId: "fixture-tool", index: 0, input: true });
+          } else assert.equal(request.paseoQuestionnaire, undefined);
+          socket!.write(JSON.stringify({ type: "extension_ui_response", id: request.id, ...probe.response }) + "\n");
+        }
+        await dispatched;
+        let receipt: any;
+        for (;;) {
+          try { receipt = JSON.parse(await readFile(receiptPath, "utf8")); break; }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            assert.ok(Date.now() < deadline, "dialog must settle its original extension caller");
+            await delay(10);
+          }
+        }
+        assert.deepEqual(receipt, { method: probe.method, value: probe.expected });
+      }
+      assert.ok(!(await readFile(path.join(temporary, "lifecycle"), "utf8")).includes("PROVIDER_CALLED"));
+    });
     await t.test("native remote-reload keeps the isolated Pi and attached bridge alive", async () => {
       const pid = child.pid;
       const before = await ok("get_state");
@@ -221,6 +448,72 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       assert.equal(after.sessionFile, before.sessionFile);
       assert.equal(after.model.id, before.model.id);
       assert.equal((await ok("get_session_stats")).totalMessages, 0);
+      assert.ok(!(await readFile(path.join(temporary, "lifecycle"), "utf8")).includes("PROVIDER_CALLED"));
+    });
+    await t.test("a command-triggered reload settles its old RPC without sending a stale success", async () => {
+      const before = extensionNotices.filter(message => message.startsWith("Pi runtime reloaded.")).length;
+      const response = await bridge("prompt", { message: "/offline-fixture-command reload-dialog" });
+      assert.equal(response.success, false);
+      assert.match(response.error, /runtime reloaded.*outcome is unknown/);
+      const deadline = Date.now() + 4000;
+      while (extensionNotices.filter(message => message.startsWith("Pi runtime reloaded.")).length <= before) {
+        assert.ok(Date.now() < deadline, "replacement binding must resume on the retained socket");
+        await delay(10);
+      }
+      assert.equal(child.exitCode, null);
+      assert.equal(socket!.destroyed, false);
+      const abandoned = dialogs.shift();
+      assert.equal(abandoned?.title, "Pending reload fixture");
+      assert.ok(dialogCancellations.includes(abandoned.id), "reload must dismiss the old native permission by its raw dialog ID");
+      assert.ok((await ok("get_state")).sessionId);
+    });
+    await t.test("history replay and capture follow Pi's canonical projection", async () => {
+      await ok("prompt", { message: "/offline-fixture-seed-history" });
+      const seededAt = Date.now() + 4000;
+      while (Date.now() < seededAt) {
+        try { await readFile(path.join(temporary, "lifecycle.history"), "utf8"); break; }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          await delay(10);
+        }
+      }
+      const ids = JSON.parse(await readFile(path.join(temporary, "lifecycle.history"), "utf8"));
+      const history = await ok("get_messages");
+      assert.deepEqual(history.messages.map((message: any) => message.content), [
+        "projected replacement text", "visible notice",
+      ]);
+      extensionNotices.length = 0;
+      const capturePrompt = ok("prompt", { message: "/paseo_capture_entries" });
+      const deadline = Date.now() + 4000;
+      let payload: any;
+      while (Date.now() < deadline) {
+        const notice = extensionNotices.find(value => value.startsWith("PASEO_ENTRY_CAPTURE "));
+        if (notice) { payload = JSON.parse(notice.slice("PASEO_ENTRY_CAPTURE ".length)); break; }
+        await delay(10);
+      }
+      assert.ok(payload, "capture should emit its native marker payload");
+      assert.deepEqual(payload.treeEntries.map((entry: any) => entry.id), [ids.first, ids.omitted]);
+      assert.deepEqual(payload.contextEntries, [{ id: ids.first, parentId: payload.treeEntries[0].parentId, text: "projected replacement text" }]);
+      await capturePrompt;
+      assert.ok(!(await readFile(path.join(temporary, "lifecycle"), "utf8")).includes("PROVIDER_CALLED"));
+    });
+    await t.test("manual synthetic compaction reports its true result without a provider call", async () => {
+      await ok("prompt", { message: "/offline-fixture-seed-compaction" });
+      const compact = await ok("compact");
+      assert.equal(compact.summary, "offline synthetic summary");
+      assert.equal(compact.details.offline, true);
+      const lifecycle = await readFile(path.join(temporary, "lifecycle"), "utf8");
+      assert.ok(lifecycle.includes("SYNTHETIC_COMPACTION:manual"), lifecycle);
+      assert.ok(!lifecycle.includes("PROVIDER_CALLED"), lifecycle);
+      assert.ok(compactionEvents.some(event => event.type === "compaction_start" && event.reason === "manual"));
+      assert.ok(compactionEvents.some(event => event.type === "compaction_end" && event.reason === "manual" && event.result?.summary === "offline synthetic summary"));
+
+      await ok("prompt", { message: "/offline-fixture-seed-compaction" });
+      const cancelled = await bridge("compact", { customInstructions: "offline-cancel" });
+      assert.equal(cancelled.success, false, JSON.stringify(cancelled));
+      assert.ok(compactionEvents.some(event => event.type === "compaction_end" && event.reason === "manual" && event.aborted === true));
+
+      assert.ok(compactionEvents.some(event => event.type === "compaction_end" && event.reason === "manual" && /Nothing to compact/i.test(event.errorMessage ?? "") && event.aborted === false));
       assert.ok(!(await readFile(path.join(temporary, "lifecycle"), "utf8")).includes("PROVIDER_CALLED"));
     });
   } finally {

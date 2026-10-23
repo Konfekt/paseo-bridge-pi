@@ -21,6 +21,7 @@ import { parseTmuxTarget } from "../shim/tmux-target.js";
 import { paseoImportArgs, importRetryDelay, retryableWorkspaceImportFailure, workspaceIdForPlacement } from "./import-placement.js";
 import { completeSimple } from "@earendil-works/pi-ai";
 import { buildSessionContext, type ExtensionAPI, type ExtensionContext, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import * as sessionManagerApi from "@earendil-works/pi-coding-agent";
 import { BridgeTransport, retainBridgeForReload, takeBridgeAfterReload, discardRetainedBridge } from "./bridge-transport.js";
 import {
   permissionGateOperatorSocketPath,
@@ -38,11 +39,14 @@ import { workflowsSocketPath, removeWorkflowsDescriptor, writeWorkflowsDescripto
 import { isRuntimeReloadCommand, requireIdleReload, validateReloadPrompt } from "./reload-command.js";
 import { abortAndWaitForIdle } from "./abort-dispatch.js";
 import { dispatchPaseoPrompt, isExtensionCommand } from "./prompt-dispatch.js";
+import { remoteUserContent } from "./remote-user-content.js";
 import { dispatchAfterIdlePreflight, IDLE_PREFLIGHT_KEY, IDLE_PROMPT_CANCELLED } from "./idle-preflight.js";
 import { coordinateMirroredSelect } from "./mirrored-select.js";
 import { createProviderReconnectLoop } from "./provider-reconnect.js";
 import { unknownRpcCommandError } from "./rpc-compat.js";
 import { buildSessionStats } from "./session-stats.js";
+import { compactWithResult } from "./compaction-command.js";
+import { buildProjectedHistory, projectedUserCaptures } from "./session-projection.js";
 import { handleSecurityModeRequest } from "./security-mode-operator.js";
 import { featureSnapshot, handleNativeFeatureRequest } from "./native-features.js";
 import { createPaseoWsConnection } from "./paseo-ws.js";
@@ -53,10 +57,14 @@ import { TurnVisibilityProjection } from "./turn-visibility.js";
 import { resolvePaseoChildRuntimeLink } from "./read-only-runtime-link.js";
 import { bridgeSettingsFile, isAutoEnabled, isImportEnabled, isTitleGenerationEnabled, writeBridgeSettings, writeMutableJson } from "./bridge-settings.js";
 
-type RemoteUiSelectOptions = { signal?: AbortSignal };
+type QuestionnaireUiMetadata = { v: 1; toolCallId: string; index: number; input: boolean };
+type RemoteUiSelectOptions = { signal?: AbortSignal; paseoQuestionnaire?: QuestionnaireUiMetadata };
 type RemoteUiBridgeV1 = {
   isConnected(): boolean;
   select(title: string, options: string[], settings?: RemoteUiSelectOptions): Promise<string | undefined>;
+  input(title: string, placeholder?: string, settings?: RemoteUiSelectOptions): Promise<string | undefined>;
+  confirm(title: string, message: string, settings?: RemoteUiSelectOptions): Promise<boolean | undefined>;
+  editor(title: string, prefill?: string, settings?: RemoteUiSelectOptions): Promise<string | undefined>;
   selectMirrored?(
     title: string,
     options: string[],
@@ -65,6 +73,7 @@ type RemoteUiBridgeV1 = {
   ): Promise<string | undefined>;
 };
 type PendingRemoteUiRequest = {
+  method: "select" | "input" | "confirm" | "editor";
   resolve(value: string | undefined): void;
   signal?: AbortSignal;
   abort?: () => void;
@@ -268,6 +277,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   let reloadRequested = false;
   let reloadExecuting = false;
   let commandsInFlight = 0;
+  const pendingCommandReplies = new Map<symbol, (reason: string) => void>();
   let lifecycleClosed = false;
   let preflightAbortController = new AbortController();
   // Stop cancels pending prompt admission without closing the bridge lifetime.
@@ -293,7 +303,8 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   });
   let latestCtx: ExtensionContext | null = null;
   let isCompacting = false;
-  let autoCompactionEnabled = true;
+  // The extension API cannot read or change Pi's live auto-compaction setting.
+  // Do not invent a separate bridge-local setting.
   const importAttempted = new Set<string>();
   let importFailures = 0;
   let importRetryAt = 0;
@@ -371,26 +382,31 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   }
 
   function cancelPendingRemoteUiRequests(): void {
-    for (const id of [...pendingRemoteUiRequests.keys()]) finishRemoteUiRequest(id, undefined);
+    for (const id of [...pendingRemoteUiRequests.keys()]) {
+      send({ type: "extension_ui_cancel", id });
+      finishRemoteUiRequest(id, undefined);
+    }
   }
 
-  function startRemoteSelect(
-    title: string,
-    options: string[],
+  function startRemoteDialog(
+    request: { method: PendingRemoteUiRequest["method"]; title: string; options?: string[]; placeholder?: string; message?: string; prefill?: string; paseoQuestionnaire?: QuestionnaireUiMetadata },
     signal?: AbortSignal,
   ): { id: string; result: Promise<string | undefined> } | null {
     if (!remoteUiConnected() || signal?.aborted) return null;
     const id = crypto.randomUUID();
     const result = new Promise<string | undefined>((resolve) => {
-      const pending: PendingRemoteUiRequest = { resolve, signal };
+      const pending: PendingRemoteUiRequest = { method: request.method, resolve, signal };
       if (signal) {
         pending.abort = () => {
+          // The server can map this raw dialog to a batched form/input request.
+          // Keep the existing WS mirror as a compatibility fallback.
+          send({ type: "extension_ui_cancel", id });
           void resolvePaseoSelect(id, undefined).finally(() => finishRemoteUiRequest(id, undefined));
         };
         signal.addEventListener("abort", pending.abort, { once: true });
       }
       pendingRemoteUiRequests.set(id, pending);
-      send({ type: "extension_ui_request", id, method: "select", title, options });
+      send({ type: "extension_ui_request", id, ...request });
     });
     return { id, result };
   }
@@ -398,10 +414,28 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   const remoteUiBridge: RemoteUiBridgeV1 = {
     isConnected: remoteUiConnected,
     select(title, options, settings = {}) {
-      return startRemoteSelect(title, options, settings.signal)?.result ?? Promise.resolve(undefined);
+      return startRemoteDialog({ method: "select", title, options, ...(settings.paseoQuestionnaire ? { paseoQuestionnaire: settings.paseoQuestionnaire } : {}) }, settings.signal)?.result ?? Promise.resolve(undefined);
+    },
+    input(title, placeholder, settings = {}) {
+      return startRemoteDialog({ method: "input", title, placeholder, ...(settings.paseoQuestionnaire ? { paseoQuestionnaire: settings.paseoQuestionnaire } : {}) }, settings.signal)?.result ?? Promise.resolve(undefined);
+    },
+    async confirm(title, message, settings = {}) {
+      const value = await (startRemoteDialog({ method: "confirm", title, message }, settings.signal)?.result ?? Promise.resolve(undefined));
+      return value === undefined ? undefined : value === "Yes";
+    },
+    async editor(title, prefill, settings = {}) {
+      // Stock Paseo clients cannot prefill an editor. Offer an explicit,
+      // non-destructive replacement flow using their existing native dialogs.
+      if (prefill) {
+        const choice = await remoteUiBridge.select(`${title}\n\nCurrent text:\n${prefill}`,
+          ["Keep existing text", "Write replacement"], settings);
+        if (choice === "Keep existing text") return prefill;
+        if (choice !== "Write replacement") return undefined;
+      }
+      return remoteUiBridge.input(title, "Write replacement text", settings);
     },
     async selectMirrored(title, options, localSelect, settings = {}) {
-      const remote = startRemoteSelect(title, options, settings.signal);
+      const remote = startRemoteDialog({ method: "select", title, options, ...(settings.paseoQuestionnaire ? { paseoQuestionnaire: settings.paseoQuestionnaire } : {}) }, settings.signal);
       if (!remote) return await localSelect(settings.signal ?? new AbortController().signal);
 
       return await coordinateMirroredSelect({
@@ -589,8 +623,15 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   function emitEntryCapture(ctx: ExtensionContext | null, reason: string, requestId?: string): void {
     if (!ctx) return;
     try {
-      const entries = capturedUserEntries(ctx);
-      notifyEvent(`${ENTRY_CAPTURE_MARKER} ${JSON.stringify({ reason, requestId, entries })}`);
+      const sm = ctx.sessionManager;
+      const treeEntries = capturedUserEntries(ctx);
+      const history = buildProjectedHistory(sm.getEntries(), sm.getLeafId(), sessionManagerApi);
+      const contextEntries = history.hasProjection
+        ? projectedUserCaptures(history.projectedEntries)
+        : sm.buildContextEntries()
+          .filter((entry: any) => entry.type === "message" && entry.message?.role === "user")
+          .map(toCapturedUserEntry);
+      notifyEvent(`${ENTRY_CAPTURE_MARKER} ${JSON.stringify({ reason, requestId, treeEntries, contextEntries })}`);
     } catch (err) {
       debugLog(`entry capture failed: ${String(err)}`);
     }
@@ -627,14 +668,14 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       sessionFile: sm?.getSessionFile(),
       sessionId: sm?.getSessionId(),
       sessionName: sm?.getSessionName(),
-      autoCompactionEnabled,
+      bridgeCapabilities: { supportsRewindConversation: false, supportsAutoCompactionControl: false },
       messageCount,
       pendingMessageCount: ctx?.hasPendingMessages() ? 1 : 0,
       contextUsage: ctx?.getContextUsage(),
     };
   }
 
-  async function preflightUserPrompt(id: string, commandType = "prompt"): Promise<() => boolean> {
+  async function preflightUserPrompt(id: string, commandType: string, send: (frame: unknown) => void): Promise<() => boolean> {
     const capability = (globalThis as Record<string, unknown>)[IDLE_PREFLIGHT_KEY];
     const signal = AbortSignal.any([preflightAbortController.signal, promptAbortController.signal]);
     const gated = await dispatchAfterIdlePreflight(capability, signal, async () => true);
@@ -654,7 +695,13 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     };
   }
 
-  async function handlePrompt(cmd: any): Promise<void> {
+  function commandNotices(reply: (frame: unknown) => void) {
+    return (message: string, notifyType: "info" | "warning" | "error") => reply({
+      type: "extension_ui_request", id: crypto.randomUUID(), method: "notify", message, notifyType,
+    });
+  }
+
+  async function handlePrompt(cmd: any, send: (frame: unknown) => void): Promise<void> {
     const message: string = typeof cmd.message === "string" ? cmd.message : "";
     if (/^\/reload(?:\s|$)/.test(message.trim())) {
       throw new Error("Unsupported command: /reload is terminal-only. Use /remote-reload to reload Pi from Paseo while idle.");
@@ -691,25 +738,37 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       send(success(cmd.id, "prompt"));
       return;
     }
-    const content = Array.isArray(cmd.images) && cmd.images.length > 0
-      ? [{ type: "text", text: message }, ...cmd.images]
-      : message;
+    const content = remoteUserContent(message, cmd.images);
     const streaming = latestCtx ? !latestCtx.isIdle() : false;
     if (!isExtensionCommand(pi, message)) {
-      const canDispatch = await preflightUserPrompt(cmd.id);
+      const canDispatch = await preflightUserPrompt(cmd.id, "prompt", send);
       if (!canDispatch()) return;
     }
     const dispatch = () => dispatchPaseoPrompt(pi, content as any, message, streaming, (err) =>
-      debugLog(`prompt failed after acceptance: ${String(err)}`),
+      debugLog(`prompt failed after acceptance: ${String(err)}`), commandNotices(send), undefined, promptAbortController.signal,
     );
-    let result: { agentInvoked: boolean };
-    result = await dispatch();
+    const result = await dispatch();
     send(success(cmd.id, "prompt", result));
   }
 
   async function handleCommand(cmd: any): Promise<void> {
+    // Completion and notifications belong to the requesting controller, never
+    // to a replacement connection or extension binding after an awaited command.
+    const owner = transport;
+    const epoch = owner?.operatorEpoch;
+    const lease = Symbol("command reply");
+    let settled = false;
+    const send = (frame: unknown) => {
+      if (settled) return;
+      if (frame && typeof frame === "object" && "type" in frame && frame.type === "response") {
+        settled = true;
+        pendingCommandReplies.delete(lease);
+      }
+      if (owner && owner === transport && owner.connected && owner.operatorEpoch === epoch) owner.send(frame);
+    };
     const id = cmd.id;
     const type: string = cmd.type;
+    pendingCommandReplies.set(lease, reason => send(failure(id, type, reason)));
     commandsInFlight += 1;
     try {
       if (reapedRuntime) {
@@ -722,24 +781,22 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       }
       switch (type) {
         case "prompt":
-          await handlePrompt(cmd);
+          await handlePrompt(cmd, send);
           return;
-        case "steer": {
-          if (!isExtensionCommand(pi, cmd.message)) {
-            const canDispatch = await preflightUserPrompt(id, type);
-            if (!canDispatch()) return;
-          }
-          pi.sendUserMessage(cmd.message, { deliverAs: "steer" });
-          send(success(id, type));
-          return;
-        }
+        case "steer":
         case "follow_up": {
+          if (typeof cmd.message !== "string") throw new Error("Message must be a string");
+          if (/^\/(?:remote-reload|reload)(?:\s|$)/.test(cmd.message.trim())) {
+            throw new Error("Reload must be sent as an ordinary prompt while Pi is idle.");
+          }
           if (!isExtensionCommand(pi, cmd.message)) {
-            const canDispatch = await preflightUserPrompt(id, type);
+            const canDispatch = await preflightUserPrompt(id, type, send);
             if (!canDispatch()) return;
           }
-          pi.sendUserMessage(cmd.message, { deliverAs: "followUp" });
-          send(success(id, type));
+          const result = await dispatchPaseoPrompt(pi, remoteUserContent(cmd.message, cmd.images) as any,
+            cmd.message, false, err => debugLog(`queued prompt failed after acceptance: ${String(err)}`),
+            commandNotices(send), type === "steer" ? "steer" : "followUp", promptAbortController.signal);
+          send(success(id, type, result));
           return;
         }
         case "abort":
@@ -771,9 +828,11 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
           return;
         }
         case "get_messages": {
-          const entries = latestCtx?.sessionManager.buildContextEntries() ?? [];
-          const messages = entries.filter((e: any) => e.type === "message").map((e: any) => e.message);
-          send(success(id, type, { messages: projectSubagentMessages(messages) }));
+          const sm = latestCtx?.sessionManager;
+          const history = sm
+            ? buildProjectedHistory(sm.getEntries(), sm.getLeafId(), sessionManagerApi)
+            : { messages: [], projectedEntries: [] };
+          send(success(id, type, { messages: projectSubagentMessages(history.messages) }));
           return;
         }
         case "get_available_models":
@@ -807,17 +866,29 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         case "get_commands":
           send(success(id, type, { commands: pi.getCommands() }));
           return;
-        case "compact":
-          latestCtx?.compact(cmd.customInstructions ? { customInstructions: cmd.customInstructions } : undefined);
-          send(success(id, type));
+        case "compact": {
+          if (!latestCtx) throw new Error("No active session context");
+          if (isCompacting) throw new Error("A Pi compaction is already running");
+          // Reserve immediately: session_before_compact runs only after preparation.
+          isCompacting = true;
+          try {
+            const result = await compactWithResult(latestCtx, cmd.customInstructions || undefined);
+            send(success(id, type, result));
+          } finally {
+            isCompacting = false;
+          }
           return;
+        }
         case "set_auto_compaction":
-          autoCompactionEnabled = Boolean(cmd.enabled);
-          send(success(id, type));
+          send(failure(id, type, "Auto-compaction control is unsupported by this Pi extension API"));
           return;
         case "extension_ui_response": {
-          const value = cmd.cancelled === true || typeof cmd.value !== "string" ? undefined : cmd.value;
-          finishRemoteUiRequest(String(cmd.id ?? ""), value);
+          const requestId = String(cmd.id ?? "");
+          const pending = pendingRemoteUiRequests.get(requestId);
+          const value = cmd.cancelled === true ? undefined
+            : pending?.method === "confirm" && typeof cmd.confirmed === "boolean" ? (cmd.confirmed ? "Yes" : "No")
+            : typeof cmd.value === "string" ? cmd.value : undefined;
+          finishRemoteUiRequest(requestId, value);
           return;
         }
         default:
@@ -829,6 +900,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       debugLog(`command ${type} failed: ${String(err)}`);
       send(failure(id, type ?? "unknown", err instanceof Error ? err.message : String(err)));
     } finally {
+      pendingCommandReplies.delete(lease);
       commandsInFlight -= 1;
     }
   }
@@ -1250,6 +1322,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         revokeAccountControlsDescriptor();
         revokeBtwDescriptor();
         revokeWorkflowsDescriptor();
+        for (const reject of [...pendingCommandReplies.values()]) reject("Paseo controller disconnected before the command completed; its outcome is unknown.");
         transport?.rotateOperatorEpoch();
         cancelPendingRemoteUiRequests();
         preflightAbortController.abort();
@@ -1579,6 +1652,13 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (event) => {
+    // Reload retains the controller socket: settle old command RPCs before its
+    // owner is suspended, rather than hanging them or replying into a new binding.
+    for (const reject of [...pendingCommandReplies.values()]) {
+      reject(event.reason === "reload"
+        ? "Pi runtime reloaded before the command completed; its outcome is unknown."
+        : "Pi session closed before the command completed; its outcome is unknown.");
+    }
     lifecycleClosed = true;
     preflightAbortController.abort();
     latestCtx = null;
@@ -1716,24 +1796,23 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     void maybeGenerateSessionTitle(ctx);
   });
 
-  pi.on("session_before_compact", async (_event, ctx) => {
+  pi.on("session_before_compact", async (event: any, ctx) => {
     latestCtx = ctx;
     isCompacting = true;
-    send({ type: "compaction_start" });
+    send({ type: "compaction_start", reason: event?.reason });
     return undefined;
   });
 
   pi.on("session_compact", async (event: any, ctx) => {
     latestCtx = ctx;
     isCompacting = false;
-    send({ type: "compaction_end", ...(event?.entry ? { entry: event.entry } : {}) });
+    send({ type: "compaction_end", reason: event?.reason, ...(event?.compactionEntry ? { result: event.compactionEntry } : {}) });
   });
 
-  pi.on("session_compact_failed", async (_event, ctx) => {
+  pi.on("session_compact_failed", async (event: any, ctx) => {
     latestCtx = ctx;
     isCompacting = false;
-    // Paseo 0.11 has no compaction_failed wire event. Do not report a failed
-    // attempt as a successful compaction_end; get_state must still be idle.
+    send({ type: "compaction_end", reason: event?.reason, errorMessage: event?.error?.message ?? event?.errorMessage, aborted: event?.aborted === true });
   });
 
   pi.on("model_select", async (event, ctx) => {

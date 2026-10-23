@@ -58,6 +58,8 @@ pkgs.runCommand "paseo-bridge-pi-pure-helpers" { nativeBuildInputs = [ nodejs ];
   export BRIDGE_CHECK_RPC=${bridge.rpcPackage}/bin/pi-paseo
   node --experimental-strip-types --test --test-timeout=30000 \
     test/bridge-settings.test.ts test/abort-dispatch.test.ts \
-    test/idle-preflight.test.ts test/packaging-check.test.mjs
+    test/idle-preflight.test.ts test/packaging-check.test.mjs \
+    test/compaction-command.test.ts test/remote-user-content.test.ts \
+    test/session-projection.test.ts test/prompt-dispatch.test.ts
   touch "$out"
 ''

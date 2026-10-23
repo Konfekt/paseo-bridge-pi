@@ -380,21 +380,31 @@ completion event, avoiding premature completion during retries. Actual
 badge does not track otherwise-silent internal supervision cycles. No Paseo
 provider or notification-policy patch is required for this behavior.
 
+## Native interaction contract
+
+These integrations use existing Paseo client components. No client changes or app rebuilds are required.
+
+- Matching Pi runtimes expose `dispatchExtensionCommand` for actual command outcomes and scoped notifications, and `submitUserMessage` for real `handled`/`queued`/`started` admission receipts. Generation remains asynchronous. Extension reload cannot add these runtime APIs; upgrading a running Pi process requires a deliberate restart. Older runtimes retain ordinary fire-and-forget submission without an invented admission flag; unsupported extension-command dispatch fails explicitly.
+- Prompt, steering and follow-up paths preserve images and execute recognized extension commands instead of queuing literal command text. Local-only command dialogs fail explicitly; they never wait invisibly in the terminal.
+- Remote dialog adoption is explicit through `__piPaseoRemoteUiV1`. Select, input and confirmation use stock native forms. Editor prefill uses a non-destructive **Keep existing text / Write replacement** flow, not a native code editor.
+- Compatible questionnaires use one native multi-question form, with a separate text-input step for each Other answer. Private tool/phase correlation preserves duplicate labels and custom-answer provenance; older peers retain sequential selects. Terminal answers dismiss pending native forms. Provider disconnection leaves the terminal questionnaire usable.
+- Replay uses Pi's canonical projection and preserves source identities, visible notices and context edits. Compaction acknowledges actual callbacks and preserves manual/automatic reason and failure/cancellation semantics. Unknown live auto-compaction state is omitted and unavailable control is rejected.
+- Awaited replies and notifications remain bound to their controller/runtime epoch. Reload closes outstanding requests with an explicit unknown-outcome error before retaining the socket; it never sends a stale success into a replacement binding.
+
 ## Known limitations (v1)
 
 - Built-in interactive-only commands are not part of pi's RPC command list and
   do not execute as commands when sent as prompts. The bridge explicitly rejects
   `/reload`; use `/remote-reload` for remote reloads. Use Paseo's native controls for model and thinking changes; extension
-  commands such as `/slow-mode` do work.
-- Extension UI dialogs (`ask_user` etc.) render in the TUI only; they are not
-  forwarded to Paseo.
+  commands such as `/slow-mode` work with the matched runtime.
+- Arbitrary extension `ctx.ui` dialogs are not globally intercepted. Remote commands requiring those local-only dialogs are rejected with terminal guidance; extensions can explicitly adopt the remote dialog adapter.
 - Timeline rewind from Paseo is rejected for terminal-attached sessions
   (use Fork instead).
 - Paseo's MCP tool injection (`pi-mcp-adapter`) does not apply to adopted
   sessions.
 - Bridge-projected subagents use Paseo's existing structured task cards rather
   than its native provider-subagent track. Populating that track would require
-  a Paseo provider change; the bridge intentionally does not modify Paseo.
+  a separate provider integration; populating it is not part of this bridge's contract.
 - Relay / pairing-URL daemon setups (`PASEO_HOST` with a URL) skip the WS
   state sync; import still works via the CLI.
 - If the TUI exits and Paseo later resumes the session itself, do not start a
