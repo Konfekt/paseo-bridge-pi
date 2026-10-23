@@ -71,6 +71,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
   const calls = [], queries = [];
   let rpcResponse = async () => ({ available: false });
   let workAgents;
+  let workJobs = [], foregroundJobs = [];
   const pillUpdates = [];
   const load = name => {
     if (name === '@getpaseo/plugin') return { defineRpc: contract => contract };
@@ -89,7 +90,8 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
       const key = options.queryKey;
       const data = workAgents === undefined ? (key[0] === 'harness-status' ? { available: false } : undefined)
         : key[0] === 'harness-status' ? { available: true, sessionId: 's', runtimeEpoch: 'e' }
-        : key[0] === 'harness-list' ? { state: 'available', items: key[1] === 'subagents' ? workAgents : [] }
+        : key[0] === 'harness-list' ? { state: 'available', items: key[1] === 'subagents' ? workAgents : workJobs }
+        : key[0] === 'foreground-tasks' ? { available: true, tasks: foregroundJobs }
         : undefined;
       return { data, isPending: false, isError: false, refetch() {} };
     }, useMutation() { return { isPending: false, mutate() { throw Error('Unexpected mutation'); } }; } };
@@ -137,10 +139,23 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     indicator = ui.render(icon, iconProps);
     assert.equal(pillUpdates.at(-1).label, '5 subagents', 'green dot counts all retained idle agents, excluding reaped');
     assert.ok(nodes(indicator).some(n => n.props?.accessibilityLabel === 'Idle agents'));
+    workJobs = [{ id: 'job-running', status: 'running' }, { id: 'job-done', status: 'completed' }];
+    indicator = ui.render(icon, iconProps);
+    assert.equal(pillUpdates.at(-1).label, '1 job', 'running job outranks five idle subagents');
+    assert.ok(!nodes(indicator).some(n => n.props?.accessibilityLabel === 'Idle agents'));
+    foregroundJobs = [{ taskId: 'foreground-running', status: 'running' }];
+    ui.render(icon, iconProps);
+    assert.equal(pillUpdates.at(-1).label, '2 jobs', 'running foreground work is included');
     workAgents[0].status = 'pending';
     workAgents[1].status = 'starting';
     ui.render(icon, iconProps);
-    assert.equal(pillUpdates.at(-1).label, '2 subagents', 'pending and starting workers count as running');
+    assert.equal(pillUpdates.at(-1).label, '2 subagents', 'running subagents outrank running jobs');
+    workAgents[0].status = 'completed';
+    workAgents[1].status = 'completed';
+    workJobs = []; foregroundJobs = [];
+    indicator = ui.render(icon, iconProps);
+    assert.equal(pillUpdates.at(-1).label, '5 subagents', 'idle total returns after jobs finish');
+    assert.ok(nodes(indicator).some(n => n.props?.accessibilityLabel === 'Idle agents'));
     workAgents = [];
     ui.render(icon, iconProps);
     assert.equal(pillUpdates.at(-1).label, 'Work');

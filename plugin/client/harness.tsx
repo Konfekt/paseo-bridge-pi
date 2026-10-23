@@ -372,8 +372,9 @@ function MountedWorkIndicator(
 	},
 ) {
 	const summary = useWorkSummary(props);
-	const agents = summary.agents.runningCount || summary.agents.active,
-		jobs = summary.jobs.active + summary.foreground.active;
+	const runningJobs = summary.jobs.runningCount + summary.foreground.runningCount;
+	const agents = summary.agents.runningCount || (runningJobs ? 0 : summary.agents.active),
+		jobs = runningJobs || summary.jobs.active + summary.foreground.active;
 	const count = agents || jobs;
 	const attention = agents
 		? summary.agents.attention
