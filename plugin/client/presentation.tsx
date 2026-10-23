@@ -2,11 +2,21 @@ import { useState, type ReactNode } from "react";
 import { Pressable, Text, View, type TextStyle, type ViewStyle } from "react-native";
 import { ScrollView, copyText } from "@getpaseo/plugin/client/react-native";
 import type { PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
+import { SettingsAction } from "@getpaseo/plugin/client/ui";
 
 /** Paseo 0.12 settings/control geometry. Domain state stays in each panel. */
 export type PresentationColors = PluginWorkspacePanelProps["theme"]["colors"];
 export const nativeText = { fontSize: 14, lineHeight: 20 } as const;
 export const secondaryText = { fontSize: 12, lineHeight: 18 } as const;
+
+/** One host-owned action implementation for every Work section. */
+export function WorkAction({ label = "", actionLabel, onPress, disabled = false }: {
+  label?: string; actionLabel: string; onPress(): void; disabled?: boolean;
+}) {
+  return <View style={{ width: "100%" }}>
+    <SettingsAction label={label} actionLabel={actionLabel} onPress={onPress} disabled={disabled} />
+  </View>;
+}
 
 export function Surface({ colors, children, style, padded = false }: {
   colors: PresentationColors; children: ReactNode; style?: ViewStyle; padded?: boolean;

@@ -123,6 +123,9 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.ok(tabNodes.every(node => (typeof node.props.style === 'function' ? node.props.style({pressed:false}) : node.props.style)?.minHeight >= 44), 'tabs retain accessible touch targets at narrow widths');
     assert.ok(tabNodes.some(node => node.props.accessibilityState?.selected && (typeof node.props.style === 'function' ? node.props.style({pressed:false}) : node.props.style)?.borderBottomWidth === 2), 'selected section has native underline feedback');
     select(tree, 'Jobs'); tree = render();
+    const jobsAction = nodes(tree).find(node => node.type === 'SettingsAction' && node.props.actionLabel === 'Completed');
+    assert.ok(jobsAction, 'Jobs uses the host SettingsAction via shared WorkAction');
+    assert.equal(jobsAction.props.style, undefined, 'Jobs action has no custom button styling');
     scroll(tree).props.onScroll({ nativeEvent: { contentOffset: { y: 321 } } });
     tree = render();
     assert.equal(scroll(tree).props.contentOffset.y, 321, 'status/query rerenders must not reset a mounted scroll position');
@@ -130,6 +133,11 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.equal(selected(tree), 'Goals', 'new source does not inherit another source section');
     assert.match(text(tree), /Conversation A/);
     select(tree, 'Agents'); tree = render();
+    const agentsAction = nodes(tree).find(node => node.type === 'SettingsAction' && node.props.actionLabel === 'Completed');
+    assert.ok(agentsAction, 'Agents uses the host SettingsAction via shared WorkAction');
+    assert.equal(agentsAction.type, jobsAction.type);
+    assert.deepEqual(Object.keys(agentsAction.props).sort(), Object.keys(jobsAction.props).sort());
+    assert.equal(agentsAction.props.style, undefined);
     click(first, 'b'); tree = render();
     assert.equal(selected(tree), 'Jobs'); assert.equal(scroll(tree).props.contentOffset.y, 321);
     const beforeClose = calls.length;

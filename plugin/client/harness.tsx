@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Pressable, Text, View, type ScrollView as NativeScrollView } from "react-native";
 import { Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
-import { SettingsAction } from "@getpaseo/plugin/client/ui";
 import {
 	useRpc,
 	type PluginAgentPanelProps,
@@ -30,7 +29,7 @@ import { foregroundTasksStatusRpc } from "../shared/foreground-tasks";
 import { isActiveAgent, isActiveWorkStatus } from "../shared/work-display";
 import { isDormantIndependentAgent } from "../shared/independent-state";
 import { WorkStatusRing } from "./work-status-ring";
-import { Metadata, NativeButton, NativeRow, OutputWell } from "./presentation";
+import { Metadata, NativeButton, NativeRow, OutputWell, WorkAction } from "./presentation";
 import {
 	createAgentConversationTabs,
 	type AgentConversationTarget,
@@ -600,7 +599,7 @@ function JobsOverview(
 					</Text>
 				) : null
 			) : (
-				<SettingsAction
+				<WorkAction
 					label={empty ? emptyLabel : ""}
 					actionLabel="Completed"
 					onPress={props.toggleCompleted}
@@ -650,7 +649,7 @@ function AgentsOverview(
 					</Text>
 				) : null
 			) : (
-				<SettingsAction
+				<WorkAction
 					label={count ? "" : emptyLabel}
 					actionLabel="Completed"
 					onPress={props.toggleCompleted}

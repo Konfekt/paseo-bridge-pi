@@ -8,7 +8,7 @@ import {
 	SettingsSelect,
 } from "@getpaseo/plugin/client/ui";
 import { useRpc, type PluginAgentPanelProps } from "@getpaseo/plugin/client";
-import { Metadata, NativeButton, NativeRow } from "./presentation";
+import { Metadata, NativeButton, WorkAction } from "./presentation";
 import {
 	workflowsStatusRpc,
 	workflowsControlRpc,
@@ -238,7 +238,7 @@ function WorkflowsView({
 		});
 	const button = (label: string, onPress: () => void, disabled = false) =>
 		section === "goal"
-			? <NativeRow colors={colors} title={label} onPress={onPress} disabled={disabled} style={{ width: "100%", minHeight: 44, paddingVertical: 8 }} />
+			? <WorkAction actionLabel={label} onPress={onPress} disabled={disabled} />
 			: <NativeButton colors={colors} label={label} onPress={onPress} disabled={disabled} style={{ alignSelf: "flex-start", minHeight: 44 }} />;
 	const Container = embedded ? View : ScrollView;
 	const goalSection = (

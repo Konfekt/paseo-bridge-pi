@@ -18,6 +18,7 @@ const load = name => {
   if (name === 'react') return { useState(initial) { const i = cursor++; if (!(i in slots)) slots[i] = typeof initial === 'function' ? initial() : initial; return [slots[i], value => { slots[i] = value; }]; } };
   if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx };
   if (name === 'react-native') return { View: 'View', Text: 'Text', Pressable: 'Pressable' };
+  if (name === '@getpaseo/plugin/client/ui') return { SettingsAction:'SettingsAction' };
   if (name === '@getpaseo/plugin/client/react-native') return { ScrollView: 'ScrollView', copyText: async text => { clipboard.push(text); } };
   return require(name);
 };
@@ -38,7 +39,7 @@ test('compiled Goals uses the same action-row chrome as Agents and Jobs without 
     if(name==='react') { const react=load(name); return {...react,useEffect(){},useRef:initial=>react.useState(()=>({current:initial}))[0]}; }
     if(name==='@getpaseo/plugin') return {defineRpc:contract=>contract};
     if(name==='@getpaseo/plugin/client') return {useRpc:contract=>async input=>{calls.push({name:contract.name,input}); return reply;}};
-    if(name==='@getpaseo/plugin/client/ui') return {SettingsSection:'SettingsSection',SettingsCard:'SettingsCard',SettingsSelect:'SettingsSelect'};
+    if(name==='@getpaseo/plugin/client/ui') return {SettingsSection:'SettingsSection',SettingsCard:'SettingsCard',SettingsSelect:'SettingsSelect',SettingsAction:'SettingsAction'};
     if(name==='@getpaseo/plugin/client/react-native') return {ScrollView:'ScrollView',TextInput:'TextInput'};
     if(name==='@tanstack/react-query') return {useQuery:options=>({data:reply,isPending:false,isError:false,isFetching:false,refetch:()=>options.queryFn()})};
     return load(name);
@@ -48,18 +49,19 @@ test('compiled Goals uses the same action-row chrome as Agents and Jobs without 
   slots=[];
   const draw=()=>{cursor=0;return nodes(WorkflowsPanel(props));};
   let all=draw();
-  const connect=all.find(n=>n.type==='Pressable' && n.props.accessibilityLabel==='Connect current session');
+  const connect=all.find(n=>n.type==='SettingsAction' && n.props.actionLabel==='Connect current session');
   assert.ok(connect); connect.props.onPress(); await new Promise(resolve=>setImmediate(resolve));
   all=draw();
   const objective=all.find(n=>n.type==='TextInput' && n.props.accessibilityLabel==='New goal');
   assert.ok(objective); objective.props.onChangeText('Keep the existing goal action');
   all=draw();
-  const create=all.find(n=>n.type==='Pressable' && n.props.accessibilityLabel==='Create');
+  const create=all.find(n=>n.type==='SettingsAction' && n.props.actionLabel==='Create');
   assert.ok(create); assert.equal(create.props.disabled,false);
-  const normal=style(create.props.style({pressed:false}));
-  assert.equal(normal.width,'100%'); assert.equal(normal.minHeight,44);
-  assert.equal(normal.backgroundColor,'transparent'); assert.equal(normal.borderWidth,undefined);
-  assert.equal(style(create.props.style({pressed:true})).backgroundColor,palettes[0].surface2);
+  assert.equal(create.props.style,undefined,'native SDK owns all action styling');
+  const common=nodes(render(components.WorkAction,{actionLabel:'Completed',onPress(){}})).find(n=>n.type==='SettingsAction');
+  assert.ok(common);
+  assert.equal(create.type,common.type,'Goal and Completed controls use the identical host component');
+  assert.deepEqual(Object.keys(create.props).sort(),Object.keys(common.props).sort());
   create.props.onPress(); await new Promise(resolve=>setImmediate(resolve));
   const control=calls.find(c=>c.name==='workflows_control');
   assert.ok(control); assert.equal(control.input.request.action,'goal.create_paused');
