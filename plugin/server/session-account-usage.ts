@@ -141,14 +141,25 @@ async function readPrivateJson(
 	}
 }
 
-async function readCredential(dir: string, name: string) {
+async function readCredential(
+	dir: string,
+	provider: "openai" | "openai-codex",
+	name: string,
+) {
 	const store = await readPrivateJson(dir, "pi-accounts.json");
 	if (
 		store?.version !== 1 ||
-		!Object.hasOwn(store?.providers?.openai?.accounts ?? {}, name)
+		!Object.hasOwn(store?.providers?.[provider]?.accounts ?? {}, name)
 	)
 		throw new Error("Missing selected account");
-	return credentialSchema.parse(store.providers.openai.accounts[name]);
+	return credentialSchema.parse(store.providers[provider].accounts[name]);
+}
+async function readDefaultCredential(
+	dir: string,
+	provider: "openai" | "openai-codex",
+) {
+	const auth = await readPrivateJson(dir, "auth.json");
+	return credentialSchema.parse(auth[provider]);
 }
 
 type UnavailableReason =
@@ -157,12 +168,14 @@ type UnavailableReason =
 	| "identity"
 	| "companion-disabled";
 class UsageUnavailable extends Error {
-	constructor(readonly reason: UnavailableReason) {
+	readonly reason: UnavailableReason;
+	constructor(reason: UnavailableReason) {
 		super(reason);
+		this.reason = reason;
 	}
 }
 
-async function selection(agentId: string) {
+async function selection(agentId: string, provider: "openai" | "openai-codex" = "openai") {
 	const descriptor = await readAccountControlsDescriptor(agentId);
 	if (!validateAccountControlsDescriptor(descriptor, agentId))
 		throw new Error("Selection unavailable");
@@ -180,6 +193,35 @@ async function selection(agentId: string) {
 		snapshot.serviceEpoch !== descriptor.serviceEpoch
 	)
 		throw new Error("Selection changed");
+	const selectedProvider = snapshot.providerId ?? "openai";
+	if (
+		selectedProvider !== provider ||
+		(provider === "openai-codex" &&
+			(snapshot.providerId !== "openai-codex" ||
+				!snapshot.supportedProviders?.includes("openai-codex")))
+	)
+		throw new Error("Provider selection unavailable");
+	if (provider === "openai-codex") {
+		if (
+			snapshot.usage.status !== "local-binding-confirmed" ||
+			!snapshot.usage.accountKey ||
+			(snapshot.defaultSelected
+				? snapshot.usage.effectiveCredential !== "chatgpt-grant-configured"
+				: snapshot.usage.effectiveCredential !== "chatgpt-grant-matched-refreshed" ||
+					!snapshot.currentAccountId ||
+					snapshot.activationStatus !== "active")
+		)
+			throw new Error("No verified Codex OAuth binding");
+		const account = snapshot.defaultSelected
+			? undefined
+			: snapshot.accounts.find(
+					(item) =>
+						item.id === snapshot.currentAccountId && item.authKind === "oauth",
+					);
+		if (!snapshot.defaultSelected && !account)
+			throw new Error("Selected Codex account unavailable");
+		return { descriptor, snapshot, account };
+	}
 	if (
 		snapshot.usage.nativeRegistrationKey &&
 		snapshot.usage.status === "local-binding-confirmed" &&
@@ -233,9 +275,9 @@ async function binding(agentId: string, dir: string) {
 	if (before.snapshot.usage.nativeRegistrationKey)
 		return companionBinding(agentId, dir, before);
 	if (!before.account) throw new Error("Selected account unavailable");
-	const credential = await readCredential(dir, before.account.id);
+	const credential = await readCredential(dir, "openai", before.account.id);
 	const after = await selection(agentId);
-	const again = await readCredential(dir, before.account.id);
+	const again = await readCredential(dir, "openai", before.account.id);
 	if (
 		JSON.stringify(before.descriptor) !== JSON.stringify(after.descriptor) ||
 		before.snapshot.selectionRevision !== after.snapshot.selectionRevision ||
@@ -387,9 +429,74 @@ async function companionBinding(
 	};
 }
 
+async function codexBinding(agentId: string, dir: string) {
+	const before = await selection(agentId, "openai-codex");
+	const load = async () =>
+		before.snapshot.defaultSelected
+			? readDefaultCredential(dir, "openai-codex")
+			: readCredential(dir, "openai-codex", before.account!.id);
+	const credential = await load();
+	const after = await selection(agentId, "openai-codex");
+	const again = await load();
+	if (
+		JSON.stringify(before.descriptor) !== JSON.stringify(after.descriptor) ||
+		before.snapshot.selectionRevision !== after.snapshot.selectionRevision ||
+		before.snapshot.currentAccountId !== after.snapshot.currentAccountId ||
+		before.snapshot.defaultSelected !== after.snapshot.defaultSelected ||
+		credential.access !== again.access ||
+		credential.expires !== again.expires ||
+		credential.accountId !== again.accountId
+	)
+		throw new Error("Codex binding changed");
+	const claims = JSON.parse(
+		Buffer.from(credential.access.split(".")[1] ?? "", "base64url").toString(
+			"utf8",
+		),
+	);
+	const claimId =
+		text(claims?.["https://api.openai.com/auth"]?.chatgpt_account_id) ??
+		text(claims?.chatgpt_account_id);
+	if (claimId && credential.accountId && claimId !== credential.accountId)
+		throw new Error("Conflicting Codex account identity");
+	const accountId = claimId ?? credential.accountId;
+	const subject = text(
+		claims?.sub ?? claims?.["https://api.openai.com/auth"]?.chatgpt_user_id,
+	);
+	const key = hash(JSON.stringify(["openai-codex", accountId, subject]));
+	if (
+		!accountId ||
+		!subject ||
+		before.snapshot.usage.accountKey !== key ||
+		after.snapshot.usage.accountKey !== key
+	)
+		throw new Error("Codex account identity unavailable");
+	return {
+		credential,
+		accountId,
+		label:
+			text(claims?.["https://api.openai.com/profile"]?.email) ??
+			text(claims?.email) ??
+			before.account?.label ??
+			"Codex",
+			fingerprint: hash(
+				JSON.stringify([
+					dir,
+					before.descriptor,
+					before.snapshot.selectionRevision,
+					before.snapshot.currentAccountId,
+					before.snapshot.defaultSelected,
+					credential,
+				]),
+			),
+		key,
+		clientId: undefined as string | undefined,
+	};
+}
+
 type Locator = {
 	handle: string;
 	dir: string;
+	provider: "openai" | "openai-codex";
 	fingerprint: string;
 	touched: number;
 	verified: boolean;
@@ -415,13 +522,13 @@ export function registerSessionAccountUsage(server: PluginServerContext) {
 	const locators = new Map<string, Locator>();
 	server.registerUsageSource({
 		id: "pi-selected-openai",
-		label: "OpenAI",
+		label: "OpenAI / Codex",
 		input: inputSchema,
 		async discover(scope) {
 			if (
 				scope.kind !== "session" ||
 				scope.provider !== "pi" ||
-				!/^(openai|idle-guard)\//.test(scope.model ?? "")
+				!/^(openai|idle-guard|openai-codex)\//.test(scope.model ?? "")
 			)
 				return [];
 			const agentId = scope.env.PASEO_AGENT_ID;
@@ -431,10 +538,15 @@ export function registerSessionAccountUsage(server: PluginServerContext) {
 				join(scope.env.HOME || homedir(), ".pi", "agent");
 			for (const [id, item] of locators)
 				if (Date.now() - item.touched > 30 * 60_000) locators.delete(id);
-			let found: Awaited<ReturnType<typeof binding>> | undefined;
+			const provider = scope.model?.startsWith("openai-codex/")
+				? "openai-codex"
+				: "openai";
+			let found: Awaited<ReturnType<typeof binding>> | Awaited<ReturnType<typeof codexBinding>> | undefined;
 			let reason: UnavailableReason | undefined;
 			try {
-				found = await binding(agentId, dir);
+				found = provider === "openai-codex"
+					? await codexBinding(agentId, dir)
+					: await binding(agentId, dir);
 			} catch (error) {
 				if (error instanceof UsageUnavailable) reason = error.reason;
 			}
@@ -447,6 +559,7 @@ export function registerSessionAccountUsage(server: PluginServerContext) {
 					: {
 							handle: randomUUID(),
 							dir,
+							provider,
 							fingerprint,
 							touched: Date.now(),
 							verified: Boolean(found),
@@ -474,7 +587,10 @@ export function registerSessionAccountUsage(server: PluginServerContext) {
 				if (!locator || locator.handle !== input.handle) return missing();
 				if (!locator.verified) return missing(locator.reason);
 				const check = async () => {
-					const current = await binding(input.agentId, locator.dir);
+					const current =
+						locator.provider === "openai-codex"
+							? await codexBinding(input.agentId, locator.dir)
+							: await binding(input.agentId, locator.dir);
 					if (
 						locators.get(input.agentId) !== locator ||
 						current.fingerprint !== locator.fingerprint
