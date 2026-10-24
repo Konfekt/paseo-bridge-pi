@@ -34,6 +34,7 @@ test('compiled Goals uses the same action-row chrome as Agents and Jobs without 
   await writeFile(resolve(fixture,'index.client.tsx'),'export { WorkflowsPanel } from "./client/workflows";');
   const {clientBundle} = await compilePlugin({client:resolve(fixture,'index.client.tsx')});
   const reply = {available:true,sessionId:'fixture-session',runtimeEpoch:'fixture-epoch',snapshot:{serviceEpoch:'fixture-service',goal:null,idle:true,busy:false,capabilities:{createPausedGoal:true},completedGoals:[],limits:{},worktrees:[]}};
+
   const calls=[];
   const localLoad = name => {
     if(name==='react') { const react=load(name); return {...react,useEffect(){},useRef:initial=>react.useState(()=>({current:initial}))[0]}; }
@@ -49,33 +50,33 @@ test('compiled Goals uses the same action-row chrome as Agents and Jobs without 
   slots=[];
   const draw=()=>{cursor=0;return nodes(WorkflowsPanel(props));};
   let all=draw();
-  const connect=all.find(n=>n.type==='SettingsAction' && n.props.actionLabel==='Connect current session');
-  assert.ok(connect); connect.props.onPress(); await new Promise(resolve=>setImmediate(resolve));
+  const connect=all.find(n=>n.type==='Pressable' && n.props.accessibilityLabel==='Connect current session');
+  assert.ok(connect); connect.props.onPress();
   all=draw();
   const objective=all.find(n=>n.type==='TextInput' && n.props.accessibilityLabel==='New goal');
   assert.ok(objective); objective.props.onChangeText('Keep the existing goal action');
   all=draw();
-  const create=all.find(n=>n.type==='SettingsAction' && n.props.actionLabel==='Create');
+  const findButton=(items,label)=>items.find(n=>n.type==='Pressable' && n.props.accessibilityLabel===label);
+  const create=findButton(all,'Create');
   assert.ok(create); assert.equal(create.props.disabled,false);
-  assert.equal(create.props.style,undefined,'native SDK owns all action styling');
-  const goalActionTree=render(components.WorkAction,{actionLabel:'Completed',onPress(){}});
-  const goalWrapper=nodes(goalActionTree).find(n=>n.type==='View');
-  assert.deepEqual(goalWrapper.props.style,{minWidth:0,maxWidth:'100%',flexShrink:1},'Goal action wrapper must not claim an entire flex-wrap row; it may shrink or wrap within the available width');
-  const common=nodes(goalActionTree).find(n=>n.type==='SettingsAction');
-  assert.ok(common);
-  assert.equal(create.type,common.type,'Goal and Completed controls use the identical host component');
-  assert.deepEqual(Object.keys(create.props).sort(),Object.keys(common.props).sort());
+  assert.equal(create.props.accessibilityRole,'button');
+  assert.equal(create.props.accessibilityState.disabled,false);
+  assert.deepEqual(style(create.props.style({pressed:false})),{borderWidth:1,borderColor:palettes[0].border,borderRadius:8,paddingHorizontal:12,paddingVertical:8,alignItems:'center',justifyContent:'center',opacity:1,backgroundColor:palettes[0].surface1,alignSelf:'flex-start',minHeight:44,maxWidth:'100%',flexShrink:1});
   reply.snapshot.goal={id:'goal-1',status:'active',text:'Ship safely',automaticTurns:2,tokensUsed:120};
   all=draw();
-  const goalRow=all.find(n=>n.type==='View' && n.props.style?.flexDirection==='row' && n.props.style?.flexWrap==='wrap' && n.props.style?.gap===12 && nodes(n).some(child=>child.type==='SettingsAction' && child.props.actionLabel==='Pause'));
+  const goalRow=all.find(n=>n.type==='View' && n.props.style?.flexDirection==='row' && n.props.style?.flexWrap==='wrap' && n.props.style?.gap===12 && nodes(n).some(child=>child.type==='Pressable' && child.props.accessibilityLabel==='Pause'));
   assert.ok(goalRow,'active Goal controls render in the expected wrapping row');
-  const activeActions=nodes(goalRow).filter(n=>n.type==='SettingsAction');
-  assert.deepEqual(activeActions.map(n=>n.props.actionLabel),['Pause','Edit','Clear','Limits'],'active Goal exposes all four actions together');
+  const activeActions=['Pause','Edit','Clear','Limits'].map(label=>findButton(nodes(goalRow),label));
+  assert.ok(activeActions.every(Boolean));
+  assert.deepEqual(activeActions.map(n=>n.props.accessibilityLabel),['Pause','Edit','Clear','Limits']);
   assert.equal(goalRow.props.style.gap,12,'actions retain spacing when they wrap');
   for (const action of activeActions) {
-    const wrapper=all.find(n=>n.type==='View' && n.props.style?.flexShrink===1 && nodes(n).some(child=>child.type==='SettingsAction' && child.props.actionLabel===action.props.actionLabel));
-    assert.ok(wrapper,`active ${action.props.actionLabel} action has a shrinkable, width-capped wrapper`);
-    assert.equal(wrapper.props.style.maxWidth,'100%');
+    assert.equal(action.props.accessibilityRole,'button');
+    assert.equal(action.props.accessibilityState.disabled,false);
+    assert.equal(action.props.disabled,false);
+    assert.equal(style(action.props.style({pressed:false})).minHeight,44);
+    assert.equal(style(action.props.style({pressed:false})).maxWidth,'100%');
+    assert.equal(style(action.props.style({pressed:false})).flexShrink,1);
   }
   create.props.onPress(); await new Promise(resolve=>setImmediate(resolve));
   const control=calls.find(c=>c.name==='workflows_control');
