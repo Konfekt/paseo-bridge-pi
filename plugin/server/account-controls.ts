@@ -3,6 +3,14 @@ import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { accountControlsSnapshotSchema, accountControlsStatusRpc, accountControlsSwitchRpc, type AccountProviderId } from "../shared/account-controls";
 import { callAccountControls, readAccountControlsDescriptor, validateAccountControlsDescriptor } from "./account-controls-transport";
 
+// New execution-routing metadata is a private server/Pi contract. Do not add
+// fields to snapshots consumed by existing clients' strict RPC validators.
+function publicSnapshot(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return accountControlsSnapshotSchema.parse(value);
+  const { sessionRouting: _routing, ...snapshot } = value as Record<string, unknown>;
+  return accountControlsSnapshotSchema.parse(snapshot);
+}
+
 function providerOf(value: unknown): AccountProviderId {
   if (value === undefined || value === "openai") return "openai";
   if (value === "openai-codex") return value;
@@ -37,14 +45,14 @@ export function createAccountControlsHandlers(readDescriptor = readAccountContro
     // Older services may ignore providerId. Check capability BEFORE a Codex
     // mutation so they can never silently switch an identically named OpenAI profile.
     if (providerId === "openai-codex") {
-      const preflight = accountControlsSnapshotSchema.parse(await callControls(descriptor, { operation: "snapshot", sessionId: descriptor.sessionId, providerId }));
+      const preflight = publicSnapshot(await callControls(descriptor, { operation: "snapshot", sessionId: descriptor.sessionId, providerId }));
       checkProvider(preflight, providerId);
       if (preflight.sessionId !== descriptor.sessionId || preflight.serviceEpoch !== descriptor.serviceEpoch)
         throw new Error("Account-controls service identity mismatch.");
       await validateStillCurrent(input, context, descriptor);
     }
     const result: any = await callControls(descriptor, { operation: "switch", request: input.request });
-    const parsed = { ...result, snapshot: accountControlsSnapshotSchema.parse(result?.snapshot) };
+    const parsed = { ...result, snapshot: publicSnapshot(result?.snapshot) };
     checkProvider(parsed.snapshot, providerId);
     if (parsed.requestId !== input.request.requestId || parsed.snapshot.sessionId !== descriptor.sessionId || parsed.snapshot.serviceEpoch !== descriptor.serviceEpoch)
       throw new Error("Account-controls service identity mismatch.");
@@ -58,7 +66,7 @@ export function createAccountControlsHandlers(readDescriptor = readAccountContro
       const descriptor = await readDescriptor(input.agentId);
       if (!validateAccountControlsDescriptor(descriptor, input.agentId)) return { available: false, sessionId: null, runtimeEpoch: null, snapshot: null, reason: "Account controls are unavailable for this Pi session." };
       try {
-        const snapshot = accountControlsSnapshotSchema.parse(await callControls(descriptor, { operation: "snapshot", sessionId: descriptor.sessionId, ...(providerId === "openai-codex" ? { providerId } : {}) }));
+        const snapshot = publicSnapshot(await callControls(descriptor, { operation: "snapshot", sessionId: descriptor.sessionId, ...(providerId === "openai-codex" ? { providerId } : {}) }));
         checkProvider(snapshot, providerId);
         await validateStillCurrent(input, context, descriptor);
         if (snapshot.sessionId !== descriptor.sessionId || snapshot.serviceEpoch !== descriptor.serviceEpoch) throw new Error("Stale account-controls identity");

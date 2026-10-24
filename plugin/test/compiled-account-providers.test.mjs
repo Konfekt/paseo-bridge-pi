@@ -41,6 +41,15 @@ test('legacy omitted-provider status and switch remain OpenAI-only',async()=>{
  assert.equal((await handlers.switch(switchInput(),context)).ok,true);
  assert.equal(calls.at(-1).request.providerId,undefined);
 });
+test('private routing capabilities never change the public strict client snapshot shape',async()=>{
+ const value={...snapshot('openai'),sessionRouting:{version:1,providerId:'openai-codex',revision:7}};
+ const handlers=createAccountControlsHandlers(async()=>({...descriptor}),async(_d,request)=>request.operation==='snapshot'?value:{ok:true,requestId:request.request.requestId,snapshot:value});
+ const status=await handlers.status(target,context);
+ assert.equal(status.available,true);
+ assert.equal('sessionRouting' in status.snapshot,false);
+ assert.equal('sessionRouting' in (await handlers.switch(switchInput(),context)).snapshot,false);
+ assert.deepEqual(status.snapshot,snapshot('openai'));
+});
 test('older producer cannot mutate OpenAI when Codex is requested',async()=>{
  const calls=[];
  const handlers=createAccountControlsHandlers(async()=>({...descriptor}),async(_d,request)=>{calls.push(request);return snapshot('openai',false);});

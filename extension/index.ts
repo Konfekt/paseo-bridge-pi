@@ -19,7 +19,7 @@ import { assertNoLiveRuntimeOwner, processStartToken, harnessRuntimeMetadata, re
 import { fileURLToPath } from "node:url";
 import { parseTmuxTarget } from "../shim/tmux-target.js";
 import { paseoImportArgs, importRetryDelay, retryableWorkspaceImportFailure, workspaceIdForPlacement } from "./import-placement.js";
-import { completeSimple } from "@earendil-works/pi-ai";
+import { completeWithSessionModel } from "./session-model-request.ts";
 import { buildSessionContext, type ExtensionAPI, type ExtensionContext, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import * as sessionManagerApi from "@earendil-works/pi-coding-agent";
 import { BridgeTransport, retainBridgeForReload, takeBridgeAfterReload, discardRetainedBridge } from "./bridge-transport.js";
@@ -1748,14 +1748,8 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     try {
       const model = ctx.model;
       if (!model) return;
-      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-      if (lifecycleClosed) return;
-      if (auth.ok === false) {
-        debugLog(`title generation: no auth: ${auth.error}`);
-        return;
-      }
-      const response = await completeSimple(
-        model,
+      const response = await completeWithSessionModel(
+        ctx,
         {
           systemPrompt:
             "You name coding agent sessions. Given the user's first message, reply with only a short session title: 3 to 8 words, plain text, no quotes, no trailing punctuation.",
@@ -1763,7 +1757,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
             { role: "user", content: [{ type: "text", text: firstMessage.slice(0, 4000) }], timestamp: Date.now() } as any,
           ],
         },
-        { apiKey: auth.apiKey, headers: auth.headers, env: auth.env, maxTokens: 1024, reasoning: "off" },
+        { maxTokens: 1024, reasoning: "off" },
       );
       if (lifecycleClosed) return;
       let title = readTextContent(response.content).trim().split("\n")[0].trim().replace(/^["']+|["']+$/g, "");

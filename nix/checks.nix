@@ -60,6 +60,7 @@ pkgs.runCommand "paseo-bridge-pi-pure-helpers" { nativeBuildInputs = [ nodejs ];
     test/bridge-settings.test.ts test/abort-dispatch.test.ts \
     test/idle-preflight.test.ts test/packaging-check.test.mjs \
     test/compaction-command.test.ts test/remote-user-content.test.ts \
-    test/session-projection.test.ts test/prompt-dispatch.test.ts
+    test/session-projection.test.ts test/prompt-dispatch.test.ts \
+    test/session-model-request.test.ts
   touch "$out"
 ''
