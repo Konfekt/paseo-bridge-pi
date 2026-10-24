@@ -64,9 +64,13 @@ test("compiled Worktrees defaults to this session, toggles full inventory, group
     assert.ok(nodes.some(node => textOf(node) === "Main" ) === false);
     const headings = nodes.filter(node => node.props?.accessibilityRole === "header").map(textOf);
     assert.deepEqual(headings, ["/second", "/repo"], "filtered-out neighbor does not break visible repository grouping");
+    snapshot = { ...snapshot, worktreeError: "One repository could not be read; showing the rest." };
+    nodes = await renderAndNodes();
+    assert.ok(nodes.some(node => textOf(node) === "Show all"), "partial inventory warnings must not hide the view toggle");
     nodes.find(node => textOf(node) === "Show all").props.onPress();
     nodes = await renderAndNodes();
     assert.ok(nodes.some(node => textOf(node).includes("/repo/other")));
+    snapshot = { ...snapshot, worktreeError: null };
     assert.ok(nodes.some(node => textOf(node) === "Show ours"));
     assert.ok(nodes.some(node => textOf(node).includes("/repo/other") && node.type === "Pressable"), "worktree rows remain selectable for existing actions");
     nodes.find(node => textOf(node) === "Show ours").props.onPress();

@@ -763,7 +763,7 @@ function WorkflowsView({
 									{snapshot.worktreeError}
 								</Text>
 							) : null}
-								{!snapshot.worktreeLoading && !snapshot.worktreeError ? (
+								{!snapshot.worktreeLoading ? (
 								<NativeButton
 									colors={colors}
 									label={saved.showAllWorktrees ? "Show ours" : "Show all"}
