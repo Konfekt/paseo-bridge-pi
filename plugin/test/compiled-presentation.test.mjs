@@ -78,6 +78,20 @@ test('compiled Goals uses the same action-row chrome as Agents and Jobs without 
     assert.equal(style(action.props.style({pressed:false})).maxWidth,'100%');
     assert.equal(style(action.props.style({pressed:false})).flexShrink,1);
   }
+  reply.snapshot.goal.status='paused';
+  reply.snapshot.completedGoals=[{id:'done-1',status:'completed',text:'Earlier goal',summary:'Done',endedAt:1,tasks:[]}];
+  all=draw();
+  const secondaryRow=all.find(n=>n.type==='View' && n.props.style?.flexDirection==='row' && n.props.style?.gap===12 && nodes(n).some(child=>child.type==='Pressable' && child.props.accessibilityLabel==='Add subtask'));
+  assert.ok(secondaryRow,'subtask and completed controls share a row');
+  assert.deepEqual(nodes(secondaryRow).filter(child=>child.type==='Pressable').map(child=>child.props.accessibilityLabel),['Add subtask','Completed']);
+  assert.equal(all.filter(n=>n.type==='Pressable' && n.props.accessibilityLabel==='Completed').length,1,'history control is not duplicated');
+  findButton(all,'Completed').props.onPress();
+  all=draw();
+  assert.ok(all.some(n=>n.type==='Text' && n.props.children==='Earlier goal'),'completed history still expands');
+  findButton(all,'Add subtask').props.onPress();
+  all=draw();
+  const expandedRow=all.find(n=>n.type==='View' && n.props.style?.flexDirection==='row' && nodes(n).some(child=>child.type==='Pressable' && child.props.accessibilityLabel==='Cancel subtask'));
+  assert.deepEqual(nodes(expandedRow).filter(child=>child.type==='Pressable').map(child=>child.props.accessibilityLabel),['Cancel subtask','Hide completed']);
   create.props.onPress(); await new Promise(resolve=>setImmediate(resolve));
   const control=calls.find(c=>c.name==='workflows_control');
   assert.ok(control); assert.equal(control.input.request.action,'goal.create_paused');

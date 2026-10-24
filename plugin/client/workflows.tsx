@@ -463,15 +463,21 @@ function WorkflowsView({
 						</Text>
 					) : (
 						<>
-							{button(
-								addingTask ? "Cancel subtask" : "Add subtask",
-								() => {
-									setAddingTask(!addingTask);
-									setTaskText("");
-									setEditing(false);
-								},
-								locked || snapshot?.busy || !snapshot?.idle,
-							)}
+							<View style={{ flexDirection: "row", gap: 12, flexWrap: "wrap" }}>
+								{button(
+									addingTask ? "Cancel subtask" : "Add subtask",
+									() => {
+										setAddingTask(!addingTask);
+										setTaskText("");
+										setEditing(false);
+									},
+									locked || snapshot?.busy || !snapshot?.idle,
+								)}
+								{completedGoals.length > 0 ? button(
+									completedOpen ? "Hide completed" : "Completed",
+									() => setCompletedOpen((open) => !open),
+								) : null}
+							</View>
 							{addingTask ? (
 								<View style={{ gap: 6 }}>
 									<TextInput
@@ -694,12 +700,12 @@ function WorkflowsView({
 							{dialog || snapshot.busy ? null : goalSection}
 							{completedGoals.length > 0 ? (
 								<View style={{ gap: 8 }}>
-									{button(
+									{!goal || goal.status === "active" || dialog || snapshot.busy ? button(
 										completedOpen
 											? "Hide completed"
 											: "Completed",
 										() => setCompletedOpen((open) => !open),
-									)}
+									) : null}
 									{completedOpen ? (
 										<SettingsCard>
 											<View style={{ padding: 12, gap: 12 }}>
