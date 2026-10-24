@@ -13,7 +13,7 @@ export const secondaryText = { fontSize: 12, lineHeight: 18 } as const;
 export function WorkAction({ label = "", actionLabel, onPress, disabled = false }: {
   label?: string; actionLabel: string; onPress(): void; disabled?: boolean;
 }) {
-  return <View style={{ width: "100%" }}>
+  return <View style={{ minWidth: 0, maxWidth: "100%", flexShrink: 1 }}>
     <SettingsAction label={label} actionLabel={actionLabel} onPress={onPress} disabled={disabled} />
   </View>;
 }

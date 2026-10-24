@@ -58,10 +58,25 @@ test('compiled Goals uses the same action-row chrome as Agents and Jobs without 
   const create=all.find(n=>n.type==='SettingsAction' && n.props.actionLabel==='Create');
   assert.ok(create); assert.equal(create.props.disabled,false);
   assert.equal(create.props.style,undefined,'native SDK owns all action styling');
-  const common=nodes(render(components.WorkAction,{actionLabel:'Completed',onPress(){}})).find(n=>n.type==='SettingsAction');
+  const goalActionTree=render(components.WorkAction,{actionLabel:'Completed',onPress(){}});
+  const goalWrapper=nodes(goalActionTree).find(n=>n.type==='View');
+  assert.deepEqual(goalWrapper.props.style,{minWidth:0,maxWidth:'100%',flexShrink:1},'Goal action wrapper must not claim an entire flex-wrap row; it may shrink or wrap within the available width');
+  const common=nodes(goalActionTree).find(n=>n.type==='SettingsAction');
   assert.ok(common);
   assert.equal(create.type,common.type,'Goal and Completed controls use the identical host component');
   assert.deepEqual(Object.keys(create.props).sort(),Object.keys(common.props).sort());
+  reply.snapshot.goal={id:'goal-1',status:'active',text:'Ship safely',automaticTurns:2,tokensUsed:120};
+  all=draw();
+  const goalRow=all.find(n=>n.type==='View' && n.props.style?.flexDirection==='row' && n.props.style?.flexWrap==='wrap' && n.props.style?.gap===12 && nodes(n).some(child=>child.type==='SettingsAction' && child.props.actionLabel==='Pause'));
+  assert.ok(goalRow,'active Goal controls render in the expected wrapping row');
+  const activeActions=nodes(goalRow).filter(n=>n.type==='SettingsAction');
+  assert.deepEqual(activeActions.map(n=>n.props.actionLabel),['Pause','Edit','Clear','Limits'],'active Goal exposes all four actions together');
+  assert.equal(goalRow.props.style.gap,12,'actions retain spacing when they wrap');
+  for (const action of activeActions) {
+    const wrapper=all.find(n=>n.type==='View' && n.props.style?.flexShrink===1 && nodes(n).some(child=>child.type==='SettingsAction' && child.props.actionLabel===action.props.actionLabel));
+    assert.ok(wrapper,`active ${action.props.actionLabel} action has a shrinkable, width-capped wrapper`);
+    assert.equal(wrapper.props.style.maxWidth,'100%');
+  }
   create.props.onPress(); await new Promise(resolve=>setImmediate(resolve));
   const control=calls.find(c=>c.name==='workflows_control');
   assert.ok(control); assert.equal(control.input.request.action,'goal.create_paused');
