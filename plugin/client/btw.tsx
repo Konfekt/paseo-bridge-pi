@@ -139,7 +139,8 @@ function BtwView({ host, workspaceId, agentId, theme, layout, expanded = false }
   const thread = current ? snap?.threads.find(t => t.id === selected) : undefined;
   const draftKey = selected ?? "new", draft = saved.drafts[draftKey]?.text ?? "";
   const blocked = !current || saved.busy || saved.uncertain;
-  const canSend = !blocked && !!draft.trim() && thread?.state !== "running" && (!selected || !!thread);
+  const defaultModelAvailable = !!snap?.models.includes(snap.defaultModel);
+  const canSend = !blocked && !!draft.trim() && thread?.state !== "running" && (!selected || !!thread) && (!!selected || defaultModelAvailable);
   const colors = theme.colors;
   const button = (label: string, action: () => void, disabled = false) => (
     <NativeButton colors={colors} label={label} onPress={action} disabled={disabled} style={{ minHeight: 36, paddingVertical: 4, paddingHorizontal: 8 }} />
@@ -150,7 +151,7 @@ function BtwView({ host, workspaceId, agentId, theme, layout, expanded = false }
     </View>
   );
   async function mutate(operation: BtwRequest["operation"]) {
-    if (blocked || saved.busy || saved.uncertain || !snap || !data?.runtimeEpoch || !data.sessionId) return;
+    if (blocked || saved.busy || saved.uncertain || !snap || !data?.runtimeEpoch || !data.sessionId || (operation === "start" && !defaultModelAvailable)) return;
     const generation = saved.generation;
     const question = draft.trim(), submitted = saved.drafts[draftKey];
     if ((operation === "start" || operation === "send") && (!question || thread?.state === "running")) return;
@@ -195,6 +196,7 @@ function BtwView({ host, workspaceId, agentId, theme, layout, expanded = false }
         {query.isPending ? <Metadata colors={colors}>Connecting…</Metadata> : null}
         {query.isError ? <Metadata colors={colors} style={{ color: colors.statusWarning }}>Connection unavailable.</Metadata> : null}
         {!query.isPending && !query.isError && !data?.available ? <Metadata colors={colors}>Reload Pi to enable BTW.</Metadata> : null}
+        {current && !selected && !defaultModelAvailable ? <Metadata colors={colors} style={{ color: colors.statusWarning }}>BTW model {snap?.defaultModel} is unavailable for this session. No fallback was made.</Metadata> : null}
         {thread?.turns.map((turn, index) => <View key={`${thread.id}:${index}`} style={{ gap: 12 }}>
           {question(turn.question)}
           <OutputWell colors={colors} text={turn.answer} platform={layout.platform} copyable={false} />
