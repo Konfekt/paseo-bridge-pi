@@ -33,6 +33,7 @@ export const workflowSnapshotSchema = z
 				z
 					.object({
 						path: z.string().max(4096),
+						createdInSession: z.boolean().optional(),
 						repositoryPath: z.string().max(4096).optional(),
 						repositoryLabel: z.string().max(4096).optional(),
 						branch: z.string().max(4096).nullable(),

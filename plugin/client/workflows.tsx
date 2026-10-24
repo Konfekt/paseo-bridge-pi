@@ -6,6 +6,7 @@ import {
 	SettingsSection,
 	SettingsCard,
 	SettingsSelect,
+	SettingsAction,
 } from "@getpaseo/plugin/client/ui";
 import { useRpc, type PluginAgentPanelProps } from "@getpaseo/plugin/client";
 import { Metadata, NativeButton } from "./presentation";
@@ -22,6 +23,7 @@ type Memory = {
 	uncertain: boolean;
 	error?: string;
 	sequence: number;
+	showAllWorktrees: boolean;
 	refreshed: number;
 	failedAt: number;
 };
@@ -90,6 +92,7 @@ function WorkflowsView({
 				pending: false,
 				uncertain: false,
 				sequence: 0,
+				showAllWorktrees: false,
 				refreshed: 0,
 				failedAt: 0,
 			};
@@ -127,8 +130,10 @@ function WorkflowsView({
 					!saved.uncertain &&
 					!result.snapshot.operationId
 				) {
-					if (JSON.parse(saved.binding)[0] !== result.sessionId)
+					if (JSON.parse(saved.binding)[0] !== result.sessionId) {
 						saved.answers = {};
+						saved.showAllWorktrees = false;
+					}
 					saved.binding = next;
 					saved.error = undefined;
 				}
@@ -161,7 +166,11 @@ function WorkflowsView({
 		locked = !current || saved.pending || saved.uncertain,
 		goal = snapshot?.goal,
 		dialog = snapshot?.dialog,
-		colors = theme.colors;
+		colors = theme.colors,
+		showAllWorktrees = saved.showAllWorktrees === true,
+		visibleWorktrees = snapshot?.worktrees.filter(
+			(tree) => showAllWorktrees || tree.createdInSession === true,
+		) ?? [];
 	const parsedBudget = budgetText.trim() ? Number(budgetText) : undefined;
 	const validBudget = parsedBudget === undefined || (
 		/^\d+$/.test(budgetText.trim()) && Number.isSafeInteger(parsedBudget) &&
@@ -754,17 +763,30 @@ function WorkflowsView({
 									{snapshot.worktreeError}
 								</Text>
 							) : null}
+								{!snapshot.worktreeLoading && !snapshot.worktreeError ? (
+								<NativeButton
+									colors={colors}
+									label={saved.showAllWorktrees ? "Show ours" : "Show all"}
+									onPress={() => {
+										saved.showAllWorktrees = !saved.showAllWorktrees;
+										redraw();
+									}}
+									style={{ alignSelf: "flex-start", minHeight: 32 }}
+								/>
+							) : null}
 							{!snapshot.worktreeLoading &&
 							!snapshot.worktreeError &&
-							!snapshot.worktrees.length ? (
+							!visibleWorktrees.length ? (
 								<Text style={{ color: colors.foregroundMuted, padding: 8 }}>
 									{snapshot.worktreeContainer &&
 									!snapshot.worktreeRepositoryCount
 										? "No Git repositories found within two directory levels"
-										: "No additional worktrees"}
+										: showAllWorktrees
+											? "No additional worktrees"
+											: "No session-created worktrees"}
 								</Text>
 							) : null}
-							{snapshot.worktrees.map((tree, index) => {
+							{visibleWorktrees.map((tree, index) => {
 								const unsafe =
 										tree.stale ||
 										tree.locked ||
@@ -790,7 +812,7 @@ function WorkflowsView({
 									>
 										{tree.repositoryPath &&
 										tree.repositoryPath !==
-											snapshot.worktrees[index - 1]?.repositoryPath ? (
+											visibleWorktrees[index - 1]?.repositoryPath ? (
 											<Text
 												accessibilityRole="header"
 												style={{
