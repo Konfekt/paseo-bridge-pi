@@ -292,6 +292,8 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   const runtimeReapingIdentity = {
     PI_HARNESS_RUNTIME_ID: process.env.PI_HARNESS_RUNTIME_ID,
     PI_HARNESS_CHILD_ID: process.env.PI_HARNESS_CHILD_ID,
+    PI_HARNESS_TASK_ID: process.env.PI_HARNESS_TASK_ID,
+    PI_HARNESS_ATTEMPT: process.env.PI_HARNESS_ATTEMPT,
   };
   const unsubscribeReaping = pi.events.on("harness-runtime-reaping", (event: any) => {
     if (process.platform !== "linux" || lifecycleClosed || !validRuntimeReapingEvent(event, runtimeReapingIdentity)) return;

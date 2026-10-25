@@ -3,7 +3,7 @@ import * as path from "node:path";
 type RecordValue = Record<string, any>;
 export type NativeSessionSource = {
   taskId: string; childId: string; groupId: string; attempt: number; runtimeId: string | null;
-  sessionFile?: string; status: "running" | "completed" | "failed" | "cancelled" | "lost";
+  reaped?: boolean; sessionFile?: string; status: "running" | "completed" | "failed" | "cancelled" | "lost";
 };
 export type ResolveNativeSession = (input: { taskId: string; childId: string; attempt: number }) => Promise<NativeSessionSource | undefined>;
 type Link = { id: string; agent: string; task: string; taskId: string; childId: string; attempt: number; retries: number; nextRead: number; source?: NativeSessionSource; sent?: string };
@@ -17,6 +17,7 @@ export class NativeSubagentLinks {
   private readonly starts = new Map<string, { agent: string; task: string }>();
   private readonly links = new Map<string, Link>();
   private flushing = false;
+  private flushDone: Promise<void> | null = null;
   private deliveryEpoch = 0;
   private readonly now: () => number;
   constructor(now: () => number = Date.now) { this.now = now; }
@@ -44,6 +45,17 @@ export class NativeSubagentLinks {
     this.links.set(id, previous ?? { id, ...start, taskId: c.task_id, childId: c.child_id, attempt: c.attempt, retries: 0, nextRead: 0 });
   }
 
+  private readonly reapedBindings: Array<{ taskId: string; childId: string; attempt: number; runtimeId: string }> = [];
+  reapedBindingKeys(): string[] { return this.reapedBindings.map(binding => JSON.stringify(binding)); }
+
+  reap(input: { taskId: string; childId: string; attempt: number; runtimeId: string }): void {
+    if (!text(input.taskId, 64) || !/^subagent-task-[0-9a-f]{24}$/.test(input.taskId)
+      || !text(input.childId, 64) || !/^subagent-child-[0-9a-f]{24}$/.test(input.childId)
+      || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !text(input.runtimeId, 256)) return;
+    if (!this.reapedBindings.some(binding => binding.taskId === input.taskId && binding.childId === input.childId
+      && binding.attempt === input.attempt && binding.runtimeId === input.runtimeId)) this.reapedBindings.push({ ...input });
+  }
+
   observe(event: any): void {
     if (event?.toolName !== "subagent") return;
     if (event.type === "tool_execution_start") this.start(event.toolCallId, event.args);
@@ -59,7 +71,7 @@ export class NativeSubagentLinks {
     }
   }
 
-  clear(): void { this.deliveryEpoch++; this.starts.clear(); this.links.clear(); }
+  clear(): void { this.deliveryEpoch++; this.starts.clear(); this.links.clear(); this.reapedBindings.length = 0; }
 
   resetDelivery(): void {
     this.deliveryEpoch++;
@@ -67,7 +79,6 @@ export class NativeSubagentLinks {
   }
 
   private async source(link: Link, resolve: ResolveNativeSession, force = false): Promise<NativeSessionSource | undefined> {
-    if (!force && link.source && link.source.status !== "running" && link.source.sessionFile) return link.source;
     if (!force && this.now() < link.nextRead) return link.source;
     // Keep retrying with capped backoff: a slow manifest/permission transition
     // must not strand a task as running until the next bridge reload.
@@ -100,8 +111,13 @@ export class NativeSubagentLinks {
   }
 
   async notifications(resolve: ResolveNativeSession): Promise<string[]> {
-    if (this.flushing) return [];
+    if (this.flushing) {
+      await this.flushDone;
+      return this.notifications(resolve);
+    }
     this.flushing = true;
+    let finishFlush!: () => void;
+    this.flushDone = new Promise(resolve => { finishFlush = resolve; });
     const epoch = this.deliveryEpoch;
     try {
       const bindings: any[] = [];
@@ -109,8 +125,10 @@ export class NativeSubagentLinks {
       for (const link of this.links.values()) {
         const s = await this.source(link, resolve);
         if (!s) continue;
+        const reaped = s.reaped === true || (s.runtimeId !== null && this.reapedBindings.some(binding => binding.taskId === s.taskId && binding.childId === s.childId
+          && binding.attempt === s.attempt && binding.runtimeId === s.runtimeId));
         const binding = { id: link.id, taskId: s.taskId, childId: s.childId, attempt: s.attempt, runtimeId: s.runtimeId,
-          ...(s.sessionFile ? { sessionFile: s.sessionFile } : {}), status: s.status, agent: link.agent, task: link.task };
+          ...(s.sessionFile ? { sessionFile: s.sessionFile } : {}), status: s.status, ...(reaped ? { hidden: true } : {}), agent: link.agent, task: link.task };
         const fingerprint = JSON.stringify(binding);
         if (link.sent === fingerprint) continue;
         bindings.push(binding); delivered.push([link, fingerprint]);
@@ -129,6 +147,10 @@ export class NativeSubagentLinks {
       }
       if (batch.length) messages.push(NATIVE_SUBAGENTS_MARKER + JSON.stringify({ version: 1, bindings: batch }));
       return messages;
-    } finally { this.flushing = false; }
+    } finally {
+      this.flushing = false;
+      this.flushDone = null;
+      finishFlush();
+    }
   }
 }

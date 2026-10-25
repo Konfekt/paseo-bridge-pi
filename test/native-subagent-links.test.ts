@@ -40,6 +40,25 @@ test("publishes completed status without transcript, then attaches the later val
   assert.equal(decode(recovered).bindings[0].sessionFile, source.sessionFile);
 });
 
+test("explicit reap filters only the exact owner/task/child/attempt/runtime binding", async () => {
+  const links = new NativeSubagentLinks(); links.seed(history());
+  links.reap({ taskId, childId, attempt: 1, runtimeId: "owned-runtime" });
+  const [reaped] = await links.notifications(async () => source);
+  assert.equal(decode(reaped!).bindings[0].hidden, true);
+  assert.equal(decode(reaped!).bindings[0].status, "completed", "reap is visibility, not execution status");
+  const retained = await links.enrichHistory(history(), async () => source);
+  assert.equal((retained[1] as any).details.results[0].sessionFile, source.sessionFile,
+    "reaping does not mutate retained history or block direct history enrichment");
+  const wrongWorkerLinks = new NativeSubagentLinks(); wrongWorkerLinks.seed(history());
+  wrongWorkerLinks.reap({ taskId, childId, attempt: 1, runtimeId: "different-runtime" });
+  assert.equal((await wrongWorkerLinks.notifications(async () => source)).length, 1,
+    "another worker runtime is not hidden by this reap marker");
+  const wrongAttemptLinks = new NativeSubagentLinks(); wrongAttemptLinks.seed(history());
+  wrongAttemptLinks.reap({ taskId, childId, attempt: 2, runtimeId: "owned-runtime" });
+  assert.equal((await wrongAttemptLinks.notifications(async () => source)).length, 1,
+    "another attempt is not hidden by this reap marker");
+});
+
 test("enriches daemon history without modifying model-visible messages", async () => {
   const links = new NativeSubagentLinks(); const messages = history();
   const enriched = await links.enrichHistory(messages, async () => source);
@@ -97,6 +116,19 @@ test("a connection/owner epoch change discards in-flight reconciliation and allo
   links.resetDelivery(); release(source);
   assert.deepEqual(await pending, []);
   assert.equal((await links.notifications(async () => source)).length, 1);
+});
+
+test("reconnect reconciliation waits for an obsolete in-flight publication and retries", async () => {
+  const links = new NativeSubagentLinks(); links.seed(history());
+  let release!: (s: NativeSessionSource) => void;
+  const previousConnection = links.notifications(() => new Promise(resolve => { release = resolve; }));
+  await Promise.resolve();
+  links.resetDelivery();
+  const reconnected = links.notifications(async () => source);
+  release(source);
+  assert.deepEqual(await previousConnection, [], "old connection epoch must not publish");
+  const [message] = await reconnected;
+  assert.equal(decode(message).bindings[0].status, "completed", "new connection must replay authoritative state");
 });
 
 test("source lookup recovers after prolonged unavailability without a reload", async () => {

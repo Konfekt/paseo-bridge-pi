@@ -100,12 +100,13 @@ test("dead managed ownership is unresolved, not automatic revival authority", ()
   assert.throws(() => assertNoLiveRuntimeOwner(record.sessionFile, { records: [{ ...record, managed: true }],
     kill() { throw Object.assign(new Error(), { code: "ESRCH" }); } }), /unresolved managed/);
 });
-test("reaping events require the trusted exact runtime and child, with a bounded public epoch", () => {
-  const env = { PI_HARNESS_RUNTIME_ID: "runtime", PI_HARNESS_CHILD_ID: "child" };
-  const event = { runtimeId: "runtime", childId: "child", workerEpoch: "a".repeat(32) };
+test("reaping events require exact trusted task, attempt, runtime, child and bounded worker epoch", () => {
+  const env = { PI_HARNESS_RUNTIME_ID: "runtime", PI_HARNESS_CHILD_ID: "child", PI_HARNESS_TASK_ID: "task", PI_HARNESS_ATTEMPT: "2" };
+  const event = { runtimeId: "runtime", taskId: "task", childId: "child", attempt: 2, workerEpoch: "a".repeat(32) };
   assert.equal(validRuntimeReapingEvent(event, env), true);
-  for (const value of [null, [], {}, { ...event, runtimeId: "other" }, { ...event, childId: "other" },
-    { ...event, workerEpoch: "bad" }, { ...event, controlToken: "secret" }]) {
+  assert.equal(validRuntimeReapingEvent({ ...event, attempt: 1 }, env), false, "stale attempts cannot seal the current runtime");
+  for (const value of [null, [], {}, { ...event, runtimeId: "other" }, { ...event, taskId: "other" },
+    { ...event, childId: "other" }, { ...event, workerEpoch: "bad" }, { ...event, controlToken: "secret" }]) {
     assert.equal(validRuntimeReapingEvent(value, env), false);
   }
   assert.equal(validRuntimeReapingEvent(event, {}), false);

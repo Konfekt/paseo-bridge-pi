@@ -29,10 +29,12 @@ export const REAPED_RUNTIME_ERROR = "This managed Pi runtime was explicitly reap
 
 export function validRuntimeReapingEvent(event, env = process.env) {
   return Boolean(event && typeof event === "object" && !Array.isArray(event)
-    && Object.keys(event).every(key => ["runtimeId", "childId", "workerEpoch"].includes(key))
+    && Object.keys(event).sort().join(",") === "attempt,childId,runtimeId,taskId,workerEpoch"
     && env.PI_HARNESS_RUNTIME_ID?.trim() && env.PI_HARNESS_CHILD_ID?.trim()
     && event.runtimeId === env.PI_HARNESS_RUNTIME_ID.trim()
     && event.childId === env.PI_HARNESS_CHILD_ID.trim()
+    && typeof event.taskId === "string" && event.taskId === env.PI_HARNESS_TASK_ID?.trim()
+    && Number.isSafeInteger(event.attempt) && String(event.attempt) === env.PI_HARNESS_ATTEMPT?.trim()
     && typeof event.workerEpoch === "string" && /^[a-f0-9]{32}$/.test(event.workerEpoch));
 }
 
