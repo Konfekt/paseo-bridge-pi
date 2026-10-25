@@ -243,6 +243,9 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.match(text(tree), /git status --short/, 'badge uses the compact native command summary');
     assert.match(text(tree), /formatted/, 'assistant prose is rendered through the Markdown adapter');
     assert.ok(nodes(tree).some(n => n.props?.testID === 'transcript-markdown'));
+    assert.ok(nodes(tree).some(n => n.type === 'p' && n.props.style.fontSize === 15 && n.props.style.lineHeight === '21px'), 'body matches native content typography');
+    assert.ok(nodes(tree).some(n => n.type === 'h1' && n.props.style.fontSize === 24 && n.props.style.lineHeight === '31px'), 'heading follows native content scale');
+    assert.ok(nodes(tree).some(n => n.type === 'code' && n.props.style.fontSize === 12), 'inline code matches native code size');
     assert.ok(nodes(tree).some(n => n.type === 'strong'), 'web markdown keeps strong semantics');
     assert.ok(nodes(tree).some(n => n.type === 'code'), 'web markdown keeps inline code semantics');
     assert.ok(nodes(tree).some(n => n.type === 'ul' && nodes(n).some(child => child.type === 'li')), 'web markdown keeps list semantics');

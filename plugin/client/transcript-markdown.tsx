@@ -44,13 +44,13 @@ function renderInline(source: string, colors: any, web: boolean): any[] {
     const children = part.kind === "code" ? part.text : renderInline(part.text, colors, web);
     if (web) {
       const tags: Record<"strong" | "em" | "del" | "code" | "link", string> = { strong: "strong", em: "em", del: "del", code: "code", link: "span" };
-      const style = part.kind === "code" ? { fontFamily: "monospace", fontSize: 12, backgroundColor: colors.surface1, color: colors.foreground, padding: "1px 3px", borderRadius: 3 }
+      const style = part.kind === "code" ? { fontFamily: "monospace", fontSize: 12, backgroundColor: colors.surface2, color: colors.foreground, padding: "1px 3px", borderRadius: 3 }
         : part.kind === "link" ? { color: colors.accentBright, textDecoration: "underline" } : undefined;
       return createElement(tags[part.kind], { key: index, style }, children);
     }
     const style = part.kind === "strong" ? { fontWeight: "700" } : part.kind === "em" ? { fontStyle: "italic" }
       : part.kind === "del" ? { textDecorationLine: "line-through" } : part.kind === "code"
-        ? { fontFamily: "monospace", fontSize: 12, backgroundColor: colors.surface1 } : { color: colors.accentBright, textDecorationLine: "underline" };
+        ? { fontFamily: "monospace", fontSize: 12, backgroundColor: colors.surface2 } : { color: colors.accentBright, textDecorationLine: "underline" };
     return <Text key={index} style={style}>{children}</Text>;
   });
 }
@@ -81,28 +81,34 @@ function parseBlocks(text: string): Block[] {
   return blocks;
 }
 
+// Paseo theme.fontSize.content=15, code=12; createMarkdownStyles heading scales.
+const headingMetrics = (level = 1) => {
+  const scale = [1.6, 1.4, 1.2, 1.1, 1, 1][Math.min(5, Math.max(0, level - 1))]!;
+  return { fontSize: Math.round(15 * scale), lineHeight: Math.round(15 * scale * 1.3) };
+};
+
 /** Markdown block/inline structure adapted for public RN primitives; web output retains semantic tags. */
 export function TranscriptMarkdown({ text, colors, platform }: { text: string; colors: any; platform: string }) {
   const web = platform === "web";
   const blocks = parseBlocks(text);
   if (web) return <View style={{ gap: 8 }} testID="transcript-markdown">
     {blocks.map((block, index) => {
-      if (block.kind === "code") return createElement("pre", { key: index, style: { margin: 0, padding: 10, borderRadius: 6, backgroundColor: colors.surface1, color: colors.foreground, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "monospace", fontSize: 12, lineHeight: "17px" } }, createElement("code", { style: { font: "inherit", color: "inherit" } }, block.text));
-      if (block.kind === "heading") { const size = Math.max(14, 20 - (block.level ?? 1)); return createElement(`h${block.level ?? 1}`, { key: index, style: { margin: 0, color: colors.foreground, fontSize: size, lineHeight: `${Math.round(size * 1.3)}px`, fontWeight: 700 } }, renderInline(block.text, colors, web)); }
-      if (block.kind === "quote") return createElement("blockquote", { key: index, style: { margin: 0, borderLeft: `3px solid ${colors.border}`, paddingLeft: 10, color: colors.foregroundMuted, fontSize: 14, lineHeight: "20px" } }, renderInline(block.text, colors, web));
-      if (block.kind === "list") return createElement("ul", { key: index, style: { margin: 0, paddingLeft: 22, color: colors.foreground, fontSize: 14, lineHeight: "20px" } }, createElement("li", { style: { marginBottom: 4 } }, renderInline(block.text, colors, web)));
-      return createElement("p", { key: index, style: { margin: 0, color: colors.foreground, fontSize: 14, lineHeight: "20px", whiteSpace: "pre-wrap", overflowWrap: "anywhere" } }, renderInline(block.text, colors, web));
+      if (block.kind === "code") return createElement("pre", { key: index, style: { margin: 0, padding: 12, borderRadius: 8, backgroundColor: colors.surface2, color: colors.foreground, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "monospace", fontSize: 12, lineHeight: "21px" } }, createElement("code", { style: { font: "inherit", color: "inherit" } }, block.text));
+      if (block.kind === "heading") { const metrics = headingMetrics(block.level); return createElement(`h${block.level ?? 1}`, { key: index, style: { margin: 0, color: block.level === 6 ? colors.foregroundMuted : colors.foreground, fontSize: metrics.fontSize, lineHeight: `${metrics.lineHeight}px`, fontWeight: 700 } }, renderInline(block.text, colors, web)); }
+      if (block.kind === "quote") return createElement("blockquote", { key: index, style: { margin: 0, borderLeft: `3px solid ${colors.border}`, paddingLeft: 10, color: colors.foregroundMuted, fontSize: 15, lineHeight: "21px" } }, renderInline(block.text, colors, web));
+      if (block.kind === "list") return createElement("ul", { key: index, style: { margin: 0, paddingLeft: 22, color: colors.foreground, fontSize: 15, lineHeight: "21px" } }, createElement("li", { style: { marginBottom: 4 } }, renderInline(block.text, colors, web)));
+      return createElement("p", { key: index, style: { margin: 0, color: colors.foreground, fontSize: 15, lineHeight: "21px", whiteSpace: "pre-wrap", overflowWrap: "anywhere" } }, renderInline(block.text, colors, web));
     })}
   </View>;
   return <View style={{ gap: 8 }} testID="transcript-markdown">
     {blocks.map((block, index) => block.kind === "code"
-      ? <View key={index} style={{ padding: 10, borderRadius: 6, backgroundColor: colors.surface1 }}><Text selectable style={{ color: colors.foreground, fontFamily: "monospace", fontSize: 12, lineHeight: 17 }}>{block.text}</Text></View>
+      ? <View key={index} style={{ padding: 12, borderRadius: 8, backgroundColor: colors.surface2 }}><Text selectable style={{ color: colors.foreground, fontFamily: "monospace", fontSize: 12, lineHeight: 21 }}>{block.text}</Text></View>
       : block.kind === "heading"
-        ? <Text key={index} selectable style={{ color: colors.foreground, fontSize: Math.max(14, 20 - (block.level ?? 1)), lineHeight: 24, fontWeight: "700" }}>{renderInline(block.text, colors, web)}</Text>
+        ? <Text key={index} selectable style={{ color: block.level === 6 ? colors.foregroundMuted : colors.foreground, ...headingMetrics(block.level), fontWeight: "700" }}>{renderInline(block.text, colors, web)}</Text>
         : block.kind === "quote"
-          ? <View key={index} style={{ borderLeftWidth: 3, borderColor: colors.border, paddingLeft: 10 }}><Text selectable style={{ color: colors.foregroundMuted, fontSize: 14, lineHeight: 20 }}>{renderInline(block.text, colors, web)}</Text></View>
+          ? <View key={index} style={{ borderLeftWidth: 3, borderColor: colors.border, paddingLeft: 10 }}><Text selectable style={{ color: colors.foregroundMuted, fontSize: 15, lineHeight: 21 }}>{renderInline(block.text, colors, web)}</Text></View>
           : block.kind === "list"
-            ? <Text key={index} selectable style={{ color: colors.foreground, fontSize: 14, lineHeight: 20 }}>• {renderInline(block.text, colors, web)}</Text>
-            : <Text key={index} selectable style={{ color: colors.foreground, fontSize: 14, lineHeight: 20 }}>{renderInline(block.text, colors, web)}</Text>)}
+            ? <Text key={index} selectable style={{ color: colors.foreground, fontSize: 15, lineHeight: 21 }}>• {renderInline(block.text, colors, web)}</Text>
+            : <Text key={index} selectable style={{ color: colors.foreground, fontSize: 15, lineHeight: 21 }}>{renderInline(block.text, colors, web)}</Text>)}
   </View>;
 }
