@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Text, View } from "react-native";
 import { SettingsAction } from "@getpaseo/plugin/client/ui";
-import { Metadata } from "./presentation";
+import { Metadata, NativeButton, OutputWell } from "./presentation";
+import { useQuery } from "@tanstack/react-query";
+import { useRpc } from "@getpaseo/plugin/client";
+import { harnessSubagentConversationRpc } from "../shared/harness-readonly";
 import type { PluginClientContext, PluginScreenProps } from "@getpaseo/plugin/client";
 import { harnessStatusRpc } from "../shared/harness-readonly";
 import { independentAgentOpenRpc } from "../shared/independent-agents";
@@ -10,6 +13,51 @@ export type AgentConversationTarget = {
   hostId: string; agentId: string; workspaceId: string; sessionId: string;
   taskId: string; childId: string; attempt: number; runtimeId: string | null; title: string;
 };
+
+export function WorkerConversation({ target, epoch, colors, platform, open }: {
+  target: AgentConversationTarget; epoch: string; colors: any; platform: any;
+  open?: (target: AgentConversationTarget) => Promise<void>;
+}) {
+  const load = useRpc(harnessSubagentConversationRpc);
+  const [cursor, setCursor] = useState<number | undefined>();
+  const [opening, setOpening] = useState(false);
+  const [error, setError] = useState<string>();
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const conversation = useQuery({
+    queryKey: ["worker-conversation", target.hostId, target.agentId, target.workspaceId, target.sessionId, epoch, target.taskId, target.childId, target.attempt, target.runtimeId, cursor],
+    queryFn: () => load({ agentId: target.agentId, workspaceId: target.workspaceId,
+      expectedSessionId: target.sessionId, expectedRuntimeEpoch: epoch,
+      taskId: target.taskId, childId: target.childId, attempt: target.attempt, runtimeId: target.runtimeId, cursor }),
+    refetchInterval: 5000, refetchOnReconnect: true,
+  });
+  const item = !conversation.isError && conversation.data?.state === "available" ? conversation.data.item : undefined;
+  return <View testID="work-agent-conversation" style={{ padding: 12, gap: 8 }}>
+    <Metadata colors={colors}>Worker conversation · read only</Metadata>
+    {conversation.isPending ? <Metadata colors={colors}>Loading conversation…</Metadata> : null}
+    {conversation.isError ? <><Metadata colors={colors}>Conversation unavailable. Retrying automatically.</Metadata><NativeButton colors={colors} label="Retry conversation" onPress={() => { void conversation.refetch(); }} /></> : null}
+    {!conversation.isPending && !conversation.isError && !item ? <Metadata colors={colors}>{conversation.data?.message ?? "No retained conversation is available."}</Metadata> : null}
+    {item?.messages.map(message => <View key={message.id} style={{ gap: 4 }}>
+      <Metadata colors={colors}>{message.role}{message.truncated ? " · truncated" : ""}</Metadata>
+      <OutputWell colors={colors} text={message.text} platform={platform} maxHeight={320} />
+    </View>)}
+    {item && !item.messages.length ? <Metadata colors={colors}>No messages recorded yet.</Metadata> : null}
+    {item && conversation.data?.stale ? <Metadata colors={colors}>Retained snapshot · refreshing automatically</Metadata> : null}
+    {item?.truncated ? <Metadata colors={colors}>Conversation excerpt</Metadata> : null}
+    {item?.nextCursor != null ? <NativeButton colors={colors} label="Next messages" onPress={() => setCursor(item.nextCursor)} /> : null}
+    {cursor != null ? <NativeButton colors={colors} label="First messages" onPress={() => setCursor(undefined)} /> : null}
+    {open ? <>
+      <Metadata colors={colors}>Continue from a checkpoint in a separate chat. The worker stays owned by its parent.</Metadata>
+      <NativeButton colors={colors} label={opening ? "Opening independent chat…" : "Continue independently"} disabled={opening} onPress={() => {
+        if (opening) return;
+        setOpening(true); setError(undefined);
+        void open(target).catch(reason => { if (mounted.current) setError(reason instanceof Error ? reason.message.slice(0, 300) : "Could not open independent chat."); })
+          .finally(() => { if (mounted.current) setOpening(false); });
+      }} />
+    </> : null}
+    {error ? <Text accessibilityRole="alert" style={{ color: colors.statusDanger }}>{error}</Text> : null}
+  </View>;
+}
 
 /** Public plugin screens expose native navigation; composer popovers do not.
  * Native openAgent pops/dismisses this transient screen back to the workspace,

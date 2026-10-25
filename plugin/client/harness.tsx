@@ -32,6 +32,7 @@ import { WorkStatusRing } from "./work-status-ring";
 import { Metadata, NativeButton, NativeRow, OutputWell, WorkAction } from "./presentation";
 import {
 	createAgentConversationTabs,
+	WorkerConversation,
 	type AgentConversationTarget,
 } from "./agent-conversation";
 
@@ -373,23 +374,21 @@ function MountedWorkIndicator(
 ) {
 	const summary = useWorkSummary(props);
 	const runningJobs = summary.jobs.runningCount + summary.foreground.runningCount;
-	const agents = summary.agents.runningCount || (runningJobs ? 0 : summary.agents.active),
+	const agents = summary.agents.runningCount,
 		jobs = runningJobs || summary.jobs.active + summary.foreground.active;
 	const count = agents || jobs;
 	const attention = agents
 		? summary.agents.attention
 		: summary.jobs.attention || summary.foreground.attention;
 	const label = agents
-		? `${agents} ${agents === 1 ? "subagent" : "subagents"}`
+		? `${agents} working`
 		: jobs
 			? `${jobs} ${jobs === 1 ? "job" : "jobs"}`
 			: "Work";
 	useEffect(() => {
 		props.report(label);
 	}, [label, props.report]);
-	return agents && !summary.agents.running ? (
-		<View accessibilityLabel="Idle agents" style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: props.theme.colors.statusSuccess }} />
-	) : count ? (
+	return count ? (
 		<WorkStatusRing
 			attention={attention}
 			foreground={props.theme.colors.foreground}
@@ -619,46 +618,30 @@ function AgentsOverview(
 ) {
 	const { completed } = props;
 	const summary = useWorkSummary(props);
-	const count = completed
-		? summary.agents.total - summary.agents.active
-		: summary.agents.active;
-
 	const mode = completed ? "completed" : "active";
-	const emptyLabel = summary.agents.available
-		? completed
-			? "No completed agents"
-			: "No active agents"
-		: "Loading agent status…";
 	return (
-		<View style={{ width: "100%", gap: count ? 8 : 0 }}>
-			{count > 0 ? (
-				<HarnessPanel
-					key={mode}
-					{...props}
-					kind="subagents"
-					viewMode={mode}
-					excludeTaskIds={summary.foregroundIds}
-					openConversation={props.openConversation}
-					embedded
-				/>
-			) : null}
-			{completed ? (
-				!count ? (
-					<Text
-						style={{ color: props.theme.colors.foregroundMuted, padding: 12 }}
-					>
-						{emptyLabel}
-					</Text>
-				) : null
-			) : (
-				<WorkAction
-					label={count ? "" : emptyLabel}
-					actionLabel="Completed"
-					onPress={props.toggleCompleted}
-				/>
-			)}
+		<View testID="work-agents" style={{ width: "100%", gap: 4 }}>
+			<WorkAction label={summary.agents.available ? `${summary.agents.runningCount} working` : "Agents"} actionLabel={completed ? "Back to agents" : "History"} onPress={props.toggleCompleted} />
+			<HarnessPanel
+				key={mode}
+				{...props}
+				kind="subagents"
+				viewMode={mode}
+				excludeTaskIds={summary.foregroundIds}
+				openConversation={props.openConversation}
+				embedded
+			/>
 		</View>
 	);
+}
+
+/** Paseo Pi mark, expressed with supported View rectangles rather than a private
+ * SVG import. Geometry from Paseo's Apache-2.0 pi-icon.tsx (see PASEO-LICENSE).
+ * Copyright (c) 2025-present Mohamed Boudra. */
+function WorkerIcon({ color }: { color: string }) {
+	return <View style={{ width: 14, height: 14 }}>
+		{[[165.29, 165.29, 117.36, 469.43], [282.65, 165.29, 234.71, 117.36], [400, 282.65, 117.36, 117.35], [282.65, 400, 117.35, 117.36], [517.36, 400, 117.36, 234.72]].map(([x, y, width, height], i) => <View key={i} style={{ position: "absolute", left: (x - 100) * 14 / 600, top: (y - 100) * 14 / 600, width: width * 14 / 600, height: height * 14 / 600, backgroundColor: color }} />)}
+	</View>;
 }
 
 function elapsed(start: string, end?: string | null) {
@@ -702,16 +685,6 @@ function HarnessPanel({
 		session: string;
 		epoch: string;
 	} | null>(null);
-	const opening = useRef(false),
-		mounted = useRef(true);
-	const [openingId, setOpeningId] = useState<string>();
-	const [openError, setOpenError] = useState<string>();
-	useEffect(() => {
-		mounted.current = true;
-		return () => {
-			mounted.current = false;
-		};
-	}, []);
 	const target = { agentId, workspaceId };
 	const identity = useQuery({
 		queryKey: ["harness-status", agentId, workspaceId, host.id],
@@ -775,7 +748,7 @@ function HarnessPanel({
 			selectedId,
 			host.id,
 		],
-		enabled: ready && !!selectedId,
+		enabled: ready && !!selectedId && !(kind === "subagents" && openConversation),
 		queryFn: () =>
 			kind === "jobs"
 				? outputCall({ ...bound, jobId: selectedId!, maxBytes: 24000 })
@@ -793,7 +766,20 @@ function HarnessPanel({
 		brief = false,
 		status?: string,
 		presentation?: { title: string; detail: string; expanded?: boolean; opensChat: boolean },
-	) => (
+	) => kind === "subagents" ? (
+		<Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ expanded: presentation?.expanded }}
+			testID={`work-agent-row-${label}`} onPress={onPress}
+			style={({ pressed, hovered }: any) => ({ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 8, paddingVertical: layout.compact ? 8 : 4, minHeight: layout.compact ? 44 : 32, borderRadius: 6, backgroundColor: pressed || hovered ? theme.colors.surface2 : "transparent" })}>
+			<View style={{ width: 14, height: 14, alignItems: "center", justifyContent: "center" }}>
+				{status && ["starting", "launching", "pending", "running"].includes(status) ? <WorkStatusRing attention={false} foreground={fg} platform={layout.platform} /> : <WorkerIcon color={status === "failed" ? danger : muted} />}
+			</View>
+			<View style={{ flexGrow: 1, flexShrink: 1, flexBasis: "auto", minWidth: 0 }}>
+				<Text numberOfLines={1} style={{ fontSize: 14, color: fg }}>{presentation?.title ?? label}</Text>
+				<Text numberOfLines={1} style={{ fontSize: 12, color: muted }}>{presentation?.detail}</Text>
+			</View>
+			<Icon name={presentation?.expanded ? "ChevronUp" : "ChevronDown"} size={14} color={muted} />
+		</Pressable>
+	) : (
 		<NativeRow
 			colors={theme.colors}
 			title={presentation?.title ?? label}
@@ -909,27 +895,27 @@ function HarnessPanel({
 			{ready && list.data?.state !== "available" ? (
 				<Text style={{ color: muted }}>{list.data?.message}</Text>
 			) : null}
-			{ready && list.data?.state === "available" && !rows.length ? (
+			{kind === "subagents" && ready && list.data?.state === "available" && list.data.stale ? <Metadata colors={theme.colors}>Retained snapshot · refreshing automatically</Metadata> : null}
+			{ready && !list.isError && list.data?.state === "available" && !rows.length ? (
 				<Text style={{ color: muted }}>
-					No {kind === "jobs" ? "background jobs" : "native subagent tasks"} in
+					No {kind === "jobs" ? "background jobs" : viewMode === "completed" ? "reaped agents" : "retained agents"} in
 					this session.
 				</Text>
 			) : null}
 			{rows.map((row) => {
 				const id = "jobId" in row ? row.jobId : row.taskId;
 				const title = "jobId" in row ? row.name || "Background job" : row.title;
-				const state = kind === "subagents" && viewMode === "active" && row.status === "completed"
+				const state = kind === "subagents" && !isActiveRow(row) ? "Reaped" : kind === "subagents" && row.status === "completed"
 					? "Idle" : row.status.replace(/[_-]/g, " ").replace(/^./, value => value.toUpperCase());
 				const metadata = "jobId" in row
 					? [state, elapsed(row.createdAt, ["starting", "running"].includes(row.status) ? null : row.updatedAt), row.observationOnly ? "Observation only" : ""].filter(Boolean).join(" · ")
 					: [state, row.needsAttention ? "Needs attention" : ""].filter(Boolean).join(" · ");
 				const label = `${title} · ${metadata}`;
-				const opensChat = kind === "subagents" && viewMode === "completed" && !!openConversation;
 				return (
 					<View
-						key={"childId" in row ? row.childId : id}
+						key={"childId" in row ? `${row.childId}/${row.attempt}` : id}
 						style={
-							!isActiveRow(row)
+							kind === "jobs" && !isActiveRow(row)
 								? {
 										borderWidth: 1,
 										borderColor:
@@ -947,63 +933,21 @@ function HarnessPanel({
 						{button(
 							label,
 							() => {
-								if (
-									kind === "subagents" &&
-									viewMode === "completed" &&
-									"taskId" in row &&
-									openConversation
-								) {
-									if (opening.current) return;
-									opening.current = true;
-									setOpeningId(row.childId);
-									setOpenError(undefined);
-									void openConversation({
-										hostId: host.id,
-										agentId,
-										workspaceId,
-										sessionId: session!,
-										taskId: row.taskId,
-										childId: row.childId,
-										attempt: row.attempt,
-										runtimeId: row.runtimeId,
-										title: row.title,
-									})
-										.catch((error) => {
-											if (mounted.current)
-												setOpenError(
-													error instanceof Error
-														? error.message.slice(0, 300)
-														: "Could not open the conversation.",
-												);
-										})
-										.finally(() => {
-											opening.current = false;
-											if (mounted.current) setOpeningId(undefined);
-										});
-								} else
-									select(
-										selectedId === id
-											? null
-											: { id, session: session!, epoch: epoch! },
-									);
+								select(selectedId === id ? null : { id, session: session!, epoch: epoch! });
 							},
-							!!openingId,
+							false,
 							viewMode !== "completed",
 							kind === "subagents" && isActiveRow(row) ? row.status : undefined,
-							{ title, detail: metadata, opensChat, expanded: opensChat ? undefined : selectedId === id },
+							{ title, detail: metadata, opensChat: false, expanded: selectedId === id },
 						)}
-						{selectedId === id ? selectedDetail : null}
+						{selectedId === id ? kind === "subagents" && "childId" in row && openConversation ? <WorkerConversation
+							key={JSON.stringify([session, epoch, row.childId, row.attempt, row.runtimeId])}
+							target={{ hostId: host.id, agentId, workspaceId, sessionId: session!, taskId: row.taskId, childId: row.childId, attempt: row.attempt, runtimeId: row.runtimeId, title }}
+							epoch={epoch!} colors={theme.colors} platform={layout.platform} open={openConversation}
+						/> : selectedDetail : null}
 					</View>
 				);
 			})}
-			{openingId ? (
-				<Text style={{ color: muted }}>Opening conversation…</Text>
-			) : null}
-			{openError ? (
-				<Text accessibilityRole="alert" style={{ color: danger }}>
-					{openError}
-				</Text>
-			) : null}
 		</View>
 	);
 	return embedded ? (

@@ -72,6 +72,8 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
   let rpcResponse = async () => ({ available: false });
   let workAgents;
   let workJobs = [], foregroundJobs = [];
+  let conversationError = false;
+  let statusError = false;
   const pillUpdates = [];
   const load = name => {
     if (name === '@getpaseo/plugin') return { defineRpc: contract => contract };
@@ -92,8 +94,9 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
         : key[0] === 'harness-status' ? { available: true, sessionId: 's', runtimeEpoch: 'e' }
         : key[0] === 'harness-list' ? { state: 'available', items: key[1] === 'subagents' ? workAgents : workJobs }
         : key[0] === 'foreground-tasks' ? { available: true, tasks: foregroundJobs }
+        : key[0] === 'worker-conversation' ? { state: 'available', item: { messages: [{ id: 'm1', role: 'assistant', text: 'Worker transcript evidence' }], nextCursor: 2 } }
         : undefined;
-      return { data, isPending: false, isError: false, refetch() {} };
+      return { data, isPending: false, isError: (key[0] === 'worker-conversation' && conversationError) || (key[0] === 'harness-status' && statusError), refetch() {} };
     }, useMutation() { return { isPending: false, mutate() { throw Error('Unexpected mutation'); } }; } };
     return require(name);
   };
@@ -133,12 +136,12 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
       { taskId: 'reaped', status: 'completed', reaped: true },
     ];
     let indicator = ui.render(icon, iconProps);
-    assert.equal(pillUpdates.at(-1).label, '1 subagent', 'spinner counts only running agents, not four retained idle agents');
+    assert.equal(pillUpdates.at(-1).label, '1 working', 'spinner counts only running agents, not four retained idle agents');
     assert.ok(!nodes(indicator).some(n => n.props?.accessibilityLabel === 'Idle agents'));
     workAgents[0].status = 'completed';
     indicator = ui.render(icon, iconProps);
-    assert.equal(pillUpdates.at(-1).label, '5 subagents', 'green dot counts all retained idle agents, excluding reaped');
-    assert.ok(nodes(indicator).some(n => n.props?.accessibilityLabel === 'Idle agents'));
+    assert.equal(pillUpdates.at(-1).label, 'Work', 'idle agents do not advertise execution');
+    assert.ok(!nodes(indicator).some(n => n.props?.accessibilityLabel === 'Idle agents'));
     workJobs = [{ id: 'job-running', status: 'running' }, { id: 'job-done', status: 'completed' }];
     indicator = ui.render(icon, iconProps);
     assert.equal(pillUpdates.at(-1).label, '1 job', 'running job outranks five idle subagents');
@@ -149,13 +152,13 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     workAgents[0].status = 'pending';
     workAgents[1].status = 'starting';
     ui.render(icon, iconProps);
-    assert.equal(pillUpdates.at(-1).label, '2 subagents', 'running subagents outrank running jobs');
+    assert.equal(pillUpdates.at(-1).label, '2 working', 'running subagents outrank running jobs');
     workAgents[0].status = 'completed';
     workAgents[1].status = 'completed';
     workJobs = []; foregroundJobs = [];
     indicator = ui.render(icon, iconProps);
-    assert.equal(pillUpdates.at(-1).label, '5 subagents', 'idle total returns after jobs finish');
-    assert.ok(nodes(indicator).some(n => n.props?.accessibilityLabel === 'Idle agents'));
+    assert.equal(pillUpdates.at(-1).label, 'Work', 'idle agents stay unobtrusive after jobs finish');
+    assert.ok(!nodes(indicator).some(n => n.props?.accessibilityLabel === 'Idle agents'));
     workAgents = [];
     ui.render(icon, iconProps);
     assert.equal(pillUpdates.at(-1).label, 'Work');
@@ -182,11 +185,57 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.equal(selected(tree), 'Goals', 'new source does not inherit another source section');
     assert.match(text(tree), /Conversation A/);
     select(tree, 'Agents'); tree = render();
-    const agentsAction = nodes(tree).find(node => node.type === 'SettingsAction' && node.props.actionLabel === 'Completed');
+    const agentsAction = nodes(tree).find(node => node.type === 'SettingsAction' && node.props.actionLabel === 'History');
     assert.ok(agentsAction, 'Agents uses the host SettingsAction via shared WorkAction');
     assert.equal(agentsAction.type, jobsAction.type);
     assert.deepEqual(Object.keys(agentsAction.props).sort(), Object.keys(jobsAction.props).sort());
     assert.equal(agentsAction.props.style, undefined);
+    workAgents = [
+      ...Array.from({ length: 5 }, (_, i) => ({ taskId: `task-${i}`, childId: `child-${i}`, title: `Worker ${i}`, status: i < 3 ? 'completed' : 'running', reaped: false, attempt: 1, runtimeId: `runtime-${i}` })),
+      { taskId: 'old-task', childId: 'old-child', title: 'Old worker', status: 'completed', reaped: true, attempt: 1, runtimeId: null },
+    ];
+    tree = render();
+    const rows = tree => nodes(tree).filter(n => n.props?.testID?.startsWith('work-agent-row-'));
+    assert.equal(rows(tree).length, 5);
+    const desktopStyle = rows(tree)[0].props.style({ pressed: false, hovered: false });
+    assert.equal(desktopStyle.gap, 8);
+    assert.equal(desktopStyle.paddingVertical, 4);
+    assert.equal(desktopStyle.minHeight, 32);
+    assert.equal(rows(tree)[0].props.style({ hovered: true }).backgroundColor, props.theme.colors.surface2);
+    tree = render(first, { layout: { platform: 'web', compact: true } });
+    assert.equal(rows(tree)[0].props.style({}).minHeight, 44);
+    tree = render();
+    assert.equal(nodes(tree).find(n => n.type === 'SettingsAction').props.label, '2 working');
+    assert.equal(rows(tree).filter(n => n.props.accessibilityLabel.includes('Idle')).length, 3);
+    assert.ok(!text(tree).includes('Old worker'));
+    assert.equal(first.screens.length, 0);
+    assert.equal(calls.filter(c => c.name === 'independent_agent_open').length, 0);
+    rows(tree)[0].props.onPress(); tree = render();
+    assert.match(text(tree), /Worker transcript evidence/);
+    assert.match(text(tree), /separate chat/);
+    assert.ok(queries.some(q => q.queryKey[0] === 'worker-conversation'));
+    nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Next messages').props.onPress(); tree = render();
+    assert.equal(queries.find(q => q.queryKey[0] === 'worker-conversation').queryKey.at(-1), 2);
+    nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'First messages').props.onPress(); tree = render();
+    assert.equal(queries.find(q => q.queryKey[0] === 'worker-conversation').queryKey.at(-1), undefined);
+    assert.equal(calls.filter(c => c.name === 'independent_agent_open').length, 0, 'row click only reads transcript');
+    conversationError = true; tree = render();
+    assert.match(text(tree), /Conversation unavailable/);
+    assert.doesNotMatch(text(tree), /Worker transcript evidence/, 'errors do not present stale transcript');
+    conversationError = false;
+    statusError = true; tree = render();
+    assert.match(text(tree), /Session status unavailable/);
+    assert.equal(rows(tree).length, 0);
+    statusError = false; tree = render();
+    nodes(tree).find(n => n.type === 'SettingsAction' && n.props.actionLabel === 'History').props.onPress();
+    tree = render();
+    assert.equal(rows(tree).length, 1);
+    assert.match(text(tree), /Old worker/);
+    assert.match(rows(tree)[0].props.accessibilityLabel, /Reaped/);
+    rows(tree)[0].props.onPress(); tree = render();
+    assert.match(text(tree), /Worker transcript evidence/, 'history remains browsable');
+    nodes(tree).find(n => n.type === 'SettingsAction' && n.props.actionLabel === 'Back to agents').props.onPress();
+    workAgents = undefined;
     click(first, 'b'); tree = render();
     assert.equal(selected(tree), 'Jobs'); assert.equal(scroll(tree).props.contentOffset.y, 321);
     const beforeClose = calls.length;
@@ -247,7 +296,17 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     rpcResponse = async contract => contract.name === 'harness_status'
       ? { available: true, sessionId: 'session', runtimeEpoch: 'epoch' }
       : { agentId: 'real-child-agent' };
-    await ui.componentProps.get('WorkOverview').openConversation(target);
+    workAgents = [{ taskId: 'task', childId: 'child', title: 'Helper', status: 'completed', reaped: false, attempt: 1, runtimeId: 'runtime' }];
+    rpcResponse = async contract => contract.name === 'harness_status'
+      ? { available: true, sessionId: 's', runtimeEpoch: 'e' }
+      : { agentId: 'real-child-agent' };
+    tree = render(); select(tree, 'Agents'); tree = render();
+    nodes(tree).find(n => n.props?.testID?.startsWith('work-agent-row-')).props.onPress(); tree = render();
+    const continueButton = nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Continue independently');
+    assert.ok(continueButton, 'interactive continuation is explicit in the rendered conversation');
+    continueButton.props.onPress();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls.filter(c => c.name === 'independent_agent_open').length, 1);
     assert.deepEqual(first.screens.at(-1), { screenId: 'independent-conversation', params: { agentId: 'real-child-agent' } }, 'existing verified conversation helper owns native conversation navigation');
     ui.componentProps.get('WorkOverview').openWorkspace('native-workspace');
     assert.deepEqual(first.screens.at(-1), { screenId: 'independent-conversation', params: { workspaceId: 'native-workspace', serverId: 'host' } });
