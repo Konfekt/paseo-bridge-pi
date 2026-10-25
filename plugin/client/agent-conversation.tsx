@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { View } from "react-native";
+import { Pressable, Text, View, type NativeScrollEvent, type NativeSyntheticEvent, type ScrollView as NativeScrollView } from "react-native";
+import { ScrollView } from "@getpaseo/plugin/client/react-native";
 import { SettingsAction } from "@getpaseo/plugin/client/ui";
-import { Metadata, NativeButton, OutputWell } from "./presentation";
+import { Metadata, NativeButton } from "./presentation";
+import { NativeRunningTurnFooter, NativeToolBadge } from "./native-transcript";
 import { useQuery } from "@tanstack/react-query";
 import { useRpc } from "@getpaseo/plugin/client";
 import { harnessSubagentConversationRpc } from "../shared/harness-readonly";
@@ -19,19 +21,39 @@ export function WorkerConversation({ target, epoch, colors, platform }: {
 }) {
   const load = useRpc(harnessSubagentConversationRpc);
   const [cursor, setCursor] = useState<number | undefined>();
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const scroll = useRef<NativeScrollView | null>(null);
+  const following = useRef(true);
   const conversation = useQuery({
     queryKey: ["worker-conversation", target.hostId, target.agentId, target.workspaceId, target.sessionId, epoch, target.taskId, target.childId, target.attempt, target.runtimeId, cursor],
     queryFn: () => load({ agentId: target.agentId, workspaceId: target.workspaceId,
       expectedSessionId: target.sessionId, expectedRuntimeEpoch: epoch,
       taskId: target.taskId, childId: target.childId, attempt: target.attempt, runtimeId: target.runtimeId, cursor }),
-    refetchInterval: 5000, refetchOnReconnect: true,
+    refetchInterval: 1200, refetchOnReconnect: true,
   });
   const item = !conversation.isError && conversation.data?.state === "available" ? conversation.data.item : undefined;
+  const liveTools = [...new Map((item?.liveEvents ?? []).map(event => [event.toolCallId, event])).values()];
+  useEffect(() => { if (following.current) scroll.current?.scrollToEnd({ animated: false }); }, [item?.liveSequence, item?.liveText, item?.messages.length, item?.liveEvents?.length]);
   return <View testID="work-agent-conversation" style={{ gap: 8 }}>
     {conversation.isPending ? <Metadata colors={colors}>Loading conversation…</Metadata> : null}
     {conversation.isError ? <><Metadata colors={colors}>Conversation unavailable. Retrying automatically.</Metadata><NativeButton colors={colors} label="Retry conversation" onPress={() => { void conversation.refetch(); }} /></> : null}
     {!conversation.isPending && !conversation.isError && !item ? <Metadata colors={colors}>{conversation.data?.message ?? "No retained conversation is available."}</Metadata> : null}
-    {item ? <OutputWell colors={colors} text={item.messages.map(message => message.text + (message.truncated ? "\n[truncated]" : "")).join("\n\n") || "No messages recorded yet."} platform={platform} maxHeight={320} /> : null}
+    {item ? <View style={{ maxHeight: 320, borderWidth: 1, borderColor: colors.border, borderRadius: 8, backgroundColor: colors.surface0, overflow: "hidden" }}>
+      <ScrollView ref={scroll} nestedScrollEnabled style={{ maxHeight: 320 }} contentContainerStyle={{ padding: 12, gap: 12 }}
+        onScroll={(event: NativeSyntheticEvent<NativeScrollEvent>) => { const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent; following.current = contentSize.height - layoutMeasurement.height - contentOffset.y < 48; }}
+        scrollEventThrottle={100} onContentSizeChange={() => { if (following.current) scroll.current?.scrollToEnd({ animated: false }); }}>
+        {item.messages.map(message => <View key={message.id} style={{ gap: 6 }}>
+          {message.role === "assistant" ? null : <Metadata colors={colors}>{message.role}</Metadata>}
+          {message.text ? <Text selectable style={{ color: colors.foreground, fontSize: 14, lineHeight: 20 }}>{message.text}</Text> : null}
+          {message.parts?.map(part => part.type === "toolCall" ? <NativeToolBadge key={`${message.id}:${part.id}`} name={part.name} status={part.status ?? "unknown"} details={JSON.stringify(part.arguments, null, 2)} colors={colors} expanded={!!expanded[part.id]} onToggle={() => setExpanded(current => ({ ...current, [part.id]: !current[part.id] }))} /> : null)}
+          {message.truncated ? <Metadata colors={colors}>[truncated]</Metadata> : null}
+        </View>)}
+        {item.liveText ? <View style={{ gap: 6 }}><Text style={{ color: colors.foreground, fontSize: 14, lineHeight: 20 }}>{item.liveText}</Text></View> : null}
+        {liveTools.map(event => <NativeToolBadge key={`live:${event.toolCallId}`} name={event.name} status={event.status ?? "running"} details={event.arguments === undefined ? event.result ?? "" : JSON.stringify(event.arguments, null, 2)} colors={colors} expanded={!!expanded[event.toolCallId]} onToggle={() => setExpanded(current => ({ ...current, [event.toolCallId]: !current[event.toolCallId] }))} />)}
+        {item.execution === "running" ? <NativeRunningTurnFooter color={colors.foregroundMuted} /> : null}
+        {!item.messages.length && !item.liveText ? <Metadata colors={colors}>No messages recorded yet.</Metadata> : null}
+      </ScrollView>
+    </View> : null}
     {item?.truncated ? <Metadata colors={colors}>Conversation excerpt</Metadata> : null}
     {item?.nextCursor != null ? <NativeButton colors={colors} label="Next messages" onPress={() => setCursor(item.nextCursor)} /> : null}
     {cursor != null ? <NativeButton colors={colors} label="First messages" onPress={() => setCursor(undefined)} /> : null}

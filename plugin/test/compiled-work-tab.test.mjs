@@ -84,7 +84,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     if (name === '@getpaseo/plugin/client') return { useSettings: contract => { settingsContract = contract; return settings; }, useRpc: contract => async input => { calls.push({ name: contract.name, input }); return {}; } };
     if (name === '@getpaseo/plugin/client/ui') return { SettingsAction: 'SettingsAction', SettingsSection: 'SettingsSection', SettingsRow: 'SettingsRow', SettingsToggle: 'SettingsToggle' };
     if (name === '@getpaseo/plugin/client/react-native') return { ScrollView: 'ScrollView', Icon: 'Icon', TextInput: 'TextInput' };
-    if (name === 'react-native') return { View: 'View', Text: 'Text', Pressable: 'Pressable',
+    if (name === 'react-native') return { ActivityIndicator: 'ActivityIndicator', View: 'View', Text: 'Text', Pressable: 'Pressable',
       Animated: { Value: class { interpolate() { return 'rotation'; } }, View: 'AnimatedView' },
       Easing: { linear: value => value },
       AccessibilityInfo: { isReduceMotionEnabled: async () => true, addEventListener: () => ({ remove() {} }) },
@@ -98,7 +98,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
         : key[0] === 'harness-status' ? { available: true, sessionId: 's', runtimeEpoch: 'e' }
         : key[0] === 'harness-list' ? { state: 'available', items: key[1] === 'subagents' ? workAgents : workJobs }
         : key[0] === 'foreground-tasks' ? { available: true, tasks: foregroundJobs }
-        : key[0] === 'worker-conversation' ? { state: 'available', item: { messages, nextCursor: 2 } }
+        : key[0] === 'worker-conversation' ? { state: 'available', item: { messages, nextCursor: 2, execution: 'running', liveText: 'Streaming assistant delta', liveEvents: [{ sequence: 3, kind: 'tool_start', toolCallId: 'call-1', name: 'read', status: 'running', arguments: '{"path":"README.md"}' }] } }
         : undefined;
       return { data, isPending: false, isError: (key[0] === 'worker-conversation' && conversationError) || (key[0] === 'harness-status' && statusError), refetch() {} };
     }, useMutation() { return { isPending: false, mutate() { throw Error('Unexpected mutation'); } }; } };
@@ -220,7 +220,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.equal(nodes(tree).filter(n => n.props?.testID === 'work-agent-detail').length, 0, 'no new detail screen');
     assert.ok(nodes(tree).some(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Open child chat'), 'historical chat button retained');
     const liveQuery = queries.find(q => q.queryKey[0] === 'worker-conversation');
-    assert.equal(liveQuery.refetchInterval, 5000);
+    assert.equal(liveQuery.refetchInterval, 1200);
     assert.equal(liveQuery.refetchOnReconnect, true);
     assert.ok(!queries.some(q => q.queryKey[0] === 'harness-detail' && q.enabled), 'live log replaces final-report reads');
     workAgents[0].status = 'running';
@@ -228,7 +228,14 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     tree = render();
     assert.match(text(tree), /Live tool execution evidence/, 'poll updates append tool logs before worker finishes');
     assert.equal(nodes(tree).filter(n => n.props?.testID === 'work-agent-conversation').length, 1);
-    assert.ok(nodes(tree).some(n => n.type === 'ScrollView' && n.props.style?.maxHeight === 320), 'original bounded OutputWell retained');
+    assert.ok(nodes(tree).some(n => n.type === 'ScrollView' && n.props.style?.maxHeight === 320), 'bounded native timeline retained');
+    assert.match(text(tree), /Streaming assistant delta/);
+    assert.ok(nodes(tree).some(n => n.type === 'ActivityIndicator' && n.props.accessibilityLabel === 'Assistant is working'), 'spinner appears only from authoritative running state');
+    assert.doesNotMatch(text(tree), /Working…|retained snapshot/i);
+    const toolBadge = nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Tool read · running');
+    assert.equal(toolBadge.props.accessibilityState.expanded, false, 'tool details start collapsed');
+    toolBadge.props.onPress(); tree = render();
+    assert.match(text(tree), /README\.md/, 'tool args expand only after a user click');
     nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Next messages').props.onPress(); tree = render();
     assert.equal(queries.find(q => q.queryKey[0] === 'worker-conversation').queryKey.at(-1), 2);
     workAgents[0].status = 'completed'; tree = render();

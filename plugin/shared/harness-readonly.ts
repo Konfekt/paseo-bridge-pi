@@ -38,8 +38,9 @@ export const harnessSubagentConversationRpc = defineRpc({ name: "harness_subagen
   attempt: z.number().int().min(1), runtimeId: z.string().max(256).nullable(), cursor: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
 }), output: z.object({ ...common, item: z.object({
   ...taskIdentity, messages: z.array(z.object({ id: z.string().max(128), role: z.enum(["user", "assistant", "tool", "parent"]),
-    text: z.string().max(24 * 1024), truncated: z.boolean().optional() })).max(50),
-  truncated: z.boolean(), nextCursor: z.number().int().min(0).optional(),
+    text: z.string().max(24 * 1024), truncated: z.boolean().optional(), parts: z.array(z.union([z.object({ type: z.literal("text"), text: z.string().max(24 * 1024) }), z.object({ type: z.literal("toolCall"), id: z.string().max(128), name: z.string().max(128), arguments: z.unknown(), status: z.enum(["completed", "failed", "unknown"]).optional() })])).max(32).optional(), status: z.literal("completed").optional() })).max(50),
+  truncated: z.boolean(), nextCursor: z.number().int().min(0).optional(), execution: z.enum(["running", "completed", "failed", "cancelled", "lost"]).optional(),
+  liveText: z.string().max(16 * 1024).optional(), liveSequence: z.number().int().min(0).optional(), liveEvents: z.array(z.object({ sequence: z.number().int().min(0), kind: z.enum(["tool_start", "tool_end"]), toolCallId: z.string().max(128), name: z.string().max(128), status: z.enum(["running", "completed", "failed"]).optional(), arguments: z.unknown().optional(), result: z.string().max(2048).optional() })).max(12).optional(),
 }).optional() }) });
 
 export const harnessSubagentReportRpc = defineRpc({ name: "harness_subagent_report", input: z.object({
