@@ -237,7 +237,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
       { id: 'call-row', role: 'assistant', text: 'Checking **the current state** with `git`.', parts: [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'git status --short', private: 'ARGUMENT_SECRET' }, status: 'completed', result: 'RESULT_SECRET' }] },
       { id: 'result-row', role: 'tool', toolCallId: 'call-1', toolName: 'bash', status: 'completed', text: 'RESULT_SECRET' },
       { id: 'markdown-row', role: 'assistant', text: '# Summary\n\nA **formatted** paragraph with `inline code`.\n\n- one list item' },
-      { id: 'parent-row', role: 'parent', text: 'Please **review** this request.' },
+      { id: 'parent-row', role: 'parent', text: 'Please **review** this request. Use notify_parent then task_outcome; preserve _one_two_ as emphasis.' },
     ];
     tree = render();
     const timeline = nodes(tree).find(n => n.type === 'ScrollView' && n.props.style?.maxHeight === 320);
@@ -251,6 +251,8 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.ok(nodes(tree).some(n => n.type === 'h1' && n.props.style.fontSize === 24 && n.props.style.lineHeight === '31px'), 'heading follows native content scale');
     assert.ok(nodes(tree).some(n => n.type === 'code' && n.props.style.fontSize === 12), 'inline code matches native code size');
     assert.ok(nodes(tree).some(n => n.type === 'strong'), 'web markdown keeps strong semantics');
+    assert.match(text(tree), /notify_parent then task_outcome/, 'native/CommonMark intraword underscores preserve literal tool identifiers');
+    assert.ok(nodes(tree).some(n => n.type === 'em' && text(n).includes('one_two')), 'underscore emphasis still works around identifiers');
     assert.ok(nodes(tree).some(n => n.type === 'code'), 'web markdown keeps inline code semantics');
     assert.ok(nodes(tree).some(n => n.type === 'ul' && nodes(n).some(child => child.type === 'li')), 'web markdown keeps list semantics');
     assert.ok(nodes(tree).some(n => n.type === 'View' && n.props.style?.alignSelf === 'flex-end'), 'parent input uses the native user-message bubble treatment');

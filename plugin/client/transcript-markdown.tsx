@@ -26,7 +26,11 @@ function tokenizeInline(source: string, depth = 0): InlinePart[] {
     let matched = false;
     for (const marker of delimiters) {
       if (!source.startsWith(marker, index)) continue;
-      const close = source.indexOf(marker, index + marker.length);
+      const intraword = (at: number) => /\w/.test(source[at - 1] ?? "") && /\w/.test(source[at + marker.length] ?? "");
+      // CommonMark does not treat underscores inside identifiers as emphasis.
+      if (marker[0] === "_" && intraword(index)) continue;
+      let close = source.indexOf(marker, index + marker.length);
+      while (marker[0] === "_" && close >= 0 && intraword(close)) close = source.indexOf(marker, close + marker.length);
       if (close <= index + marker.length) continue;
       flush();
       const kind = marker === "`" ? "code" : marker === "~~" ? "del" : marker.length === 2 ? "strong" : "em";
