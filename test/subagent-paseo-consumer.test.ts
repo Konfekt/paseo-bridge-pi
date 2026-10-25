@@ -62,7 +62,7 @@ for (const failed of [false, true]) test(`actual consumer reconciles ${failed ? 
     const args = { agent: "scout", task: "inspect" };
     apply(host.mapToolCall({ callId: "stable-worker-id", toolName: "subagent", args, status: "running", result: null }));
     apply(host.mapToolCall({ callId: "stable-worker-id", toolName: "subagent", args, status: failed ? "failed" : "completed", result: { content: [{ type: "text", text: "done" }], details: {} } }));
-    assert.equal(store.get("parent", "stable-worker-id").status, "running");
+    assert.equal(store.get("parent", "stable-worker-id").status, failed ? "failed" : "completed");
     const taskId = `subagent-task-${"a".repeat(24)}`, childId = `subagent-child-${"b".repeat(24)}`;
     const links = new NativeSubagentLinks();
     links.seed([
