@@ -261,7 +261,12 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.equal(toolBadge.props.accessibilityState.expanded, false, 'tool details start collapsed');
     assert.equal(nodes(toolBadge).filter(n => n.type === 'Icon').length, 1, 'native collapsed badges have one leading icon, no trailing check/chevron clutter');
     assert.ok(nodes(toolBadge).some(n => n.type === 'Icon' && n.props.name === 'SquareTerminal' && n.props.size === 12));
+    let automaticScrolls = 0;
+    timeline.props.ref.current = { scrollToEnd() { automaticScrolls++; } };
     toolBadge.props.onPress(); tree = render();
+    nodes(tree).find(n => n.type === 'ScrollView' && n.props.style?.maxHeight === 320).props.onContentSizeChange();
+    assert.equal(automaticScrolls, 0, 'expanding earlier tool details preserves the reading anchor instead of snapping to the live tail');
+    timeline.props.ref.current = null;
     assert.match(text(tree), /ARGUMENT_SECRET/);
     assert.match(text(tree), /LIVE_RESULT_SECRET/, 'newer live completion overlays the persisted call and reveals its result only on click');
     assert.doesNotMatch(text(tree), /"result": "RESULT_SECRET"/, 'stale persisted result is superseded by the latest correlated live result');

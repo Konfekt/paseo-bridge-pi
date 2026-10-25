@@ -26,6 +26,11 @@ export function WorkerConversation({ target, epoch, colors, platform }: {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const scroll = useRef<NativeScrollView | null>(null);
   const following = useRef(true);
+  const toggleTool = (id: string) => {
+    // Expanding retained details is a reading action, not an instruction to jump to the live tail.
+    following.current = false;
+    setExpanded(current => ({ ...current, [id]: !current[id] }));
+  };
   const conversation = useQuery({
     queryKey: ["worker-conversation", target.hostId, target.agentId, target.workspaceId, target.sessionId, epoch, target.taskId, target.childId, target.attempt, target.runtimeId, cursor],
     queryFn: () => load({ agentId: target.agentId, workspaceId: target.workspaceId,
@@ -58,7 +63,7 @@ export function WorkerConversation({ target, epoch, colors, platform }: {
           {message.role === "tool" && (!message.toolCallId || !visibleCallIds.has(message.toolCallId)) ? <NativeToolBadge
             name={message.toolName ?? "tool"} status={message.status ?? "unknown"}
             details={message.text} colors={colors} expanded={!!expanded[message.toolCallId ?? message.id]}
-            onToggle={() => { const key = message.toolCallId ?? message.id; setExpanded(current => ({ ...current, [key]: !current[key] })); }} /> : null}
+            onToggle={() => toggleTool(message.toolCallId ?? message.id)} /> : null}
           {message.parts?.map(part => {
             if (part.type !== "toolCall") return null;
             const live = liveToolById.get(part.id);
@@ -66,7 +71,7 @@ export function WorkerConversation({ target, epoch, colors, platform }: {
             const result = live?.result ?? part.result;
             return <NativeToolBadge key={`${message.id}:${part.id}`} name={part.name} argumentsValue={args} status={live?.status ?? part.status ?? "unknown"}
               details={JSON.stringify({ arguments: args, ...(result ? { result } : {}) }, null, 2)} colors={colors}
-              expanded={!!expanded[part.id]} onToggle={() => setExpanded(current => ({ ...current, [part.id]: !current[part.id] }))} />;
+              expanded={!!expanded[part.id]} onToggle={() => toggleTool(part.id)} />;
           })}
           {message.truncated ? <Metadata colors={colors}>[truncated]</Metadata> : null}
         </View>;
@@ -74,7 +79,7 @@ export function WorkerConversation({ target, epoch, colors, platform }: {
         {cursor == null && item.liveText ? <TranscriptMarkdown text={item.liveText} colors={colors} platform={platform} /> : null}
         {cursor == null ? liveTools.filter(event => !persistedCallIds.has(event.toolCallId)).map(event => <NativeToolBadge key={`live:${event.toolCallId}`} name={event.name} argumentsValue={event.arguments} status={event.status ?? "running"}
           details={event.arguments === undefined ? event.result ?? "" : JSON.stringify({ arguments: event.arguments, ...(event.result ? { result: event.result } : {}) }, null, 2)} colors={colors}
-          expanded={!!expanded[event.toolCallId]} onToggle={() => setExpanded(current => ({ ...current, [event.toolCallId]: !current[event.toolCallId] }))} />) : null}
+          expanded={!!expanded[event.toolCallId]} onToggle={() => toggleTool(event.toolCallId)} />) : null}
         {cursor == null && item.execution === "running" ? <NativeRunningTurnFooter color={colors.foregroundMuted} /> : null}
         {!item.messages.length && !item.liveText ? <Metadata colors={colors}>No messages recorded yet.</Metadata> : null}
       </ScrollView>
