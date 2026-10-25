@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
+import { cp, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { pathToFileURL, fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url),
 	root = fileURLToPath(new URL("../", import.meta.url));
@@ -17,15 +19,22 @@ const text = (x) =>
 			: !x || typeof x !== "object"
 				? ""
 				: [x.props?.children].flat(Infinity).map(text).join(" ");
-test("native Activity dashboard shows every section, accessible meters and expandable detail with isolated session queries", {
+test("explicit dormant Activity and fallback Accounts modules retain meters, isolation and guarded account switching", {
 	skip: !process.env.PASEO_PLUGIN_COMPILER,
 }, async () => {
 	const { compilePlugin } = await import(
 		pathToFileURL(resolve(process.env.PASEO_PLUGIN_COMPILER))
 	);
-	const { clientBundle } = await compilePlugin({
-		client: resolve(root, "index.client.tsx"),
-	});
+	// Compile the real dormant modules in an explicit temporary plugin, preserving
+	// the compiler's client/shared boundary rather than re-enabling shipped UI.
+	const fixture = await mkdtemp(resolve(tmpdir(), "paseo-observability-"));
+	let clientBundle;
+	try {
+		await cp(resolve(root, "client"), resolve(fixture, "client"), { recursive: true });
+		await cp(resolve(root, "shared"), resolve(fixture, "shared"), { recursive: true });
+		await writeFile(resolve(fixture, "index.client.tsx"), await readFile(resolve(root, "test/fixtures/observability-legacy.client.tsx")));
+		({ clientBundle } = await compilePlugin({ client: resolve(fixture, "index.client.tsx") }));
+	} finally { await rm(fixture, { recursive: true, force: true }); }
 	let panel,
 		observers = [],
 		agentSubscriptions = [],
@@ -142,6 +151,7 @@ test("native Activity dashboard shows every section, accessible meters and expan
 					},
 				}),
 				SettingsCard: (props) => ({ type: "SettingsCard", props }),
+				SettingsSelect: (props) => ({ type: "SettingsSelect", props }),
 			};
 		if (name === "@getpaseo/plugin/client/react-native")
 			return { ScrollView: "ScrollView" };
@@ -188,12 +198,12 @@ test("native Activity dashboard shows every section, accessible meters and expan
 	const stop = contribute({
 		rpc: async () => ({ available: false }),
 		paseo: {
-			config: { get: async () => ({ config: { plugins: { "paseo-accounts": { enabled: true } } } }) },
+			config: { get: async () => ({ config: { plugins: { "paseo-accounts": { enabled: false } } } }) },
 			agents: {
 				list: async (o) => {
 					signal = o.signal;
 					signals.push(o.signal);
-					return { subscription: { subscribe: (x) => { subscriptionCount++; agentSubscriptions.push(x); if (subscriptionCount <= 4) observers.push(x); else if (subscriptionCount === 5 || subscriptionCount >= 8) accountSubscription = x; } } };
+					return { subscription: { subscribe: (x) => { subscriptionCount++; agentSubscriptions.push(x); if (subscriptionCount <= 2) observers.push(x); else accountSubscription = x; } } };
 				},
 			},
 		},
@@ -206,7 +216,7 @@ test("native Activity dashboard shows every section, accessible meters and expan
 		addHeaderButton: (p) => { header = { ...p, remove() { this.removed = true; }, update() {} }; headers.push(header); return header; },
 		addComposerPill: (p) => {
 			const registered = { ...p, remove() { this.removed = true; }, update() {} };
-			if (p.id === "pi-activity") pill = registered;
+			if (p.id === "pi-activity" && p.agentId === "agent") pill = registered;
 			return registered;
 		},
 		openPanel() {},
@@ -243,8 +253,7 @@ test("native Activity dashboard shows every section, accessible meters and expan
 	};
 	try {
 		await new Promise((r) => setImmediate(r));
-		for (const observer of observers) observer.snapshot({ entries: [{ agent: { id: "agent", workspaceId: "workspace", provider: "pi" } }] });
-		accountSubscription?.snapshot({ entries: [
+		for (const observer of observers) observer.snapshot({ entries: [
 			{ agent: { id: "agent", workspaceId: "workspace", provider: "pi" } },
 			{ agent: { id: "second-agent", name: "Second", workspaceId: "workspace", provider: "pi" } },
 		] });
@@ -343,7 +352,7 @@ test("native Activity dashboard shows every section, accessible meters and expan
 		const accountRender = () => { hook = 0; return header.button.behavior.Content(accountProps); };
 		let accountTree = accountRender();
 		await new Promise(r => setImmediate(r));
-		assert.ok(agentSubscriptions.length >= 6, `expected popover subscription, got ${agentSubscriptions.length}`);
+		assert.equal(agentSubscriptions.length, 3, 'explicit Activity, fallback Accounts registration, and opened Accounts popover subscribe');
 		agentSubscriptions.at(-1).snapshot({ entries: [
 			{ agent: { id: "agent-a", name: "Alpha", workspaceId: "workspace", provider: "pi" } },
 			{ agent: { id: "agent-b", name: "Beta", workspaceId: "workspace", provider: "pi" } },
@@ -363,7 +372,7 @@ test("native Activity dashboard shows every section, accessible meters and expan
 		releaseAlpha();
 		await new Promise(r => setImmediate(r));
 		accountTree = accountRender();
-		assert.match(text(accountTree), /Beta\s+· selected/);
+		assert.equal(nodes(accountTree).find(n => n.type === "Pressable" && n.props.accessibilityLabel === "Beta").props.accessibilityState.selected, true, "late Alpha status must not replace the explicit Beta selection");
 		assert.ok(calls.filter(c => c.contract.name === "account_controls_status").some(c => c.input.agentId === "agent-b"), "status and actions must target the explicitly selected agent");
 		assert.doesNotMatch(text(accountTree), /aaaaaaaa-aaaa/);
 		accountStatus.data.snapshot = { ...accountSnapshot, busy: true };
@@ -442,4 +451,37 @@ test("native Activity dashboard shows every section, accessible meters and expan
 	assert.ok(signals.slice(0, 5).every(item => item.aborted));
 	assert.equal(pill.removed, true);
 	assert.equal(header.removed, true);
+});
+
+test("shipped contribution omits retired Activity and delegates Accounts while keeping Work as the workspace destination", { skip: !process.env.PASEO_PLUGIN_COMPILER }, async () => {
+	const { compilePlugin } = await import(pathToFileURL(resolve(process.env.PASEO_PLUGIN_COMPILER)));
+	const { clientBundle } = await compilePlugin({ client: resolve(root, "index.client.tsx") });
+	const observers = [], panels = [], pills = [], headers = [], calls = [], opened = [];
+	const load = name => {
+		if (name === "@getpaseo/plugin") return { defineRpc: x => x };
+		if (["react", "react/jsx-runtime", "react-native", "@getpaseo/plugin/client", "@getpaseo/plugin/client/ui", "@getpaseo/plugin/client/react-native", "@tanstack/react-query"].includes(name)) return {};
+		return require(name);
+	};
+	const stop = (0, eval)(clientBundle)(load).default({
+		paseo: { config: { get: async () => ({ config: { plugins: { "paseo-accounts": { enabled: true } } } }) }, agents: { list: async () => ({ subscription: { subscribe: observer => observers.push(observer) } }) } },
+		rpc: async (contract, input) => { calls.push({ name: contract.name, input }); return { available: false }; },
+		addScreen: () => () => {},
+		addWorkspacePanel: panel => { panels.push(panel); return () => {}; },
+		addHeaderButton: header => { headers.push(header); return { update() {}, remove() {} }; },
+		addComposerPill: pill => { pills.push(pill); return { update() {}, remove() {} }; },
+		openPanel: (id, target) => opened.push({ id, target }),
+	});
+	try {
+		await new Promise(resolve => setImmediate(resolve));
+		observers.forEach(observer => observer.snapshot({ entries: [{ agent: { id: "a", workspaceId: "w", provider: "pi" } }] }));
+		assert.ok(!panels.some(p => p.id === "pi-activity"));
+		assert.ok(!pills.some(p => p.id === "pi-activity"));
+		assert.ok(!headers.some(p => p.id === "pi-accounts"), "external Accounts owns this control when enabled");
+		assert.ok(!calls.some(c => /observability|account_controls/.test(c.name)), "retired Activity and delegated Accounts do not query in the background");
+		const work = pills.find(p => p.id === "work");
+		assert.equal(work.button.behavior.kind, "action");
+		work.button.behavior.onPress();
+		assert.deepEqual(opened, [{ id: "work", target: { workspaceId: "w", location: "workspace" } }]);
+		assert.equal(panels.find(p => p.id === "work").context, "workspace");
+	} finally { stop(); }
 });
