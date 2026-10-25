@@ -974,7 +974,6 @@ function HarnessPanel({
 			{ready && list.data?.state !== "available" ? (
 				<Text style={{ color: muted }}>{list.data?.message}</Text>
 			) : null}
-			{kind === "subagents" && ready && list.data?.state === "available" && list.data.stale ? <Metadata colors={theme.colors}>Retained snapshot · refreshing automatically</Metadata> : null}
 			{ready && !list.isError && list.data?.state === "available" && !rows.length ? (
 				<Text style={{ color: muted }}>
 					No {kind === "jobs" ? "background jobs" : viewMode === "completed" ? "reaped agents" : "retained agents"} in

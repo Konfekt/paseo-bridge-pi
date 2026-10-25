@@ -32,7 +32,6 @@ export function WorkerConversation({ target, epoch, colors, platform }: {
     {conversation.isError ? <><Metadata colors={colors}>Conversation unavailable. Retrying automatically.</Metadata><NativeButton colors={colors} label="Retry conversation" onPress={() => { void conversation.refetch(); }} /></> : null}
     {!conversation.isPending && !conversation.isError && !item ? <Metadata colors={colors}>{conversation.data?.message ?? "No retained conversation is available."}</Metadata> : null}
     {item ? <OutputWell colors={colors} text={item.messages.map(message => message.text + (message.truncated ? "\n[truncated]" : "")).join("\n\n") || "No messages recorded yet."} platform={platform} maxHeight={320} /> : null}
-    {item && conversation.data?.stale ? <Metadata colors={colors}>Retained snapshot · refreshing automatically</Metadata> : null}
     {item?.truncated ? <Metadata colors={colors}>Conversation excerpt</Metadata> : null}
     {item?.nextCursor != null ? <NativeButton colors={colors} label="Next messages" onPress={() => setCursor(item.nextCursor)} /> : null}
     {cursor != null ? <NativeButton colors={colors} label="First messages" onPress={() => setCursor(undefined)} /> : null}
