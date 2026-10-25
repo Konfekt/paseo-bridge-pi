@@ -36,6 +36,70 @@ test("actual Paseo consumer settles projected native subagents in live and histo
   }
 });
 
+for (const failed of [false, true]) test(`actual consumer reconciles ${failed ? "failed" : "completed"} status before transcript recovery`, { skip: !consumerModule }, async () => {
+  const url = pathToFileURL(consumerModule!);
+  const [{ piSubagents }, { PiExtensionHost }, { PiRpcAgentSession }, { ProviderSubagentStore }] = await Promise.all([
+    import(url.href), import(new URL("../host.js", url).href), import(new URL("../../agent.js", url).href),
+    import(new URL("../../../../provider-subagents/store.js", url).href),
+  ]);
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "native-status-recovery-"));
+  const file = path.join(directory, "session.jsonl");
+  await fs.chmod(directory, 0o700);
+  await fs.writeFile(file, [
+    { type: "session", version: 3, id: "fixture", cwd: directory },
+    { type: "message", id: "answer", timestamp: "2026-01-01T00:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "Recovered answer" }], stopReason: "stop" } },
+  ].map(x => JSON.stringify(x)).join("\\n") + "\\n", { mode: 0o600 });
+  const host = new PiExtensionHost([piSubagents]);
+  try {
+    const store = new ProviderSubagentStore();
+    const hydration: Promise<any>[] = [];
+    const apply = (mapping: any) => {
+      for (const event of mapping?.events ?? []) if (event.type === "provider_subagent") store.apply("parent", "pi", event.event);
+      if (mapping?.hydration) hydration.push(mapping.hydration.then((events: any[]) => {
+        for (const event of events) if (event.type === "provider_subagent") store.apply("parent", "pi", event.event);
+      }));
+    };
+    const args = { agent: "scout", task: "inspect" };
+    apply(host.mapToolCall({ callId: "stable-worker-id", toolName: "subagent", args, status: "running", result: null }));
+    apply(host.mapToolCall({ callId: "stable-worker-id", toolName: "subagent", args, status: failed ? "failed" : "completed", result: { content: [{ type: "text", text: "done" }], details: {} } }));
+    assert.equal(store.get("parent", "stable-worker-id").status, "running");
+    const taskId = `subagent-task-${"a".repeat(24)}`, childId = `subagent-child-${"b".repeat(24)}`;
+    const links = new NativeSubagentLinks();
+    links.seed([
+      { role: "assistant", content: [{ type: "toolCall", id: "stable-worker-id", name: "subagent", arguments: args }] },
+      { role: "toolResult", toolName: "subagent", toolCallId: "stable-worker-id", details: { task_id: taskId, child_id: childId, attempt: 1 } },
+    ]);
+    const resolve = async (withFile: boolean) => ({ taskId, childId, groupId: `subagent-job-${"c".repeat(24)}`,
+      attempt: 1, runtimeId: "owned-runtime", status: failed ? "failed" as const : "completed" as const,
+      ...(withFile ? { sessionFile: file } : {}) });
+    const context = { extensionHost: host, currentTurnIdForEvent: () => undefined, emitExtensionOutput: apply,
+      emit: () => assert.fail("private linkage must not emit a UI notification or parent completion") };
+    const handler = (PiRpcAgentSession.prototype as any).handleExtensionUiRequest;
+    const [statusMessage] = await links.notifications(() => resolve(false));
+    handler.call(context, { method: "paseo_native_subagents", message: statusMessage });
+    await Promise.all(hydration);
+    assert.equal(store.get("parent", "stable-worker-id").status, failed ? "failed" : "completed");
+    assert.equal(store.fetchTimeline("parent", "stable-worker-id", { direction: "tail", limit: 100 }).rows.length, 0, "unavailable transcript must not hydrate rows");
+    links.resetDelivery();
+    const [historyMessage] = await links.notifications(() => resolve(true));
+    handler.call(context, { method: "paseo_native_subagents", message: historyMessage });
+    await Promise.all(hydration);
+    const rows = store.fetchTimeline("parent", "stable-worker-id", { direction: "tail", limit: 100 }).rows;
+    assert(rows.length > 0);
+    assert.match(JSON.stringify(rows), /Recovered answer/);
+    assert.equal(store.get("parent", "stable-worker-id").id, "stable-worker-id", "transcript recovery must reuse worker identity");
+    handler.call(context, { method: "paseo_native_subagents", message: historyMessage });
+    await Promise.all(hydration);
+    assert.equal(store.fetchTimeline("parent", "stable-worker-id", { direction: "tail", limit: 100 }).rows.length, rows.length, "reconnect snapshot must not duplicate transcript rows");
+    const spoofLinks = new NativeSubagentLinks();
+    spoofLinks.seed([
+      { role: "assistant", content: [{ type: "toolCall", id: "spoof-id", name: "subagent", arguments: args }] },
+      { role: "toolResult", toolName: "subagent", toolCallId: "spoof-id", details: { task_id: taskId, child_id: childId, attempt: 1 } },
+    ]);
+    assert.deepEqual(await spoofLinks.notifications(async () => ({ ...await resolve(true), taskId: `subagent-task-${"d".repeat(24)}` } as any)), [], "foreign task identity must not publish a binding");
+  } finally { host.close(); await fs.rm(directory, { recursive: true, force: true }); }
+});
+
 for (const follow of [false, true]) test(`private native reconciliation repairs the real registry and loads retained conversation rows (${follow ? "live follower" : "history hydration"})`, { skip: !consumerModule }, async () => {
   const url = pathToFileURL(consumerModule!);
   const [{ piSubagents }, { PiExtensionHost }, { PiRpcAgentSession }, { ProviderSubagentStore }] = await Promise.all([

@@ -79,8 +79,10 @@ export class NativeSubagentLinks {
         || (s.sessionFile !== undefined && (!text(s.sessionFile, 4096) || !path.isAbsolute(s.sessionFile) || s.sessionFile.includes("\0"))) || !statuses.has(s.status)) {
         delete link.source; link.retries = Math.min(10, link.retries + 1); return undefined;
       }
+      // A terminal status can be authoritative before the session file is
+      // readable. Don't pin this partial snapshot: retry until a file appears.
       link.source = s;
-      link.retries = 0;
+      link.retries = s.sessionFile || s.status === "running" ? 0 : Math.min(10, link.retries + 1);
       return s;
     } catch { delete link.source; link.retries = Math.min(10, link.retries + 1); return undefined; }
   }

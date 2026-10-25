@@ -28,13 +28,14 @@ test("reconciles historical records with authoritative native status and retaine
 });
 
 test("publishes completed status without transcript, then attaches the later validated transcript", async () => {
-  const links = new NativeSubagentLinks(); links.seed(history());
+  let now = 0;
+  const links = new NativeSubagentLinks(() => now); links.seed(history());
   const statusOnly = { ...source, sessionFile: undefined };
   const [first] = await links.notifications(async () => statusOnly);
   const initial = decode(first).bindings[0];
   assert.equal(initial.status, "completed"); assert.equal("sessionFile" in initial, false);
-  assert.deepEqual(await links.notifications(async () => ({ ...source, sessionFile: "/arbitrary/path" })), [], "status-only cache must not short-circuit a later transcript refresh");
-  links.resetDelivery();
+  assert.deepEqual(await links.notifications(async () => ({ ...source, sessionFile: "/arbitrary/path" })), [], "refresh respects retry backoff");
+  now += 11000;
   const [recovered] = await links.notifications(async () => source);
   assert.equal(decode(recovered).bindings[0].sessionFile, source.sessionFile);
 });
