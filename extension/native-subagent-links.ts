@@ -3,7 +3,7 @@ import * as path from "node:path";
 type RecordValue = Record<string, any>;
 export type NativeSessionSource = {
   taskId: string; childId: string; groupId: string; attempt: number; runtimeId: string | null;
-  sessionFile: string; status: "running" | "completed" | "failed" | "cancelled" | "lost";
+  sessionFile?: string; status: "running" | "completed" | "failed" | "cancelled" | "lost";
 };
 export type ResolveNativeSession = (input: { taskId: string; childId: string; attempt: number }) => Promise<NativeSessionSource | undefined>;
 type Link = { id: string; agent: string; task: string; taskId: string; childId: string; attempt: number; retries: number; nextRead: number; source?: NativeSessionSource; sent?: string };
@@ -67,7 +67,7 @@ export class NativeSubagentLinks {
   }
 
   private async source(link: Link, resolve: ResolveNativeSession, force = false): Promise<NativeSessionSource | undefined> {
-    if (!force && link.source && link.source.status !== "running") return link.source;
+    if (!force && link.source && link.source.status !== "running" && link.source.sessionFile) return link.source;
     if (!force && this.now() < link.nextRead) return link.source;
     // Keep retrying with capped backoff: a slow manifest/permission transition
     // must not strand a task as running until the next bridge reload.
@@ -76,7 +76,7 @@ export class NativeSubagentLinks {
       const s = await resolve({ taskId: link.taskId, childId: link.childId, attempt: link.attempt });
       if (!s || s.taskId !== link.taskId || s.childId !== link.childId || s.attempt !== link.attempt
         || !text(s.groupId, 128) || !(s.runtimeId === null || text(s.runtimeId, 256))
-        || !text(s.sessionFile, 4096) || !path.isAbsolute(s.sessionFile) || s.sessionFile.includes("\0") || !statuses.has(s.status)) {
+        || (s.sessionFile !== undefined && (!text(s.sessionFile, 4096) || !path.isAbsolute(s.sessionFile) || s.sessionFile.includes("\0"))) || !statuses.has(s.status)) {
         delete link.source; link.retries = Math.min(10, link.retries + 1); return undefined;
       }
       link.source = s;
@@ -91,7 +91,7 @@ export class NativeSubagentLinks {
     for (const m of messages) {
       const link = m?.role === "toolResult" ? this.links.get(m.toolCallId) : undefined;
       const source = link ? await this.source(link, resolve, true) : undefined;
-      if (!source || !Array.isArray(m.details?.results) || m.details.results.length !== 1) { output.push(m); continue; }
+      if (!source?.sessionFile || !Array.isArray(m.details?.results) || m.details.results.length !== 1) { output.push(m); continue; }
       output.push({ ...m, details: { ...m.details, results: [{ ...m.details.results[0], sessionFile: source.sessionFile }] } });
     }
     return output;
@@ -108,7 +108,7 @@ export class NativeSubagentLinks {
         const s = await this.source(link, resolve);
         if (!s) continue;
         const binding = { id: link.id, taskId: s.taskId, childId: s.childId, attempt: s.attempt, runtimeId: s.runtimeId,
-          sessionFile: s.sessionFile, status: s.status, agent: link.agent, task: link.task };
+          ...(s.sessionFile ? { sessionFile: s.sessionFile } : {}), status: s.status, agent: link.agent, task: link.task };
         const fingerprint = JSON.stringify(binding);
         if (link.sent === fingerprint) continue;
         bindings.push(binding); delivered.push([link, fingerprint]);

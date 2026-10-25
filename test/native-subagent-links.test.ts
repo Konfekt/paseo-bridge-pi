@@ -27,6 +27,18 @@ test("reconciles historical records with authoritative native status and retaine
   links.clear(); assert.deepEqual(await links.notifications(async () => source), []);
 });
 
+test("publishes completed status without transcript, then attaches the later validated transcript", async () => {
+  const links = new NativeSubagentLinks(); links.seed(history());
+  const statusOnly = { ...source, sessionFile: undefined };
+  const [first] = await links.notifications(async () => statusOnly);
+  const initial = decode(first).bindings[0];
+  assert.equal(initial.status, "completed"); assert.equal("sessionFile" in initial, false);
+  assert.deepEqual(await links.notifications(async () => ({ ...source, sessionFile: "/arbitrary/path" })), [], "status-only cache must not short-circuit a later transcript refresh");
+  links.resetDelivery();
+  const [recovered] = await links.notifications(async () => source);
+  assert.equal(decode(recovered).bindings[0].sessionFile, source.sessionFile);
+});
+
 test("enriches daemon history without modifying model-visible messages", async () => {
   const links = new NativeSubagentLinks(); const messages = history();
   const enriched = await links.enrichHistory(messages, async () => source);
