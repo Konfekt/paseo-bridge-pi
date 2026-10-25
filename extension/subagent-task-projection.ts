@@ -192,6 +192,7 @@ function compactChildDetails(child: RecordValue): RecordValue {
   const details: RecordValue = {
     ...(taskOutcome(child) ? {task_outcome:taskOutcome(child)} : {}),
     ...(/^subagent-task-[0-9a-f]{24}$/.test(child.task_id ?? "") ? {task_id:child.task_id} : {}),
+    ...(/^subagent-child-[0-9a-f]{24}$/.test(child.child_id ?? "") ? {child_id:child.child_id} : {}),
     ...(Number.isSafeInteger(child.attempt) && child.attempt > 0 ? {attempt:child.attempt} : {}),
     ...(text(child.label) ? { label: truncateUtf8(text(child.label)!, 256) } : {}),
     ...(text(child.task) ? { task: truncateUtf8(text(child.task)!, 1024) } : {}),

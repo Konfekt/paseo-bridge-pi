@@ -53,6 +53,7 @@ import { createPaseoWsConnection } from "./paseo-ws.js";
 import { applyRemoteModel } from "./model-sync.js";
 import { normalizePiEventForPaseo } from "./tool-result-normalization.js";
 import { SubagentTaskProjection, projectSubagentMessages } from "./subagent-task-projection.js";
+import { NativeSubagentLinks, type NativeSessionSource } from "./native-subagent-links.js";
 import { TurnVisibilityProjection } from "./turn-visibility.js";
 import { resolvePaseoChildRuntimeLink } from "./read-only-runtime-link.js";
 import { bridgeSettingsFile, isAutoEnabled, isImportEnabled, isTitleGenerationEnabled, writeBridgeSettings, writeMutableJson } from "./bridge-settings.js";
@@ -320,6 +321,43 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   let markedTmuxPane: string | null = null;
   const subagentTaskProjection = new SubagentTaskProjection();
   const turnVisibility = new TurnVisibilityProjection();
+  const nativeLinks = new NativeSubagentLinks();
+  let nativeLinksSeeded = false;
+  let nativeLinksGeneration = 0;
+  async function resolveNativeSession(input: { taskId: string; childId: string; attempt: number }): Promise<NativeSessionSource | undefined> {
+    const ctx = latestCtx;
+    if (!ctx || lifecycleClosed) return undefined;
+    const sessionId = ctx.sessionManager.getSessionId();
+    const registry = (globalThis as any).__paeHarnessReadOnlyV1;
+    const service = registry?.protocol === 1 ? registry.subagents : undefined;
+    if (service?.protocol !== 1 || service.sessionId !== sessionId || typeof service.sessionSource !== "function") return undefined;
+    const source = await service.sessionSource({ sessionId, ...input });
+    if (!latestCtx || lifecycleClosed || latestCtx.sessionManager.getSessionId() !== sessionId
+      || ctx.sessionManager.getSessionId() !== sessionId || (globalThis as any).__paeHarnessReadOnlyV1 !== registry
+      || registry.subagents !== service) return undefined;
+    return source;
+  }
+  async function reconcileNativeLinks(): Promise<void> {
+    try {
+      if (!remoteUiConnected() || lifecycleClosed || !latestCtx) return;
+      const generation = nativeLinksGeneration;
+      const ownerSessionId = latestCtx.sessionManager.getSessionId();
+      const ownerAgentId = currentAgentId;
+      const service = (globalThis as any).__paeHarnessReadOnlyV1?.subagents;
+      if (service?.sessionId !== latestCtx.sessionManager.getSessionId() || typeof service.sessionSource !== "function") return;
+      if (!nativeLinksSeeded) {
+        const sm = latestCtx.sessionManager;
+        nativeLinks.seed(projectSubagentMessages(buildProjectedHistory(sm.getEntries(), sm.getLeafId(), sessionManagerApi).messages));
+        nativeLinksSeeded = true;
+      }
+      for (const message of await nativeLinks.notifications(resolveNativeSession)) {
+        if (remoteUiConnected() && !lifecycleClosed && generation === nativeLinksGeneration && currentAgentId === ownerAgentId
+          && latestCtx?.sessionManager.getSessionId() === ownerSessionId) {
+          send({ type: "extension_ui_request", id: crypto.randomUUID(), method: "paseo_native_subagents", message });
+        }
+      }
+    } catch { debugLog("Native subagent reconciliation unavailable; no session binding was guessed."); }
+  }
   const providerReconnect = createProviderReconnectLoop({
     shouldReconnect: () => Boolean(currentSessionFile && currentAgentId && !remoteUiConnected()),
     reload: reloadCurrentPaseoProvider,
@@ -828,11 +866,15 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
           return;
         }
         case "get_messages": {
+          const ownerSessionId = latestCtx?.sessionManager.getSessionId();
+          const generation = nativeLinksGeneration;
           const sm = latestCtx?.sessionManager;
           const history = sm
             ? buildProjectedHistory(sm.getEntries(), sm.getLeafId(), sessionManagerApi)
             : { messages: [], projectedEntries: [] };
-          send(success(id, type, { messages: projectSubagentMessages(history.messages) }));
+          const messages = await nativeLinks.enrichHistory(projectSubagentMessages(history.messages), resolveNativeSession);
+          if (generation !== nativeLinksGeneration || latestCtx?.sessionManager.getSessionId() !== ownerSessionId) throw new Error("Session changed during native conversation linkage");
+          send(success(id, type, { messages }));
           return;
         }
         case "get_available_models":
@@ -1306,6 +1348,9 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         };
       },
       attached() {
+        nativeLinksGeneration++;
+        nativeLinks.resetDelivery();
+        void reconcileNativeLinks();
         publishPermissionGateOperatorDescriptor();
         publishHarnessReadOnlyDescriptor();
         publishForegroundTasksDescriptor();
@@ -1316,6 +1361,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         emitEntryCapture(latestCtx, "session_start");
       },
       detached() {
+        nativeLinksGeneration++;
         revokePermissionGateOperatorDescriptor();
         revokeHarnessReadOnlyDescriptor();
         revokeForegroundTasksDescriptor();
@@ -1598,6 +1644,9 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     preflightAbortController.abort();
     preflightAbortController = new AbortController();
     latestCtx = ctx;
+    nativeLinksGeneration++;
+    nativeLinks.clear();
+    nativeLinksSeeded = false;
     const retained = event.reason === "reload"
       ? takeBridgeAfterReload(ctx.sessionManager.getSessionFile())
       : (discardRetainedBridge(), undefined);
@@ -1640,6 +1689,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         publishHarnessReadOnlyDescriptor();
         publishForegroundTasksDescriptor();
         publishAccountControlsDescriptor();
+        void reconcileNativeLinks();
         if (!placement.infrastructure && !currentAgentId) registerWithPaseo(currentSessionFile, latestCtx.cwd);
         tagAgentPane(placement);
       }, 2000);
@@ -1705,7 +1755,11 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       latestCtx = ctx;
       const normalized = normalizePiEventForPaseo(event);
       for (const visible of turnVisibility.project(normalized as Record<string, any>)) {
-        for (const projected of subagentTaskProjection.project(visible)) send(projected);
+        for (const projected of subagentTaskProjection.project(visible)) {
+          nativeLinks.observe(projected);
+          send(projected);
+        }
+        void reconcileNativeLinks();
       }
     });
   }

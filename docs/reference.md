@@ -60,6 +60,12 @@ bundles it at `.../Paseo/resources/bin/paseo.cmd` on Windows).
   execution success; partial reports say **Needs continuation**, not delivered.
   With the matching Paseo server mapper patch, these labels appear in card titles
   and job/watch operations render readable text instead of nested JSON.
+- Native task cards obtain retained conversations through an owner-validated
+  task/child/attempt/runtime binding, not a guessed session path. The matching
+  Paseo consumer loads the real worker JSONL and reconciles existing pill entries
+  on bridge reload/reattach without restarting Pi. References travel only over a
+  private structured bridge channel, never model history or ordinary notification
+  text. Reaped workers retain their execution outcome; reaping is not success.
 - With the task-enabled Pi harness installed, `/tasks`, `/watches`, and
   `/background-jobs` expose human controls through the existing mirrored choice
   UI. Background launches retain their real group/job handles; the task dashboard
