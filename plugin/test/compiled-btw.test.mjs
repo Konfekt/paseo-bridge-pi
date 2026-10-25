@@ -123,7 +123,7 @@ test("compiled BTW UI → compiled server → private socket → copied side eng
 		const handlers = new Map();
 		const backend = (0, eval)(serverBundle)((name) =>
 			name === "@getpaseo/plugin"
-				? { defineRpc: (x) => x }
+				? { defineRpc: (x) => x, defineSettings: (x) => x }
 				: name === "node:os"
 					? { ...require(name), homedir: () => dir }
 					: require(name),
@@ -131,6 +131,7 @@ test("compiled BTW UI → compiled server → private socket → copied side eng
 		backend({
 			handle: (contract, handler) =>
 				handlers.set(contract.name, { contract, handler }),
+			registerSettings() {},
 			registerUsageSource: () => () => {},
 			before: () => () => {},
 		});
@@ -209,7 +210,7 @@ test("compiled BTW UI → compiled server → private socket → copied side eng
 			return typeof type === "function" ? type(props) : { type, props, key };
 		};
 		const load = (name) => {
-			if (name === "@getpaseo/plugin") return { defineRpc: (x) => x };
+			if (name === "@getpaseo/plugin") return { defineRpc: (x) => x, defineSettings: (x) => x };
 			if (name === "@getpaseo/plugin/client")
 				return { useRpc: (contract) => (input) => rpc(contract, input) };
 			if (name === "@getpaseo/plugin/client/react-native")

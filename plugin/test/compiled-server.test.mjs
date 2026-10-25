@@ -42,12 +42,12 @@ test('compiled plugin backend operates the real bridge without prompt dispatch o
   const errors = [];
   const handlers = new Map();
   const load = name => {
-    if (name === '@getpaseo/plugin') return { defineRpc: contract => contract };
+    if (name === '@getpaseo/plugin') return { defineRpc: contract => contract, defineSettings: contract => contract };
     if (name === 'node:os') return { ...require(name), homedir: () => root };
     return require(name);
   };
   const contribute = (0, eval)(serverBundle)(load).default;
-  const cleanup = contribute({ handle: (contract, handler) => handlers.set(contract.name, { contract, handler }), registerUsageSource: () => () => {}, before: () => () => {} });
+  const cleanup = contribute({ registerSettings: contract => { assert.equal(contract.id, 'work-source'); assert.deepEqual(contract.schema.parse({}), { sources: [] }); }, handle: (contract, handler) => handlers.set(contract.name, { contract, handler }), registerUsageSource: () => () => {}, before: () => () => {} });
   let descriptor;
   try {
     transport.bind({

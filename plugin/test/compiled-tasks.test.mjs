@@ -30,8 +30,8 @@ test('compiled Work replaces legacy task pills, lazily scopes foreground/backgro
   const task = { taskId:'t1',childId:'c1',workerEpoch:'worker1',groupId:'g1',attempt:1,title:'Helper',model:'test/model',status:'waiting-permission',createdAt:'now',updatedAt:'now',pendingInteractions:1,canPrompt:true,canStop:true };
   const status = { available:true,sessionId:'session',runtimeEpoch:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',tasks:[task] };
   const load = name => {
-    if (name === '@getpaseo/plugin') return { defineRpc: c => c };
-    if (name === '@getpaseo/plugin/client') return { useRpc: contract => async input => { contract.input.parse(input); calls.push({name:contract.name,input}); return {}; } };
+    if (name === '@getpaseo/plugin') return { defineRpc: c => c, defineSettings: c => c };
+    if (name === '@getpaseo/plugin/client') return { useSettings: () => ({ status: 'loading' }), useRpc: contract => async input => { contract.input.parse(input); calls.push({name:contract.name,input}); return {}; } };
     if (name === '@getpaseo/plugin/client/ui') return { SettingsAction:'SettingsAction', SettingsSection:'SettingsSection' };
     if (name === '@getpaseo/plugin/client/react-native') return { ScrollView:'ScrollView',TextInput:'TextInput',Icon:'Icon' };
     if (name === 'react-native') return { Text:'Text',View:'View',Pressable:'Pressable', Animated:{ Value:class { interpolate() { return 'rotation'; } }, View:'AnimatedView' }, Easing:{linear:x=>x}, AccessibilityInfo:{isReduceMotionEnabled:async()=>true,addEventListener:()=>({remove(){}})} };

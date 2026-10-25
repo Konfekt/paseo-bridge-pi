@@ -62,8 +62,8 @@ test('actual Pi account service switches via compiled Paseo private transport wi
   transport.bind({command:async()=>{throw Error('No prompt commands allowed');},attached(){},detached(){},error:error=>errors.push(error),accountControlsIdentity:identity,accountControls:request=>request.operation==='snapshot'?service.getSnapshot({sessionId,...(request.providerId?{providerId:request.providerId}:{})}):service.switchAccount(request.request)});
   transport.start();client=net.connect(transport.pipePath);await once(client,'connect');
   writeAccountControlsDescriptor(join(root,'.pi/paseo-bridge'),{version:1,socketPath:accountControlsSocketPath(transport.pipePath),...identity()});
-  const handlers=new Map();const load=name=>name==='@getpaseo/plugin'?{defineRpc:contract=>contract}:name==='node:os'?{...require(name),homedir:()=>root}:require(name);
-  cleanup=(0,eval)(serverBundle)(load).default({handle:(contract,handler)=>handlers.set(contract.name,{contract,handler}),registerUsageSource:()=>()=>{},before:()=>()=>{}});
+  const handlers=new Map();const load=name=>name==='@getpaseo/plugin'?{defineRpc:contract=>contract,defineSettings:contract=>contract}:name==='node:os'?{...require(name),homedir:()=>root}:require(name);
+  cleanup=(0,eval)(serverBundle)(load).default({registerSettings(){},handle:(contract,handler)=>handlers.set(contract.name,{contract,handler}),registerUsageSource:()=>()=>{},before:()=>()=>{}});
   const context={paseo:{agents:{ref:id=>({refresh:async()=>({agent:{id,workspaceId:'workspace',provider:'pi'}})})}}};
   const invoke=async(name,input)=>{const {contract,handler}=handlers.get(name);return contract.output.parse(await handler(contract.input.parse(input),context));};
   const target={agentId:'agent',workspaceId:'workspace'};

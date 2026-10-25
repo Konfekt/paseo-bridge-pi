@@ -458,7 +458,7 @@ test("shipped contribution omits retired Activity and delegates Accounts while k
 	const { clientBundle } = await compilePlugin({ client: resolve(root, "index.client.tsx") });
 	const observers = [], panels = [], pills = [], headers = [], calls = [], opened = [];
 	const load = name => {
-		if (name === "@getpaseo/plugin") return { defineRpc: x => x };
+		if (name === "@getpaseo/plugin") return { defineRpc: x => x, defineSettings: x => x };
 		if (["react", "react/jsx-runtime", "react-native", "@getpaseo/plugin/client", "@getpaseo/plugin/client/ui", "@getpaseo/plugin/client/react-native", "@tanstack/react-query"].includes(name)) return {};
 		return require(name);
 	};

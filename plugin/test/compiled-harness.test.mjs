@@ -26,9 +26,9 @@ test('compiled read-only panels render lists/details, bind generations and only 
     return typeof type === 'function' ? type(props) : { type, props };
   };
   const load = name => {
-    if (name === '@getpaseo/plugin') return { defineRpc: contract => contract };
+    if (name === '@getpaseo/plugin') return { defineRpc: contract => contract, defineSettings: contract => contract };
     if (name === '@getpaseo/plugin/client/ui') return { SettingsAction:'SettingsAction' };
-    if (name === '@getpaseo/plugin/client') return { useRpc: contract => async input => {
+    if (name === '@getpaseo/plugin/client') return { useSettings: () => ({ status: 'loading' }), useRpc: contract => async input => {
       contract.input.parse(input); calls.push({ name: contract.name, input }); return {};
     } };
     if (name === '@getpaseo/plugin/client/react-native') return { ScrollView: 'ScrollView', Icon:'Icon', copyText:async () => {} };

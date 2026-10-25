@@ -10,12 +10,21 @@ export type WorkViewState = {
 export function createWorkTabState() {
 	const selected = new Map<string, string>();
 	const views = new Map<string, WorkViewState>();
+	// Claim once per contribution, even when a saved source proves invalid. A
+	// later settings update must not silently select a different conversation.
+	const claimed = new Set<string>();
+	const explicit = new Map<string, number>();
+	let revision = 0;
 	const listeners = new Set<() => void>();
 	const key = (workspaceId: string, agentId: string) => JSON.stringify([workspaceId, agentId]);
 	return {
 		selected(workspaceId: string) { return selected.get(workspaceId); },
-		select(workspaceId: string, agentId: string) {
-			if (selected.get(workspaceId) === agentId) return;
+		claimed(workspaceId: string) { return claimed.has(workspaceId); },
+		claim(workspaceId: string) { claimed.add(workspaceId); },
+		explicit(workspaceId: string) { return explicit.get(workspaceId); },
+		select(workspaceId: string, agentId: string, restored = false) {
+			claimed.add(workspaceId);
+			if (!restored) explicit.set(workspaceId, ++revision);
 			selected.set(workspaceId, agentId);
 			listeners.forEach(listener => listener());
 		},
@@ -32,6 +41,8 @@ export function createWorkTabState() {
 			views.delete(key(workspaceId, agentId));
 			if (selected.get(workspaceId) !== agentId) return;
 			selected.delete(workspaceId);
+			// Keep the explicit-interaction marker: removing a subsequently
+			// selected source must not revive an older in-flight restoration.
 			listeners.forEach(listener => listener());
 		},
 		refresh() { listeners.forEach(listener => listener()); },

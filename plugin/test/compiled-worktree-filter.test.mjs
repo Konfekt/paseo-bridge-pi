@@ -23,7 +23,7 @@ test("compiled Worktrees defaults to this session, toggles full inventory, group
   const hookStates = [];
   const elements = [];
   const load = name => {
-    if (name === "@getpaseo/plugin") return { defineRpc: contract => contract };
+    if (name === "@getpaseo/plugin") return { defineRpc: contract => contract, defineSettings: contract => contract };
     if (name === "zod") { const schema = new Proxy({}, { get: () => (...args) => schema }); return { z: new Proxy({}, { get: () => (...args) => schema }) }; }
     if (name === "@getpaseo/plugin/client/ui") return { SettingsCard: "SettingsCard", SettingsSection: "SettingsSection", SettingsSelect: "SettingsSelect", SettingsAction: props => jsx("SettingsAction", props) };
     if (name === "@getpaseo/plugin/client") return { useRpc: contract => contract.name === "workflows_status" ? async () => data() : async value => { commands.push(value); return { accepted: true }; } };

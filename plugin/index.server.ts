@@ -1,4 +1,5 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { workSourceSettings } from "./shared/work-source";
 import { registerIndependentAgents } from "./server/independent-agents";
 import { registerCacheUsage } from "./server/cache-usage";
 import { registerSessionAccountUsage } from "./server/session-account-usage";
@@ -17,6 +18,7 @@ import { btwStatusRpc, btwControlRpc } from "./shared/btw";
 import { accountControlsStatusRpc, accountControlsSwitchRpc } from "./shared/account-controls";
 
 export default function contribute(server: PluginServerContext) {
+  server.registerSettings(workSourceSettings);
   registerCacheUsage(server);
   registerSessionAccountUsage(server);
   const handlers = createHandlers(readOperatorDescriptor);

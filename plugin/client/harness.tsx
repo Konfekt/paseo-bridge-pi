@@ -4,6 +4,7 @@ import { Pressable, Text, View, type ScrollView as NativeScrollView } from "reac
 import { Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
 import {
 	useRpc,
+	useSettings,
 	type PluginAgentPanelProps,
 	type PluginButtonIconProps,
 	type PluginClientContext,
@@ -37,6 +38,7 @@ import {
 } from "./agent-conversation";
 
 import { createWorkTabState, type WorkViewState } from "./work-tab";
+import { workSourceSettings } from "../shared/work-source";
 
 type Kind = "jobs" | "subagents";
 
@@ -78,7 +80,16 @@ export function contributeHarness(client: PluginClientContext) {
 	let stopped = false;
 	const conversations = createAgentConversationTabs(client);
 	const work = createWorkTabState();
+	let hydrated = false;
+	const saving = new Map<string, number>();
+	const retries = new Set<ReturnType<typeof setTimeout>>();
+	const retry = (run: () => void) => {
+		if (stopped) return;
+		const timer = setTimeout(() => { retries.delete(timer); if (!stopped) run(); }, 5000);
+		retries.add(timer);
+	};
 	function WorkPanel(props: PluginWorkspacePanelProps) {
+		const settings = useSettings(workSourceSettings);
 		const [, refresh] = useState(0);
 		useEffect(() => {
 			const unsubscribe = work.subscribe(() => refresh(value => value + 1));
@@ -86,6 +97,54 @@ export function contributeHarness(client: PluginClientContext) {
 			return unsubscribe;
 		}, []);
 		const agentId = work.selected(props.workspaceId);
+		const workspaceId = props.workspaceId;
+		useEffect(() => {
+			if (settings.status !== "ready" || !hydrated || stopped) return;
+			if (!work.claimed(workspaceId)) {
+				work.claim(workspaceId);
+				const hint = settings.values.sources.find(source =>
+					source.hostId === props.host.id && source.workspaceId === workspaceId);
+				const entry = hint && entries.get(hint.agentId);
+				if (hint && entry?.workspaceId === workspaceId) {
+					const current = () => !stopped && !work.explicit(workspaceId) &&
+						entries.get(hint.agentId) === entry && entry.workspaceId === workspaceId;
+					const restore = () => {
+						if (!current()) return;
+						void client.rpc(harnessStatusRpc, { agentId: hint.agentId, workspaceId }).then(identity => {
+							if (!current()) return;
+							if (!identity.available || !identity.sessionId) { retry(restore); return; }
+							if (identity.sessionId === hint.sessionId) work.select(workspaceId, hint.agentId, true);
+						}).catch(() => { if (current()) retry(restore); });
+					};
+					restore();
+				}
+			}
+			const explicit = work.explicit(workspaceId);
+			if (!agentId || !explicit || saving.get(workspaceId) === explicit) return;
+			const entry = entries.get(agentId);
+			if (entry?.workspaceId !== workspaceId) return;
+			saving.set(workspaceId, explicit);
+			const current = () => !stopped && work.explicit(workspaceId) === explicit &&
+				work.selected(workspaceId) === agentId && entries.get(agentId) === entry;
+			void client.rpc(harnessStatusRpc, { agentId, workspaceId }).then(async identity => {
+				if (!current()) return;
+				if (!identity.available || !identity.sessionId) {
+					retry(() => { if (current()) { saving.delete(workspaceId); work.refresh(); } });
+					return;
+				}
+				// Merge only this host/workspace. Revision conflicts preserve other
+				// clients' hints rather than overwriting their concurrent writes.
+				const sources = settings.values.sources.filter(source =>
+					source.hostId !== props.host.id || source.workspaceId !== workspaceId);
+				const saved = await settings.save({ sources: [...sources, {
+					hostId: props.host.id, workspaceId, agentId, sessionId: identity.sessionId,
+				}] }, settings.revision);
+				if (!saved && current()) {
+					await settings.reload();
+					retry(() => { if (current()) { saving.delete(workspaceId); work.refresh(); } });
+				}
+			}).catch(() => { if (current()) retry(() => { if (current()) { saving.delete(workspaceId); work.refresh(); } }); });
+		});
 		if (!agentId) {
 			return (
 				<View style={{ flex: 1, padding: 16 }}>
@@ -95,7 +154,6 @@ export function contributeHarness(client: PluginClientContext) {
 				</View>
 			);
 		}
-		const workspaceId = props.workspaceId;
 		const entry = entries.get(agentId);
 		const current = () =>
 			!stopped && work.selected(workspaceId) === agentId &&
@@ -229,6 +287,8 @@ export function contributeHarness(client: PluginClientContext) {
 					const ids = new Set(agents.map(({ agent }) => agent.id));
 					for (const id of entries.keys()) if (!ids.has(id)) remove(id);
 					for (const { agent } of agents) register(agent);
+					hydrated = true;
+					work.refresh();
 				},
 				update: (message) => {
 					if (message.type !== "agent_update") return;
@@ -245,6 +305,7 @@ export function contributeHarness(client: PluginClientContext) {
 	return () => {
 		stopped = true;
 		lifetime.abort();
+		for (const timer of retries) clearTimeout(timer);
 		for (const id of entries.keys()) remove(id);
 		panels.forEach((dispose) => dispose());
 		conversations.dispose();

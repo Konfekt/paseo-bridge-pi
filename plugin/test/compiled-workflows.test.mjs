@@ -156,13 +156,14 @@ test("compiled Workflows controls use the private engine, explicit confirmations
 		const handlers = new Map();
 		(0, eval)(serverBundle)((name) =>
 			name === "@getpaseo/plugin"
-				? { defineRpc: (x) => x }
+				? { defineRpc: (x) => x, defineSettings: (x) => x }
 				: name === "node:os"
 					? { ...require(name), homedir: () => dir }
 					: require(name),
 		).default({
 			handle: (contract, handler) =>
 				handlers.set(contract.name, { contract, handler }),
+			registerSettings() {},
 			registerUsageSource: () => () => {},
 			before: () => () => {},
 		});
@@ -259,7 +260,7 @@ test("compiled Workflows controls use the private engine, explicit confirmations
 			];
 		};
 		const load = (name) => {
-			if (name === "@getpaseo/plugin") return { defineRpc: (x) => x };
+			if (name === "@getpaseo/plugin") return { defineRpc: (x) => x, defineSettings: (x) => x };
 			if (name === "@getpaseo/plugin/client")
 				return { useRpc: (contract) => (input) => rpc(contract, input) };
 			if (name === "@getpaseo/plugin/client/react-native")

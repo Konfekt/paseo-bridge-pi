@@ -64,11 +64,14 @@ function renderer() {
   } };
 }
 
-test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-only close', async () => {
+test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-only close', async t => {
   const { compilePlugin } = await import(pathToFileURL(resolve(compilerPath)));
   const { clientBundle } = await compilePlugin({ client: fileURLToPath(new URL('../index.client.tsx', import.meta.url)) });
+  const { defineSettings } = await import(pathToFileURL(require.resolve('@getpaseo/plugin')));
   const ui = renderer();
   const calls = [], queries = [];
+  let settings = { status: 'loading' };
+  let settingsContract;
   let rpcResponse = async () => ({ available: false });
   let workAgents;
   let workJobs = [], foregroundJobs = [];
@@ -76,8 +79,8 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
   let statusError = false;
   const pillUpdates = [];
   const load = name => {
-    if (name === '@getpaseo/plugin') return { defineRpc: contract => contract };
-    if (name === '@getpaseo/plugin/client') return { useRpc: contract => async input => { calls.push({ name: contract.name, input }); return {}; } };
+    if (name === '@getpaseo/plugin') return { defineRpc: contract => contract, defineSettings };
+    if (name === '@getpaseo/plugin/client') return { useSettings: contract => { settingsContract = contract; return settings; }, useRpc: contract => async input => { calls.push({ name: contract.name, input }); return {}; } };
     if (name === '@getpaseo/plugin/client/ui') return { SettingsAction: 'SettingsAction', SettingsSection: 'SettingsSection', SettingsRow: 'SettingsRow', SettingsToggle: 'SettingsToggle' };
     if (name === '@getpaseo/plugin/client/react-native') return { ScrollView: 'ScrollView', Icon: 'Icon', TextInput: 'TextInput' };
     if (name === 'react-native') return { View: 'View', Text: 'Text', Pressable: 'Pressable',
@@ -315,5 +318,125 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.equal(queries.length, 0);
     assert.equal(first.screens.length, 2, 'only explicit user navigation opens the native navigation screen');
     assert.ok(calls.every(call => !/cancel|stop|reap|close/.test(call.name)));
+
+    // Full refresh: contribution, subscriptions and hook state are all recreated.
+    // Only the host's supported settings document survives.
+    ui.unmount();
+    const tick = () => new Promise(resolve => setImmediate(resolve));
+    const persisted = { hostId: 'host', workspaceId: 'w', agentId: 'a', sessionId: 's' };
+    settings = {
+      status: 'ready', values: { sources: [] }, revision: '0',
+      async save(values, revision) {
+        assert.equal(revision, this.revision);
+        this.values = settingsContract.schema.parse(values);
+        this.revision = String(Number(this.revision) + 1);
+        return true;
+      },
+      async reload() {},
+    };
+    const writer = host(); await tick(); snapshot(writer);
+    click(writer, 'a'); render(writer); await tick();
+    assert.equal(settingsContract.id, 'work-source');
+    assert.equal(settingsContract.scope, 'host');
+    assert.deepEqual(settings.values.sources, [persisted]);
+    ui.unmount(); writer.cleanup();
+    assert.deepEqual(settings.values.sources, [persisted], 'teardown does not erase restoration hints');
+    for (const scenario of ['valid', 'removed', 'archived', 'wrong-workspace', 'wrong-provider', 'dormant', 'stale-host', 'stale-session']) {
+      settings.values = { sources: [{ ...persisted, ...(scenario === 'stale-host' ? { hostId: 'old-host' } : {}) }] };
+      const cold = host(); await tick();
+      try {
+        render(cold); await tick();
+        assert.match(text(render(cold)), /Select Work/, 'wait for subscription hydration');
+        assert.deepEqual(settings.values.sources[0].agentId, 'a', 'delayed snapshot does not discard saved hint');
+        const source = { ...agents[0],
+          ...(scenario === 'archived' ? { archivedAt: 'now' } : {}),
+          ...(scenario === 'wrong-workspace' ? { workspaceId: 'other' } : {}),
+          ...(scenario === 'wrong-provider' ? { provider: 'other' } : {}),
+          ...(scenario === 'dormant' ? { runtimeInfo: { extra: { independentDormant: true } } } : {}),
+        };
+        rpcResponse = async () => ({ available: true, sessionId: scenario === 'stale-session' ? 'replacement' : 's', runtimeEpoch: 'reconnected' });
+        cold.observers.forEach(observer => observer.snapshot({ entries: (scenario === 'removed' ? [agents[1]] : [source, agents[1]]).map(agent => ({ agent })) }));
+        render(cold); await tick();
+        const restoredTree = render(cold);
+        if (scenario === 'valid') {
+          assert.match(text(restoredTree), /Conversation A/);
+          settings.values = { sources: [{ ...persisted, agentId: 'b' }] };
+          render(cold); await tick();
+          assert.match(text(render(cold)), /Conversation A/, 'another client cannot live-switch an active source');
+          ui.unmount();
+          assert.match(text(render(cold)), /Conversation A/, 'UI-only close preserves local source');
+          cold.observers.forEach(observer => observer.update({ type: 'agent_update', payload: { kind: 'remove', agentId: 'a' } }));
+          assert.match(text(render(cold)), /Select Work/);
+        } else {
+          assert.match(text(restoredTree), /Select Work/, scenario);
+          assert.equal(queries.length, 0, 'invalid hint never queries another agent');
+          settings.values = { sources: [{ ...persisted, agentId: 'b' }] };
+          render(cold); await tick();
+          assert.match(text(render(cold)), /Select Work/, 'invalid hint cannot fall through to a later unrelated hint');
+        }
+      } finally { ui.unmount(); cold.cleanup(); }
+    }
+    // Settings themselves can arrive after the inventory; do not claim an
+    // empty/default preference before the supported hook reports ready.
+    const readySettings = settings;
+    settings = { status: 'loading' };
+    const delayedSettings = host(); await tick(); snapshot(delayedSettings);
+    assert.match(text(render(delayedSettings)), /Select Work/);
+    settings = readySettings; settings.values = { sources: [persisted] };
+    rpcResponse = async () => ({ available: true, sessionId: 's', runtimeEpoch: 'e' });
+    render(delayedSettings); await tick();
+    assert.match(text(render(delayedSettings)), /Conversation A/);
+    ui.unmount(); delayedSettings.cleanup();
+
+    // Removal while validating identity must not restore a now-invalid source.
+    const removedPending = host(); await tick(); snapshot(removedPending);
+    let releaseRemoved;
+    rpcResponse = () => new Promise(resolve => { releaseRemoved = resolve; });
+    render(removedPending);
+    removedPending.observers.forEach(observer => observer.update({ type: 'agent_update', payload: { kind: 'remove', agentId: 'a' } }));
+    releaseRemoved({ available: true, sessionId: 's', runtimeEpoch: 'e' });
+    await tick();
+    assert.match(text(render(removedPending)), /Select Work/);
+    ui.unmount(); removedPending.cleanup();
+
+    // Reconnect can hydrate the inventory before the Pi session is available.
+    // Retain the precise hint while offline and retry, without choosing B.
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    settings.values = { sources: [persisted] };
+    const reconnecting = host(); await tick(); snapshot(reconnecting);
+    rpcResponse = async () => ({ available: false });
+    render(reconnecting); await tick();
+    assert.match(text(render(reconnecting)), /Select Work/);
+    rpcResponse = async () => ({ available: true, sessionId: 's', runtimeEpoch: 'new-epoch' });
+    t.mock.timers.tick(5000); await tick();
+    assert.match(text(render(reconnecting)), /Conversation A/);
+    ui.unmount(); reconnecting.cleanup();
+    t.mock.timers.reset();
+
+    // An explicit click wins even when a saved source's identity RPC is in flight.
+    settings.values = { sources: [persisted] };
+    const racing = host(); await tick(); snapshot(racing);
+    let releaseRestore;
+    rpcResponse = () => new Promise(resolve => { releaseRestore = resolve; });
+    render(racing);
+    click(racing, 'b');
+    releaseRestore({ available: true, sessionId: 's', runtimeEpoch: 'e' });
+    await tick();
+    rpcResponse = async () => ({ available: true, sessionId: 'b-session', runtimeEpoch: 'e' });
+    assert.match(text(render(racing)), /Conversation B/);
+    await tick();
+    assert.equal(settings.values.sources[0].agentId, 'b');
+    ui.unmount(); racing.cleanup();
+
+    settings.values = { sources: [persisted] };
+    const removedExplicit = host(); await tick(); snapshot(removedExplicit);
+    rpcResponse = () => new Promise(resolve => { releaseRestore = resolve; });
+    render(removedExplicit);
+    click(removedExplicit, 'b');
+    removedExplicit.observers.forEach(observer => observer.update({ type: 'agent_update', payload: { kind: 'remove', agentId: 'b' } }));
+    releaseRestore({ available: true, sessionId: 's', runtimeEpoch: 'e' });
+    await tick();
+    assert.match(text(render(removedExplicit)), /Select Work/, 'removal of an explicitly selected source cannot revive an older pending restore');
+    ui.unmount(); removedExplicit.cleanup();
   } finally { ui.unmount(); first.cleanup(); second.cleanup(); }
 });
