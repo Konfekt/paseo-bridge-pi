@@ -1,10 +1,16 @@
 /*
- * Adapted from Paseo v0.12.0 (getpaseo/paseo, cafe4b01c8522ff39560241c5deb01427dc8dc5b):
- * packages/app/src/agent-stream/turn-footer.tsx (RunningTurnFooter/WorkingIndicator)
- * and packages/app/src/components/message.tsx (ExpandableBadge).
- * Copyright (c) 2025-present Mohamed Boudra. Modified for the public Paseo
- * plugin React Native surface; internal app hooks, Unistyles, icons and
- * shimmer implementation are intentionally not imported. See ../licenses/PASEO-APACHE-2.0.txt.
+ * Adapted from actual Paseo v0.12.0 component logic (getpaseo/paseo,
+ * cafe4b01c8522ff39560241c5deb01427dc8dc5b):
+ * - packages/app/src/agent-stream/turn-footer.tsx:115-154,224-240:
+ *   RunningTurnFooter/WorkingIndicator component structure and footer row metrics.
+ * - packages/app/src/agent-stream/strategy-native.tsx:636: inverted-list near-bottom
+ *   threshold; the adapter converts that test to non-inverted ScrollView coordinates.
+ * - packages/app/src/components/message.tsx:1866-2175: ExpandableBadge Pressable
+ *   accessibility state, compact header, and expanded-only detail content.
+ * These component structures/logic are adapted below, not imported from app-internal
+ * modules. The plugin uses public React Native primitives instead of Paseo's private
+ * Unistyles, SyncedLoader, icons and shimmer. Copyright (c) 2025-present Mohamed
+ * Boudra. Modified for this plugin. See ../licenses/PASEO-APACHE-2.0.txt.
  */
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 
