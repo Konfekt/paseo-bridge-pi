@@ -59,7 +59,18 @@ function resultChildren(result: unknown): RecordValue[] {
   if (!isRecord(result)) return [];
   const details = isRecord(result.details) ? result.details : undefined;
   const children = details?.results ?? result.results;
-  return Array.isArray(children) ? children.filter(isRecord) : [];
+  if (Array.isArray(children)) return children.filter(isRecord);
+  // Native foreground workers return a group DTO, not legacy results[].
+  if (details?.tui_subagent !== true || !isRecord(details.group) || !Array.isArray(details.group.children)) return [];
+  const nativeChildren = details.group.children.filter(isRecord);
+  // Only a single-child aggregate can be assigned to an individual task.
+  const report = nativeChildren.length === 1 && Array.isArray(result.content)
+    ? result.content.filter((part: unknown) => isRecord(part) && part.type === "text" && typeof part.text === "string").map((part: RecordValue) => part.text).join("\n")
+    : undefined;
+  return nativeChildren.map((child: RecordValue) => ({
+    ...child,
+    ...(report && !text(child.final) ? { final: report } : {}),
+  }));
 }
 
 function isBackgroundSubagentResult(result: unknown): result is BackgroundSubagentResult {
@@ -143,6 +154,7 @@ function childFailed(child: RecordValue): boolean {
   return Boolean(
     child.error ||
       child.errorMessage ||
+      ["failed", "cancelled", "lost"].includes(child.status) ||
       (typeof exitCode === "number" && exitCode > 0) ||
       (state && !["completed", "running"].includes(state)) ||
       (stop && ["error", "failed", "aborted", "cancelled", "canceled", "timeout", "timed_out"].includes(stop)),
