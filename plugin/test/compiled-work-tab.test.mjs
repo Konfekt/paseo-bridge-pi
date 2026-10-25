@@ -240,6 +240,10 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
       { id: 'parent-row', role: 'parent', text: 'Please **review** this request.' },
     ];
     tree = render();
+    const timeline = nodes(tree).find(n => n.type === 'ScrollView' && n.props.style?.maxHeight === 320);
+    assert.equal(timeline.props.contentContainerStyle.gap ?? 0, 0, 'timeline does not insert gaps for invisible correlated result rows');
+    assert.ok(!nodes(tree).some(n => n.key === 'result-row'), 'correlated tool results have no empty layout wrapper');
+    assert.ok(nodes(tree).filter(n => n.type === 'View' && n.props.style?.marginHorizontal === -13).every(n => !n.props.style.marginBottom), 'collapsed tool badges have no extra inter-row margin');
     assert.match(text(tree), /git status --short/, 'badge uses the compact native command summary');
     assert.match(text(tree), /formatted/, 'assistant prose is rendered through the Markdown adapter');
     assert.ok(nodes(tree).some(n => n.props?.testID === 'transcript-markdown'));

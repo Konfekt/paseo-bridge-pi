@@ -34,7 +34,7 @@ export function NativeToolBadge({ name, status, summary, argumentsValue, details
   const label = presentation.label;
   const subtitle = summary ?? presentation.summary;
   const statusColor = status === "failed" ? colors.statusDanger : colors.foregroundMuted;
-  return <View style={{ alignSelf: "stretch", marginHorizontal: -13, marginBottom: 4 }}>
+  return <View style={{ alignSelf: "stretch", marginHorizontal: -13 }}>
     <Pressable accessibilityRole="button" accessibilityLabel={`Tool ${label}${subtitle ? ` · ${subtitle}` : ""} · ${status}`} accessibilityState={{ expanded }} onPress={onToggle}
       style={{ flexDirection: "row", alignItems: "center", borderRadius: 8, borderWidth: 1, borderColor: expanded ? colors.border : "transparent", borderBottomLeftRadius: expanded ? 0 : 8, borderBottomRightRadius: expanded ? 0 : 8, backgroundColor: expanded ? colors.surface1 : "transparent", paddingHorizontal: 8, paddingVertical: 4 }}>
       <View style={{ width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center", marginRight: 4 }}>

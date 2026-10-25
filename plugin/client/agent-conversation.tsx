@@ -44,10 +44,15 @@ export function WorkerConversation({ target, epoch, colors, platform }: {
     {conversation.isError ? <><Metadata colors={colors}>Conversation unavailable. Retrying automatically.</Metadata><NativeButton colors={colors} label="Retry conversation" onPress={() => { void conversation.refetch(); }} /></> : null}
     {!conversation.isPending && !conversation.isError && !item ? <Metadata colors={colors}>{conversation.data?.message ?? "No retained conversation is available."}</Metadata> : null}
     {item ? <View style={{ maxHeight: 320, borderWidth: 1, borderColor: colors.border, borderRadius: 8, backgroundColor: colors.surface0, overflow: "hidden" }}>
-      <ScrollView ref={scroll} nestedScrollEnabled style={{ maxHeight: 320 }} contentContainerStyle={{ padding: 12, gap: 12 }}
+      <ScrollView ref={scroll} nestedScrollEnabled style={{ maxHeight: 320 }} contentContainerStyle={{ padding: 12 }}
         onScroll={(event: NativeSyntheticEvent<NativeScrollEvent>) => { const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent; following.current = isNativeScrollViewNearBottom({ offsetY: contentOffset.y, contentHeight: contentSize.height, viewportHeight: layoutMeasurement.height, threshold: 32 }); }}
         scrollEventThrottle={100} onContentSizeChange={() => { if (following.current) scroll.current?.scrollToEnd({ animated: false }); }}>
-        {item.messages.map(message => <View key={message.id} style={{ gap: 6 }}>
+        {item.messages.map(message => {
+          const showProse = ["user", "parent", "assistant"].includes(message.role) && !!message.text;
+          const showResult = message.role === "tool" && (!message.toolCallId || !visibleCallIds.has(message.toolCallId));
+          const showCalls = message.parts?.some(part => part.type === "toolCall");
+          if (!showProse && !showResult && !showCalls && !message.truncated) return null;
+          return <View key={message.id} style={{ gap: showProse ? 12 : 0, ...(showProse ? { marginVertical: 6 } : {}) }}>
           {(message.role === "user" || message.role === "parent") && message.text ? <View style={{ alignSelf: "flex-end", maxWidth: "88%", borderRadius: 16, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: colors.surface1 }}><TranscriptMarkdown text={message.text} colors={colors} platform={platform} /></View> : null}
           {message.role === "assistant" && message.text ? <TranscriptMarkdown text={message.text} colors={colors} platform={platform} /> : null}
           {message.role === "tool" && (!message.toolCallId || !visibleCallIds.has(message.toolCallId)) ? <NativeToolBadge
@@ -64,7 +69,8 @@ export function WorkerConversation({ target, epoch, colors, platform }: {
               expanded={!!expanded[part.id]} onToggle={() => setExpanded(current => ({ ...current, [part.id]: !current[part.id] }))} />;
           })}
           {message.truncated ? <Metadata colors={colors}>[truncated]</Metadata> : null}
-        </View>)}
+        </View>;
+        })}
         {cursor == null && item.liveText ? <TranscriptMarkdown text={item.liveText} colors={colors} platform={platform} /> : null}
         {cursor == null ? liveTools.filter(event => !persistedCallIds.has(event.toolCallId)).map(event => <NativeToolBadge key={`live:${event.toolCallId}`} name={event.name} argumentsValue={event.arguments} status={event.status ?? "running"}
           details={event.arguments === undefined ? event.result ?? "" : JSON.stringify({ arguments: event.arguments, ...(event.result ? { result: event.result } : {}) }, null, 2)} colors={colors}
