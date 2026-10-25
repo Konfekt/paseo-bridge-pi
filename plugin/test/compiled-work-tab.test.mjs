@@ -76,6 +76,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
   let workAgents;
   let workJobs = [], foregroundJobs = [];
   let conversationError = false;
+  let messages = [{ id: 'm1', role: 'assistant', text: 'Worker transcript evidence' }];
   let statusError = false;
   const pillUpdates = [];
   const load = name => {
@@ -97,7 +98,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
         : key[0] === 'harness-status' ? { available: true, sessionId: 's', runtimeEpoch: 'e' }
         : key[0] === 'harness-list' ? { state: 'available', items: key[1] === 'subagents' ? workAgents : workJobs }
         : key[0] === 'foreground-tasks' ? { available: true, tasks: foregroundJobs }
-        : key[0] === 'worker-conversation' ? { state: 'available', item: { messages: [{ id: 'm1', role: 'assistant', text: 'Worker transcript evidence' }], nextCursor: 2 } }
+        : key[0] === 'worker-conversation' ? { state: 'available', item: { messages, nextCursor: 2 } }
         : undefined;
       return { data, isPending: false, isError: (key[0] === 'worker-conversation' && conversationError) || (key[0] === 'harness-status' && statusError), refetch() {} };
     }, useMutation() { return { isPending: false, mutate() { throw Error('Unexpected mutation'); } }; } };
@@ -215,13 +216,32 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.equal(calls.filter(c => c.name === 'independent_agent_open').length, 0);
     rows(tree)[0].props.onPress(); tree = render();
     assert.match(text(tree), /Worker transcript evidence/);
-    assert.match(text(tree), /separate chat/);
-    assert.ok(queries.some(q => q.queryKey[0] === 'worker-conversation'));
+    assert.equal(rows(tree).length, 5, 'historical inline expansion retains the identical list');
+    assert.equal(nodes(tree).filter(n => n.props?.testID === 'work-agent-detail').length, 0, 'no new detail screen');
+    assert.ok(nodes(tree).some(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Open child chat'), 'historical chat button retained');
+    const liveQuery = queries.find(q => q.queryKey[0] === 'worker-conversation');
+    assert.equal(liveQuery.refetchInterval, 5000);
+    assert.equal(liveQuery.refetchOnReconnect, true);
+    assert.ok(!queries.some(q => q.queryKey[0] === 'harness-detail' && q.enabled), 'live log replaces final-report reads');
+    workAgents[0].status = 'running';
+    messages = [...messages, { id: 'm2', role: 'tool', text: 'Live tool execution evidence' }];
+    tree = render();
+    assert.match(text(tree), /Live tool execution evidence/, 'poll updates append tool logs before worker finishes');
+    assert.equal(nodes(tree).filter(n => n.props?.testID === 'work-agent-conversation').length, 1);
+    assert.ok(nodes(tree).some(n => n.type === 'ScrollView' && n.props.style?.maxHeight === 320), 'original bounded OutputWell retained');
     nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Next messages').props.onPress(); tree = render();
     assert.equal(queries.find(q => q.queryKey[0] === 'worker-conversation').queryKey.at(-1), 2);
+    workAgents[0].status = 'completed'; tree = render();
+    assert.equal(queries.find(q => q.queryKey[0] === 'worker-conversation').queryKey.at(-1), 2, 'settlement does not reset history pagination');
     nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'First messages').props.onPress(); tree = render();
     assert.equal(queries.find(q => q.queryKey[0] === 'worker-conversation').queryKey.at(-1), undefined);
     assert.equal(calls.filter(c => c.name === 'independent_agent_open').length, 0, 'row click only reads transcript');
+    workAgents[0].status = 'completed';
+    rows(tree)[0].props.onPress(); tree = render();
+    assert.equal(rows(tree).length, 5);
+    assert.doesNotMatch(text(tree), /Worker transcript evidence/);
+    assert.ok(!queries.some(q => q.queryKey[0] === 'worker-conversation'), 'collapse stops transcript polling');
+    rows(tree)[0].props.onPress(); tree = render();
     conversationError = true; tree = render();
     assert.match(text(tree), /Conversation unavailable/);
     assert.doesNotMatch(text(tree), /Worker transcript evidence/, 'errors do not present stale transcript');
@@ -236,9 +256,15 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.match(text(tree), /Old worker/);
     assert.match(rows(tree)[0].props.accessibilityLabel, /Completed/);
     assert.ok(nodes(tree).some(n => n.props?.style?.borderWidth === 1 && n.props?.style?.borderRadius === 8), 'historical completed card restored');
-    rows(tree)[0].props.onPress(); tree = render();
-    assert.match(text(tree), /Worker transcript evidence/, 'history remains browsable');
-    assert.equal(nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Continue independently').props.disabled, false, 'reaped retained checkpoint remains eligible');
+    rpcResponse = async contract => contract.name === 'harness_status'
+      ? { available: true, sessionId: 's', runtimeEpoch: 'e' } : { agentId: 'history-child' };
+    rows(tree)[0].props.onPress();
+    await new Promise(resolve => setImmediate(resolve));
+    tree = render();
+    assert.doesNotMatch(text(tree), /Worker transcript evidence/, 'completed click retains historical direct-chat behavior');
+    assert.deepEqual(first.screens.at(-1), { screenId: 'independent-conversation', params: { agentId: 'history-child' } });
+    assert.equal(calls.filter(c => c.name === 'independent_agent_open').length, 1);
+    calls.length = 0; first.screens.length = 0;
     select(tree, 'Agents');
     workAgents = undefined;
     click(first, 'b'); tree = render();
@@ -307,11 +333,10 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
       : { agentId: 'real-child-agent' };
     tree = render(); select(tree, 'Agents'); tree = render();
     rows(tree)[0].props.onPress(); tree = render();
-    const continuation = () => nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Continue independently');
+    const continuation = () => nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Open child chat');
     for (const status of ['pending', 'launching', 'starting', 'running', 'waiting', 'lost']) {
       workAgents[0].status = status; tree = render();
       assert.match(text(tree), /Worker transcript evidence/, `${status} transcript remains viewable`);
-      assert.match(text(tree), /Available when this worker finishes/);
       assert.equal(continuation().props.disabled, true, status);
       continuation().props.onPress();
       await new Promise(resolve => setImmediate(resolve));

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Text, View } from "react-native";
+import { View } from "react-native";
 import { SettingsAction } from "@getpaseo/plugin/client/ui";
 import { Metadata, NativeButton, OutputWell } from "./presentation";
 import { useQuery } from "@tanstack/react-query";
@@ -14,17 +14,11 @@ export type AgentConversationTarget = {
   taskId: string; childId: string; attempt: number; runtimeId: string | null; title: string;
 };
 
-export function WorkerConversation({ target, epoch, colors, platform, open, continuationAvailable = false }: {
+export function WorkerConversation({ target, epoch, colors, platform }: {
   target: AgentConversationTarget; epoch: string; colors: any; platform: any;
-  open?: (target: AgentConversationTarget) => Promise<void>;
-  continuationAvailable?: boolean;
 }) {
   const load = useRpc(harnessSubagentConversationRpc);
   const [cursor, setCursor] = useState<number | undefined>();
-  const [opening, setOpening] = useState(false);
-  const [error, setError] = useState<string>();
-  const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const conversation = useQuery({
     queryKey: ["worker-conversation", target.hostId, target.agentId, target.workspaceId, target.sessionId, epoch, target.taskId, target.childId, target.attempt, target.runtimeId, cursor],
     queryFn: () => load({ agentId: target.agentId, workspaceId: target.workspaceId,
@@ -33,30 +27,15 @@ export function WorkerConversation({ target, epoch, colors, platform, open, cont
     refetchInterval: 5000, refetchOnReconnect: true,
   });
   const item = !conversation.isError && conversation.data?.state === "available" ? conversation.data.item : undefined;
-  return <View testID="work-agent-conversation" style={{ padding: 12, gap: 8 }}>
-    <Metadata colors={colors}>Worker conversation · read only</Metadata>
+  return <View testID="work-agent-conversation" style={{ gap: 8 }}>
     {conversation.isPending ? <Metadata colors={colors}>Loading conversation…</Metadata> : null}
     {conversation.isError ? <><Metadata colors={colors}>Conversation unavailable. Retrying automatically.</Metadata><NativeButton colors={colors} label="Retry conversation" onPress={() => { void conversation.refetch(); }} /></> : null}
     {!conversation.isPending && !conversation.isError && !item ? <Metadata colors={colors}>{conversation.data?.message ?? "No retained conversation is available."}</Metadata> : null}
-    {item?.messages.map(message => <View key={message.id} style={{ gap: 4 }}>
-      <Metadata colors={colors}>{message.role}{message.truncated ? " · truncated" : ""}</Metadata>
-      <OutputWell colors={colors} text={message.text} platform={platform} maxHeight={320} />
-    </View>)}
-    {item && !item.messages.length ? <Metadata colors={colors}>No messages recorded yet.</Metadata> : null}
+    {item ? <OutputWell colors={colors} text={item.messages.map(message => message.text + (message.truncated ? "\n[truncated]" : "")).join("\n\n") || "No messages recorded yet."} platform={platform} maxHeight={320} /> : null}
     {item && conversation.data?.stale ? <Metadata colors={colors}>Retained snapshot · refreshing automatically</Metadata> : null}
     {item?.truncated ? <Metadata colors={colors}>Conversation excerpt</Metadata> : null}
     {item?.nextCursor != null ? <NativeButton colors={colors} label="Next messages" onPress={() => setCursor(item.nextCursor)} /> : null}
     {cursor != null ? <NativeButton colors={colors} label="First messages" onPress={() => setCursor(undefined)} /> : null}
-    {open ? <>
-      <Metadata colors={colors}>{continuationAvailable ? "Continue from a checkpoint in a separate chat. The worker stays owned by its parent." : "Available when this worker finishes"}</Metadata>
-      <NativeButton colors={colors} label={opening ? "Opening independent chat…" : "Continue independently"} disabled={opening || !continuationAvailable} onPress={() => {
-        if (opening || !continuationAvailable) return;
-        setOpening(true); setError(undefined);
-        void open(target).catch(reason => { if (mounted.current) setError(reason instanceof Error ? reason.message.slice(0, 300) : "Could not open independent chat."); })
-          .finally(() => { if (mounted.current) setOpening(false); });
-      }} />
-    </> : null}
-    {error ? <Text accessibilityRole="alert" style={{ color: colors.statusDanger }}>{error}</Text> : null}
   </View>;
 }
 

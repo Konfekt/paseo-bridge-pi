@@ -745,6 +745,10 @@ function HarnessPanel({
 		session: string;
 		epoch: string;
 	} | null>(null);
+	const opening = useRef(false), mounted = useRef(true);
+	const [openingId, setOpeningId] = useState<string>();
+	const [openError, setOpenError] = useState<string>();
+	useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 	const target = { agentId, workspaceId };
 	const identity = useQuery({
 		queryKey: ["harness-status", agentId, workspaceId, host.id],
@@ -854,6 +858,19 @@ function HarnessPanel({
 							isActiveRow(row) === (viewMode === "active")),
 				)
 			: [];
+	type WorkerRow = Extract<(typeof rows)[number], { childId: string }>;
+	const selectedWorker = kind === "subagents" && openConversation
+		? rows.find((row): row is WorkerRow => "childId" in row && row.taskId === selectedId) : undefined;
+	const conversationTarget = (row: WorkerRow): AgentConversationTarget => ({ hostId: host.id, agentId, workspaceId,
+		sessionId: session!, taskId: row.taskId, childId: row.childId, attempt: row.attempt, runtimeId: row.runtimeId, title: row.title });
+	const canOpen = (row: { status: string; needsAttention?: boolean }) => ["completed", "failed", "cancelled"].includes(row.status) && !row.needsAttention;
+	const openWorker = (row: WorkerRow) => {
+		if (!openConversation || opening.current || !canOpen(row)) return;
+		opening.current = true; setOpeningId(row.childId); setOpenError(undefined);
+		void openConversation(conversationTarget(row))
+			.catch(error => { if (mounted.current) setOpenError(error instanceof Error ? error.message.slice(0, 300) : "Could not open the conversation."); })
+			.finally(() => { opening.current = false; if (mounted.current) setOpeningId(undefined); });
+	};
 	const item =
 		ready && !detail.isError && detail.data?.state === "available"
 			? detail.data.item
@@ -863,6 +880,8 @@ function HarnessPanel({
 	const selectedDetail =
 		selectedId && ready ? (
 			<View style={{ gap: 8, padding: 10, paddingTop: 0 }}>
+				{selectedWorker ? <WorkerConversation key={JSON.stringify([session, epoch, selectedWorker.childId, selectedWorker.attempt, selectedWorker.runtimeId])}
+					target={conversationTarget(selectedWorker)} epoch={epoch!} colors={theme.colors} platform={layout.platform} /> : <>
 				{detail.isPending ? (
 					<Text style={{ color: muted }}>Loading selected item…</Text>
 				) : null}
@@ -891,9 +910,12 @@ function HarnessPanel({
 						/>
 					</>
 				) : null}
-				{taskLink && navigation?.openAgent
-					? <NativeButton colors={theme.colors} label="Open child chat" onPress={() => navigation.openAgent({ agentId: taskLink, serverId: host.id })} />
-					: null}
+				</>}
+				{selectedWorker && openConversation
+					? <NativeButton colors={theme.colors} label="Open child chat" disabled={!!openingId || !canOpen(selectedWorker)} onPress={() => openWorker(selectedWorker)} />
+					: taskLink && navigation?.openAgent
+						? <NativeButton colors={theme.colors} label="Open child chat" onPress={() => navigation.openAgent({ agentId: taskLink, serverId: host.id })} />
+						: null}
 			</View>
 		) : null;
 	const content = (
@@ -958,6 +980,7 @@ function HarnessPanel({
 					? [state, elapsed(row.createdAt, ["starting", "running"].includes(row.status) ? null : row.updatedAt), row.observationOnly ? "Observation only" : ""].filter(Boolean).join(" · ")
 					: [state, row.needsAttention ? "Needs attention" : ""].filter(Boolean).join(" · ");
 				const label = `${title} · ${metadata}`;
+				const opensChat = kind === "subagents" && viewMode === "completed" && !!openConversation;
 				return (
 					<View
 						key={"childId" in row ? `${row.childId}/${row.attempt}` : id}
@@ -980,24 +1003,20 @@ function HarnessPanel({
 						{button(
 							label,
 							() => {
-								select(selectedId === id ? null : { id, session: session!, epoch: epoch! });
+								if (opensChat && "childId" in row) openWorker(row);
+								else select(selectedId === id ? null : { id, session: session!, epoch: epoch! });
 							},
-							false,
+							!!openingId || (opensChat && !canOpen(row)),
 							viewMode !== "completed",
 							kind === "subagents" && isActiveRow(row) ? row.status : undefined,
-							{ title, detail: metadata, opensChat: false, expanded: selectedId === id },
+							{ title, detail: metadata, opensChat, expanded: opensChat ? undefined : selectedId === id },
 						)}
-						{selectedId === id ? kind === "subagents" && "childId" in row && openConversation ? <WorkerConversation
-							key={JSON.stringify([session, epoch, row.childId, row.attempt, row.runtimeId])}
-							target={{ hostId: host.id, agentId, workspaceId, sessionId: session!, taskId: row.taskId, childId: row.childId, attempt: row.attempt, runtimeId: row.runtimeId, title }}
-							// Retention/reaping is not execution settlement. The server still
-							// verifies the report, interactions, and checkpoint on each open.
-							continuationAvailable={["completed", "failed", "cancelled"].includes(row.status) && !row.needsAttention}
-							epoch={epoch!} colors={theme.colors} platform={layout.platform} open={openConversation}
-						/> : selectedDetail : null}
+						{selectedId === id ? selectedDetail : null}
 					</View>
 				);
 			})}
+			{openingId ? <Text style={{ color: muted }}>Opening conversation…</Text> : null}
+			{openError ? <Text accessibilityRole="alert" style={{ color: danger }}>{openError}</Text> : null}
 		</View>
 	);
 	return embedded ? (
