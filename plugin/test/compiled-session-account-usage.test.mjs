@@ -104,6 +104,16 @@ test('standalone named and default Codex fetch use Codex grant with no OpenAI co
   }
 });
 
+test('Codex usage accepts private session-routing metadata without crossing provider bindings', async t => {
+  const sessionRouting = { version: 1, providerId: 'openai-codex', revision: 7 };
+  const f = await fixture({ snapshots: [{ sessionRouting }] }); t.after(f.close);
+  const item = await f.discover('openai-codex/gpt-test');
+  assert.equal(item.key, identity('openai-codex', 'same-name', 'work-subject'));
+  const report = await f.fetchUsage(item.input);
+  assert.equal(report.status, 'available');
+  assert.deepEqual(f.calls.map(call => call.url), ['https://chatgpt.com/backend-api/wham/usage']);
+});
+
 test('same-name OpenAI and Codex bindings retain isolated discover handles and quota cache keys', async t => {
   const f = await fixture({ includeOpenai: true }); t.after(f.close);
   const codex = await f.discover('openai-codex/gpt-test');

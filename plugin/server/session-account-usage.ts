@@ -175,11 +175,23 @@ class UsageUnavailable extends Error {
 	}
 }
 
+function parseAccountControlsUsageSnapshot(value: unknown) {
+	// The private service snapshot also carries session-routing metadata; it is
+	// not part of the public account/usage contract parsed by this consumer.
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		return accountControlsSnapshotSchema.parse(value);
+	const { sessionRouting: _routing, ...snapshot } = value as Record<
+		string,
+		unknown
+	>;
+	return accountControlsSnapshotSchema.parse(snapshot);
+}
+
 async function selection(agentId: string, provider: "openai" | "openai-codex" = "openai") {
 	const descriptor = await readAccountControlsDescriptor(agentId);
 	if (!validateAccountControlsDescriptor(descriptor, agentId))
 		throw new Error("Selection unavailable");
-	const snapshot = accountControlsSnapshotSchema.parse(
+	const snapshot = parseAccountControlsUsageSnapshot(
 		await callAccountControls(descriptor, {
 			operation: "snapshot",
 			sessionId: descriptor.sessionId,
