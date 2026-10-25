@@ -17,10 +17,23 @@ test("non-topology imports preserve legacy arguments; missing live topology fail
   assert.throws(() => paseoImportArgs({ sessionFile: "/s", cwd: "/c", topology: true, placement: {} }), /Current tmux workspace identity is unavailable/);
 });
 test("workspace projection rejection retries are bounded; ambiguous outcomes do not retry", () => {
-  assert.equal(retryableWorkspaceImportFailure(1, "Workspace wks_tmux_abc not found"), true);
-  assert.equal(retryableWorkspaceImportFailure(1, "Unknown requested workspace"), true);
-  assert.equal(retryableWorkspaceImportFailure(0, "workspace malformed response"), false);
-  assert.equal(retryableWorkspaceImportFailure(null, "workspace timed out"), false);
-  assert.equal(retryableWorkspaceImportFailure(1, "network connection lost"), false);
+  // Current workspace-provisioning service rejects these before allocating
+  // an import; topology validation adds the explicit-projection rejection.
+  const rejected = [
+    "Workspace not found: wks_tmux_0123456789abcdef01234567",
+    "Project not found: prj_tmux_0123456789abcdef01234567",
+    "Import requires an explicit projected tmux workspaceId",
+  ];
+  for (const message of rejected) {
+    assert.equal(retryableWorkspaceImportFailure(1, message), true, message);
+    assert.equal(retryableWorkspaceImportFailure(0, message), false, `successful response: ${message}`);
+    assert.equal(retryableWorkspaceImportFailure(null, message), false, `unknown completion: ${message}`);
+  }
+  for (const message of [
+    "Workspace wks_tmux_abc not found", "Unknown requested workspace",
+    "Workspace not found: arbitrary-workspace", "Project not found: arbitrary-project",
+    "Import cwd does not match workspace: wks_tmux_0123456789abcdef01234567",
+    "workspace malformed response", "workspace timed out", "network connection lost",
+  ]) assert.equal(retryableWorkspaceImportFailure(1, message), false, message);
   assert.deepEqual([1, 2, 3, 4, 5, 6].map(importRetryDelay), [2000, 4000, 8000, 16000, 30000, undefined]);
 });
