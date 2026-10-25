@@ -1004,6 +1004,9 @@ function HarnessPanel({
 						{selectedId === id ? kind === "subagents" && "childId" in row && openConversation ? <WorkerConversation
 							key={JSON.stringify([session, epoch, row.childId, row.attempt, row.runtimeId])}
 							target={{ hostId: host.id, agentId, workspaceId, sessionId: session!, taskId: row.taskId, childId: row.childId, attempt: row.attempt, runtimeId: row.runtimeId, title }}
+							// Retention/reaping is not execution settlement. The server still
+							// verifies the report, interactions, and checkpoint on each open.
+							continuationAvailable={["completed", "failed", "cancelled"].includes(row.status) && !row.needsAttention}
 							epoch={epoch!} colors={theme.colors} platform={layout.platform} open={openConversation}
 						/> : selectedDetail : null}
 					</View>

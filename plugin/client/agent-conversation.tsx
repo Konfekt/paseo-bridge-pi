@@ -14,9 +14,10 @@ export type AgentConversationTarget = {
   taskId: string; childId: string; attempt: number; runtimeId: string | null; title: string;
 };
 
-export function WorkerConversation({ target, epoch, colors, platform, open }: {
+export function WorkerConversation({ target, epoch, colors, platform, open, continuationAvailable = false }: {
   target: AgentConversationTarget; epoch: string; colors: any; platform: any;
   open?: (target: AgentConversationTarget) => Promise<void>;
+  continuationAvailable?: boolean;
 }) {
   const load = useRpc(harnessSubagentConversationRpc);
   const [cursor, setCursor] = useState<number | undefined>();
@@ -47,9 +48,9 @@ export function WorkerConversation({ target, epoch, colors, platform, open }: {
     {item?.nextCursor != null ? <NativeButton colors={colors} label="Next messages" onPress={() => setCursor(item.nextCursor)} /> : null}
     {cursor != null ? <NativeButton colors={colors} label="First messages" onPress={() => setCursor(undefined)} /> : null}
     {open ? <>
-      <Metadata colors={colors}>Continue from a checkpoint in a separate chat. The worker stays owned by its parent.</Metadata>
-      <NativeButton colors={colors} label={opening ? "Opening independent chat…" : "Continue independently"} disabled={opening} onPress={() => {
-        if (opening) return;
+      <Metadata colors={colors}>{continuationAvailable ? "Continue from a checkpoint in a separate chat. The worker stays owned by its parent." : "Available when this worker finishes"}</Metadata>
+      <NativeButton colors={colors} label={opening ? "Opening independent chat…" : "Continue independently"} disabled={opening || !continuationAvailable} onPress={() => {
+        if (opening || !continuationAvailable) return;
         setOpening(true); setError(undefined);
         void open(target).catch(reason => { if (mounted.current) setError(reason instanceof Error ? reason.message.slice(0, 300) : "Could not open independent chat."); })
           .finally(() => { if (mounted.current) setOpening(false); });

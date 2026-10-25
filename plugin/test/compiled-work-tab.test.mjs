@@ -237,6 +237,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.match(rows(tree)[0].props.accessibilityLabel, /Reaped/);
     rows(tree)[0].props.onPress(); tree = render();
     assert.match(text(tree), /Worker transcript evidence/, 'history remains browsable');
+    assert.equal(nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Continue independently').props.disabled, false, 'reaped retained checkpoint remains eligible');
     nodes(tree).find(n => n.type === 'SettingsAction' && n.props.actionLabel === 'Back to agents').props.onPress();
     workAgents = undefined;
     click(first, 'b'); tree = render();
@@ -305,7 +306,26 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
       : { agentId: 'real-child-agent' };
     tree = render(); select(tree, 'Agents'); tree = render();
     nodes(tree).find(n => n.props?.testID?.startsWith('work-agent-row-')).props.onPress(); tree = render();
-    const continueButton = nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Continue independently');
+    const continuation = () => nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Continue independently');
+    for (const status of ['pending', 'launching', 'starting', 'running', 'waiting', 'lost']) {
+      workAgents[0].status = status; tree = render();
+      assert.match(text(tree), /Worker transcript evidence/, `${status} transcript remains viewable`);
+      assert.match(text(tree), /Available when this worker finishes/);
+      assert.equal(continuation().props.disabled, true, status);
+      continuation().props.onPress();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(calls.filter(c => c.name === 'independent_agent_open').length, 0, `${status} cannot dispatch`);
+    }
+    for (const status of ['failed', 'cancelled', 'completed']) {
+      workAgents[0].status = status; tree = render();
+      assert.equal(continuation().props.disabled, false, `${status} checkpoint can be checked by server`);
+    }
+    workAgents[0].needsAttention = true; tree = render();
+    assert.equal(continuation().props.disabled, true, 'unresolved interaction is not eligible');
+    continuation().props.onPress();
+    assert.equal(calls.filter(c => c.name === 'independent_agent_open').length, 0);
+    workAgents[0].needsAttention = false; tree = render();
+    const continueButton = continuation();
     assert.ok(continueButton, 'interactive continuation is explicit in the rendered conversation');
     continueButton.props.onPress();
     await new Promise(resolve => setImmediate(resolve));
