@@ -236,7 +236,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     messages = [
       { id: 'call-row', role: 'assistant', text: 'Checking **the current state** with `git`.', parts: [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'git status --short', private: 'ARGUMENT_SECRET' }, status: 'completed', result: 'RESULT_SECRET' }] },
       { id: 'result-row', role: 'tool', toolCallId: 'call-1', toolName: 'bash', status: 'completed', text: 'RESULT_SECRET' },
-      { id: 'markdown-row', role: 'assistant', text: '# Summary\n\nA **formatted** paragraph with `inline code`.\n\n- one list item' },
+      { id: 'markdown-row', role: 'assistant', text: '# Summary\n\nA **formatted** paragraph with `inline code`.\n\n- one list item\n\n3. First numbered item.\n4. Second numbered item.' },
       { id: 'parent-row', role: 'parent', text: 'Please **review** this request. Use notify_parent then task_outcome; preserve _one_two_ as emphasis.' },
     ];
     tree = render();
@@ -255,6 +255,11 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.ok(nodes(tree).some(n => n.type === 'em' && text(n).includes('one_two')), 'underscore emphasis still works around identifiers');
     assert.ok(nodes(tree).some(n => n.type === 'code'), 'web markdown keeps inline code semantics');
     assert.ok(nodes(tree).some(n => n.type === 'ul' && nodes(n).some(child => child.type === 'li')), 'web markdown keeps list semantics');
+    const orderedList = nodes(tree).find(n => n.type === 'ol');
+    assert.equal(orderedList?.props.start, 3, 'numbered lists preserve their starting ordinal rather than becoming bullets');
+    const orderedItems = nodes(orderedList).filter(n => n.type === 'li');
+    assert.equal(orderedItems.length, 2, 'consecutive numbered items share one native-spaced list block');
+    assert.deepEqual(orderedItems.map(n => n.props.style.marginBottom), [4, 0], 'native list item spacing is4px, with no extra per-item block gap');
     assert.ok(nodes(tree).some(n => n.type === 'View' && n.props.style?.alignSelf === 'flex-end'), 'parent input uses the native user-message bubble treatment');
     assert.equal(nodes(tree).filter(n => n.type === 'Text' && n.props.children === 'parent').length, 0, 'no separate parent role label');
     assert.doesNotMatch(text(tree), /ARGUMENT_SECRET|RESULT_SECRET|LIVE_RESULT_SECRET/, 'correlated tool results and full arguments stay inside the collapsed badge');

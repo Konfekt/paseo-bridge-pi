@@ -59,7 +59,7 @@ function renderInline(source: string, colors: any, web: boolean): any[] {
   });
 }
 
-type Block = { kind: "paragraph" | "heading" | "quote" | "list" | "code"; text: string; level?: number };
+type Block = { kind: "paragraph" | "heading" | "quote" | "list" | "code"; text: string; level?: number; items?: string[]; start?: number; indent?: number };
 function parseBlocks(text: string): Block[] {
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
   const blocks: Block[] = [];
@@ -76,7 +76,15 @@ function parseBlocks(text: string): Block[] {
     if (!line.trim()) { flush(); continue; }
     const heading = line.match(/^(#{1,6})\s+(.+)$/);
     if (heading) { flush(); blocks.push({ kind: "heading", text: heading[2]!, level: heading[1]!.length }); continue; }
-    if (/^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(line)) { flush(); blocks.push({ kind: "list", text: line.replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+)/, "") }); continue; }
+    const list = line.match(/^(\s*)(?:[-*+]\s+|(\d{1,9})[.)]\s+)(.+)$/);
+    if (list) {
+      flush();
+      const start = list[2] === undefined ? undefined : Number(list[2]);
+      const previous = blocks.at(-1);
+      if (previous?.kind === "list" && (previous.start === undefined) === (start === undefined) && previous.indent === list[1]!.length) previous.items!.push(list[3]!);
+      else blocks.push({ kind: "list", text: "", items: [list[3]!], ...(start === undefined ? {} : { start }), indent: list[1]!.length });
+      continue;
+    }
     if (/^\s*>\s?/.test(line)) { flush(); blocks.push({ kind: "quote", text: line.replace(/^\s*>\s?/, "") }); continue; }
     paragraph.push(line);
   }
@@ -100,7 +108,7 @@ export function TranscriptMarkdown({ text, colors, platform }: { text: string; c
       if (block.kind === "code") return createElement("pre", { key: index, style: { margin: 0, padding: 12, borderRadius: 8, backgroundColor: colors.surface2, color: colors.foreground, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "monospace", fontSize: 12, lineHeight: "21px" } }, createElement("code", { style: { font: "inherit", color: "inherit" } }, block.text));
       if (block.kind === "heading") { const metrics = headingMetrics(block.level); return createElement(`h${block.level ?? 1}`, { key: index, style: { margin: 0, color: block.level === 6 ? colors.foregroundMuted : colors.foreground, fontSize: metrics.fontSize, lineHeight: `${metrics.lineHeight}px`, fontWeight: 700 } }, renderInline(block.text, colors, web)); }
       if (block.kind === "quote") return createElement("blockquote", { key: index, style: { margin: 0, borderLeft: `3px solid ${colors.border}`, paddingLeft: 10, color: colors.foregroundMuted, fontSize: 15, lineHeight: "21px" } }, renderInline(block.text, colors, web));
-      if (block.kind === "list") return createElement("ul", { key: index, style: { margin: 0, paddingLeft: 22, color: colors.foreground, fontSize: 15, lineHeight: "21px" } }, createElement("li", { style: { marginBottom: 4 } }, renderInline(block.text, colors, web)));
+      if (block.kind === "list") return createElement(block.start === undefined ? "ul" : "ol", { key: index, ...(block.start === undefined ? {} : { start: block.start }), style: { margin: 0, paddingLeft: 22, color: colors.foreground, fontSize: 15, lineHeight: "21px" } }, block.items!.map((item, itemIndex) => createElement("li", { key: itemIndex, style: { marginBottom: itemIndex === block.items!.length - 1 ? 0 : 4 } }, renderInline(item, colors, web))));
       return createElement("p", { key: index, style: { margin: 0, color: colors.foreground, fontSize: 15, lineHeight: "21px", whiteSpace: "pre-wrap", overflowWrap: "anywhere" } }, renderInline(block.text, colors, web));
     })}
   </View>;
@@ -112,7 +120,7 @@ export function TranscriptMarkdown({ text, colors, platform }: { text: string; c
         : block.kind === "quote"
           ? <View key={index} style={{ borderLeftWidth: 3, borderColor: colors.border, paddingLeft: 10 }}><Text selectable style={{ color: colors.foregroundMuted, fontSize: 15, lineHeight: 21 }}>{renderInline(block.text, colors, web)}</Text></View>
           : block.kind === "list"
-            ? <Text key={index} selectable style={{ color: colors.foreground, fontSize: 15, lineHeight: 21 }}>• {renderInline(block.text, colors, web)}</Text>
+            ? <View key={index} style={{ gap: 4 }}>{block.items!.map((item, itemIndex) => <Text key={itemIndex} selectable style={{ color: colors.foreground, fontSize: 15, lineHeight: 21 }}>{block.start === undefined ? "•" : `${block.start + itemIndex}.`} {renderInline(item, colors, web)}</Text>)}</View>
             : <Text key={index} selectable style={{ color: colors.foreground, fontSize: 15, lineHeight: 21 }}>{renderInline(block.text, colors, web)}</Text>)}
   </View>;
 }
