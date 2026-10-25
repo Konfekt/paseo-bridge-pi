@@ -21,7 +21,7 @@ function toolPresentation(name: string, argumentsValue: unknown): { label: strin
   if (["read", "cat", "open"].includes(tool)) return { label: "Read", summary: first("filePath", "path", "file"), icon: "Eye" };
   if (["edit", "write", "apply_patch"].includes(tool)) return { label: tool === "edit" ? "Edit" : "Write", summary: first("filePath", "path", "file"), icon: "Pencil" };
   if (["grep", "rg", "find", "search"].includes(tool)) return { label: "Search", summary: first("query", "pattern", "path"), icon: "Search" };
-  if (["task", "task_outcome", "subagent"].includes(tool)) return { label: tool === "task" ? "Task" : name.replace(/[_-]+/g, " "), summary: first("description", "task", "summary"), icon: "Bot" };
+  if (["task", "task_outcome", "subagent"].includes(tool)) return { label: tool === "task" ? "Task" : name.replace(/[_-]+/g, " ").replace(/^./, c => c.toUpperCase()), summary: first("description", "task", "summary"), icon: "Bot" };
   if (tool === "thinking") return { label: "Thinking", icon: "Brain" };
   if (tool === "fetch" || tool === "web_search") return { label: "Search", summary: first("url", "query"), icon: "Search" };
   return { label: name.replace(/[._-]+/g, " ").replace(/^./, c => c.toUpperCase()), summary: first("command", "path", "query", "description"), icon: "Wrench" };
@@ -33,21 +33,15 @@ export function NativeToolBadge({ name, status, summary, argumentsValue, details
   const presentation = toolPresentation(name, argumentsValue);
   const label = presentation.label;
   const subtitle = summary ?? presentation.summary;
-  const statusColor = status === "failed" ? colors.statusDanger : colors.foregroundMuted;
   return <View style={{ alignSelf: "stretch", marginHorizontal: -13 }}>
-    <Pressable accessibilityRole="button" accessibilityLabel={`Tool ${label}${subtitle ? ` · ${subtitle}` : ""} · ${status}`} accessibilityState={{ expanded }} onPress={onToggle}
+    <Pressable accessibilityRole="button" accessibilityLabel={`Tool ${label}${subtitle ? ` · ${subtitle}` : ""} · ${status}`} accessibilityState={{ expanded }} aria-expanded={expanded} onPress={onToggle}
       style={{ flexDirection: "row", alignItems: "center", borderRadius: 8, borderWidth: 1, borderColor: expanded ? colors.border : "transparent", borderBottomLeftRadius: expanded ? 0 : 8, borderBottomRightRadius: expanded ? 0 : 8, backgroundColor: expanded ? colors.surface1 : "transparent", paddingHorizontal: 8, paddingVertical: 4 }}>
       <View style={{ width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center", marginRight: 4 }}>
-        <Icon name={presentation.icon} size={15} color={status === "failed" ? colors.statusDanger : colors.foregroundMuted} />
+        <Icon name={expanded ? "ChevronDown" : status === "failed" ? "TriangleAlert" : presentation.icon} size={12} color={status === "failed" ? colors.statusDanger : colors.foregroundMuted} />
       </View>
       <Text numberOfLines={1} style={{ color: colors.foregroundMuted, fontSize: 14, flexShrink: 0 }}>{label}</Text>
       {subtitle ? <Text numberOfLines={1} style={{ color: colors.foregroundMuted, fontSize: 14, marginLeft: 8, flexShrink: 1, minWidth: 0 }}>{subtitle}</Text> : null}
       <View style={{ flex: 1 }} />
-      {status === "running" ? <ActivityIndicator accessibilityLabel="Tool is running" size="small" color={colors.foregroundMuted} />
-        : status === "completed" ? <Icon name="Check" size={14} color={colors.foregroundMuted} />
-          : status === "failed" ? <Icon name="CircleAlert" size={14} color={statusColor} />
-            : null}
-      <Icon name={expanded ? "ChevronDown" : "ChevronRight"} size={14} color={colors.foregroundMuted} />
     </Pressable>
     {expanded ? <View style={{ borderWidth: 1, borderTopWidth: 0, borderColor: colors.border, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, padding: 8, backgroundColor: colors.surface1 }}>
       <Text selectable style={{ color: colors.foreground, fontFamily: "monospace", fontSize: 12, lineHeight: 17 }}>{details}</Text>

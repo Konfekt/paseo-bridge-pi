@@ -259,11 +259,13 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     const toolBadge = nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Tool Shell · git status --short · completed');
     assert.ok(toolBadge, 'badge uses native icon/name/summary presentation');
     assert.equal(toolBadge.props.accessibilityState.expanded, false, 'tool details start collapsed');
+    assert.equal(nodes(toolBadge).filter(n => n.type === 'Icon').length, 1, 'native collapsed badges have one leading icon, no trailing check/chevron clutter');
+    assert.ok(nodes(toolBadge).some(n => n.type === 'Icon' && n.props.name === 'SquareTerminal' && n.props.size === 12));
     toolBadge.props.onPress(); tree = render();
     assert.match(text(tree), /ARGUMENT_SECRET/);
     assert.match(text(tree), /LIVE_RESULT_SECRET/, 'newer live completion overlays the persisted call and reveals its result only on click');
     assert.doesNotMatch(text(tree), /"result": "RESULT_SECRET"/, 'stale persisted result is superseded by the latest correlated live result');
-    assert.ok(nodes(tree).some(n => n.type === 'Icon' && n.props.name === 'SquareTerminal'));
+    assert.ok(nodes(tree).some(n => n.type === 'Icon' && n.props.name === 'ChevronDown'), 'expanded badge replaces its leading tool icon with the native disclosure');
     nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Older messages').props.onPress(); tree = render();
     assert.equal(queries.find(q => q.queryKey[0] === 'worker-conversation').queryKey.at(-1), 2);
     workAgents[0].status = 'completed'; tree = render();
