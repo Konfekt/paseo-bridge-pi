@@ -48,7 +48,7 @@ for (const failed of [false, true]) test(`actual consumer reconciles ${failed ? 
   await fs.writeFile(file, [
     { type: "session", version: 3, id: "fixture", cwd: directory },
     { type: "message", id: "answer", timestamp: "2026-01-01T00:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "Recovered answer" }], stopReason: "stop" } },
-  ].map(x => JSON.stringify(x)).join("\\n") + "\\n", { mode: 0o600 });
+  ].map(x => JSON.stringify(x)).join("\n") + "\n", { mode: 0o600 });
   const host = new PiExtensionHost([piSubagents]);
   try {
     const store = new ProviderSubagentStore();
