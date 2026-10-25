@@ -30,6 +30,8 @@ test("native named-profile success stays successful in live and historical proje
   for (const projected of project({ task: "inspect profiles", agent: "scout", background: false }, result)) {
     assert.equal(projected.length, 1);
     assert.equal(projected[0].isError, false);
+    assert.equal(projected[0].details.mode, "single");
+    assert.deepEqual(projected[0].details.results, [{ agent: "scout", success: true }]);
     assert.match(projected[0].content[0].text, /Verified discovery and retained-resume source map/);
     assert.doesNotMatch(projected[0].content[0].text, /Subagent did not start/);
     assert.equal(projected[0].details.task_id, `subagent-task-${"a".repeat(24)}`);
@@ -42,6 +44,7 @@ for (const status of ["failed", "cancelled", "lost"]) {
   test(`native ${status} remains an error without legacy terminal/exit-code fields`, () => {
     for (const projected of project({ task: "inspect", agent: "scout" }, native([{ child: 1, task: "inspect", status }], true), true)) {
       assert.equal(projected[0].isError, true);
+      assert.deepEqual(projected[0].details.results, [{ agent: "scout", success: false }]);
       assert.doesNotMatch(projected[0].content[0].text, /Subagent did not start/);
     }
   });
@@ -55,6 +58,7 @@ test("native mixed parallel results preserve child ordinals and isolate failures
   ], true, "Unframed aggregate must not be copied to every child");
   for (const projected of project(args, result, true)) {
     assert.deepEqual(projected.map(row => row.isError), [false, true]);
+    assert.deepEqual(projected.map(row => row.details.results), [[{ agent: "scout", success: true }], [{ agent: "reviewer", success: false }]]);
     assert.match(projected[0].content[0].text, /one completed/);
     assert.match(projected[1].content[0].text, /actual worker failure/);
     assert(projected.every(row => !row.content[0].text.includes("Unframed aggregate")));

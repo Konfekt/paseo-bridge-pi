@@ -215,10 +215,20 @@ function compactChildDetails(child: RecordValue): RecordValue {
   return details;
 }
 
-function projectedResult(child: RecordValue, fallback?: unknown): RecordValue {
+function projectedChildDetails(child: RecordValue, agent?: string): RecordValue {
+  return {
+    ...compactChildDetails(child),
+    // Paseo's pi-subagents consumer settles its separate child registry from
+    // this envelope; a completed tool call alone leaves that child running.
+    mode: "single",
+    results: [{ agent: agent ?? text(child.agent) ?? text(child.model) ?? "subagent", success: !childFailed(child) }],
+  };
+}
+
+function projectedResult(child: RecordValue, fallback?: unknown, agent?: string): RecordValue {
   return {
     content: [{ type: "text", text: childLog(child, fallback) }],
-    details: compactChildDetails(child),
+    details: projectedChildDetails(child, agent),
   };
 }
 
@@ -318,14 +328,14 @@ export class SubagentTaskProjection {
           toolCallId: childId(parent.parentId, spec.index),
           toolName: "subagent",
           args: { task: spec.task, ...(spec.agent ? { agent: spec.agent } : {}) },
-          partialResult: projectedResult(child, result),
+          partialResult: projectedResult(child, result, spec.agent),
         }];
       }
       return [{
         type: "tool_execution_end",
         toolCallId: childId(parent.parentId, spec.index),
         toolName: "subagent",
-        result: projectedResult(child, result),
+        result: projectedResult(child, result, spec.agent),
         isError: childFailed(child) || (children.length === 0 && event.isError === true),
       }];
     });
@@ -392,7 +402,7 @@ export function projectSubagentMessages(messages: unknown[]): unknown[] {
             ...message,
             toolCallId: childId(projection.parentId, spec.index),
             content: [{ type: "text", text: childLog(child, message) }],
-            details: compactChildDetails(child),
+            details: projectedChildDetails(child, spec.agent),
             isError: childFailed(child) || (children.length === 0 && message.isError === true),
           };
         }),
