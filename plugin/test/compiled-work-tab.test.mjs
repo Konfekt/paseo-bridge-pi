@@ -188,7 +188,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.equal(selected(tree), 'Goals', 'new source does not inherit another source section');
     assert.match(text(tree), /Conversation A/);
     select(tree, 'Agents'); tree = render();
-    const agentsAction = nodes(tree).find(node => node.type === 'SettingsAction' && node.props.actionLabel === 'History');
+    const agentsAction = nodes(tree).find(node => node.type === 'SettingsAction' && node.props.actionLabel === 'Completed');
     assert.ok(agentsAction, 'Agents uses the host SettingsAction via shared WorkAction');
     assert.equal(agentsAction.type, jobsAction.type);
     assert.deepEqual(Object.keys(agentsAction.props).sort(), Object.keys(jobsAction.props).sort());
@@ -198,17 +198,17 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
       { taskId: 'old-task', childId: 'old-child', title: 'Old worker', status: 'completed', reaped: true, attempt: 1, runtimeId: null },
     ];
     tree = render();
-    const rows = tree => nodes(tree).filter(n => n.props?.testID?.startsWith('work-agent-row-'));
+    const rows = tree => nodes(tree).filter(n => n.type === 'Pressable' && /^(Worker \d|Old worker|Helper) ·/.test(n.props?.accessibilityLabel ?? ''));
     assert.equal(rows(tree).length, 5);
-    const desktopStyle = rows(tree)[0].props.style({ pressed: false, hovered: false });
-    assert.equal(desktopStyle.gap, 8);
-    assert.equal(desktopStyle.paddingVertical, 4);
-    assert.equal(desktopStyle.minHeight, 32);
-    assert.equal(rows(tree)[0].props.style({ hovered: true }).backgroundColor, props.theme.colors.surface2);
+    const desktopStyle = Object.assign({}, ...rows(tree)[0].props.style({ pressed: false }));
+    assert.equal(desktopStyle.gap, 6);
+    assert.equal(desktopStyle.paddingHorizontal, 12);
+    assert.equal(desktopStyle.paddingVertical, 8);
+    assert.equal(desktopStyle.minHeight, 44);
     tree = render(first, { layout: { platform: 'web', compact: true } });
-    assert.equal(rows(tree)[0].props.style({}).minHeight, 44);
+    assert.equal(Object.assign({}, ...rows(tree)[0].props.style({})).minHeight, 44);
     tree = render();
-    assert.equal(nodes(tree).find(n => n.type === 'SettingsAction').props.label, '2 working');
+    assert.equal(nodes(tree).find(n => n.type === 'SettingsAction').props.label, '');
     assert.equal(rows(tree).filter(n => n.props.accessibilityLabel.includes('Idle')).length, 3);
     assert.ok(!text(tree).includes('Old worker'));
     assert.equal(first.screens.length, 0);
@@ -227,18 +227,19 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.doesNotMatch(text(tree), /Worker transcript evidence/, 'errors do not present stale transcript');
     conversationError = false;
     statusError = true; tree = render();
-    assert.match(text(tree), /Session status unavailable/);
+    assert.doesNotMatch(text(tree), /Worker transcript evidence/, 'unavailable source hides retained detail');
     assert.equal(rows(tree).length, 0);
     statusError = false; tree = render();
-    nodes(tree).find(n => n.type === 'SettingsAction' && n.props.actionLabel === 'History').props.onPress();
+    nodes(tree).find(n => n.type === 'SettingsAction' && n.props.actionLabel === 'Completed').props.onPress();
     tree = render();
     assert.equal(rows(tree).length, 1);
     assert.match(text(tree), /Old worker/);
-    assert.match(rows(tree)[0].props.accessibilityLabel, /Reaped/);
+    assert.match(rows(tree)[0].props.accessibilityLabel, /Completed/);
+    assert.ok(nodes(tree).some(n => n.props?.style?.borderWidth === 1 && n.props?.style?.borderRadius === 8), 'historical completed card restored');
     rows(tree)[0].props.onPress(); tree = render();
     assert.match(text(tree), /Worker transcript evidence/, 'history remains browsable');
     assert.equal(nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Continue independently').props.disabled, false, 'reaped retained checkpoint remains eligible');
-    nodes(tree).find(n => n.type === 'SettingsAction' && n.props.actionLabel === 'Back to agents').props.onPress();
+    select(tree, 'Agents');
     workAgents = undefined;
     click(first, 'b'); tree = render();
     assert.equal(selected(tree), 'Jobs'); assert.equal(scroll(tree).props.contentOffset.y, 321);
@@ -305,7 +306,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
       ? { available: true, sessionId: 's', runtimeEpoch: 'e' }
       : { agentId: 'real-child-agent' };
     tree = render(); select(tree, 'Agents'); tree = render();
-    nodes(tree).find(n => n.props?.testID?.startsWith('work-agent-row-')).props.onPress(); tree = render();
+    rows(tree)[0].props.onPress(); tree = render();
     const continuation = () => nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Continue independently');
     for (const status of ['pending', 'launching', 'starting', 'running', 'waiting', 'lost']) {
       workAgents[0].status = status; tree = render();

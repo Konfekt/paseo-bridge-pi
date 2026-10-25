@@ -102,7 +102,7 @@ test('compiled read-only panels render lists/details, bind generations and only 
     const task = { taskId: `subagent-task-${'b'.repeat(24)}`, title: 'Review', status: 'completed', attempt: 1 };
     listResult = { data: { state: 'available', items: [task], stale: true, lastUpdated: null } };
     tree = render('harness-subagents');
-    press(tree, 'Review · Idle');
+    press(tree, 'Review · Completed');
     detailResult = { data: { state: 'available', item: { ...task, text: 'Reviewed successfully', truncated: false, stale: true, lastUpdated: null, paseoAgentId: 'verified-child' } } };
     tree = render('harness-subagents');
     assert.match(text(tree), /Reviewed successfully/);

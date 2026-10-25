@@ -679,11 +679,16 @@ function AgentsOverview(
 ) {
 	const { completed } = props;
 	const summary = useWorkSummary(props);
+	const count = completed
+		? summary.agents.total - summary.agents.active
+		: summary.agents.active;
 	const mode = completed ? "completed" : "active";
+	const emptyLabel = summary.agents.available
+		? completed ? "No completed agents" : "No active agents"
+		: "Loading agent status…";
 	return (
-		<View testID="work-agents" style={{ width: "100%", gap: 4 }}>
-			<WorkAction label={summary.agents.available ? `${summary.agents.runningCount} working` : "Agents"} actionLabel={completed ? "Back to agents" : "History"} onPress={props.toggleCompleted} />
-			<HarnessPanel
+		<View style={{ width: "100%", gap: count ? 8 : 0 }}>
+			{count > 0 ? <HarnessPanel
 				key={mode}
 				{...props}
 				kind="subagents"
@@ -691,18 +696,12 @@ function AgentsOverview(
 				excludeTaskIds={summary.foregroundIds}
 				openConversation={props.openConversation}
 				embedded
-			/>
+			/> : null}
+			{completed ? (!count ? <Text style={{ color: props.theme.colors.foregroundMuted, padding: 12 }}>{emptyLabel}</Text> : null) : (
+				<WorkAction label={count ? "" : emptyLabel} actionLabel="Completed" onPress={props.toggleCompleted} />
+			)}
 		</View>
 	);
-}
-
-/** Paseo Pi mark, expressed with supported View rectangles rather than a private
- * SVG import. Geometry from Paseo's Apache-2.0 pi-icon.tsx (see PASEO-LICENSE).
- * Copyright (c) 2025-present Mohamed Boudra. */
-function WorkerIcon({ color }: { color: string }) {
-	return <View style={{ width: 14, height: 14 }}>
-		{[[165.29, 165.29, 117.36, 469.43], [282.65, 165.29, 234.71, 117.36], [400, 282.65, 117.36, 117.35], [282.65, 400, 117.35, 117.36], [517.36, 400, 117.36, 234.72]].map(([x, y, width, height], i) => <View key={i} style={{ position: "absolute", left: (x - 100) * 14 / 600, top: (y - 100) * 14 / 600, width: width * 14 / 600, height: height * 14 / 600, backgroundColor: color }} />)}
-	</View>;
 }
 
 function elapsed(start: string, end?: string | null) {
@@ -827,20 +826,7 @@ function HarnessPanel({
 		brief = false,
 		status?: string,
 		presentation?: { title: string; detail: string; expanded?: boolean; opensChat: boolean },
-	) => kind === "subagents" ? (
-		<Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ expanded: presentation?.expanded }}
-			testID={`work-agent-row-${label}`} onPress={onPress}
-			style={({ pressed, hovered }: any) => ({ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 8, paddingVertical: layout.compact ? 8 : 4, minHeight: layout.compact ? 44 : 32, borderRadius: 6, backgroundColor: pressed || hovered ? theme.colors.surface2 : "transparent" })}>
-			<View style={{ width: 14, height: 14, alignItems: "center", justifyContent: "center" }}>
-				{status && ["starting", "launching", "pending", "running"].includes(status) ? <WorkStatusRing attention={false} foreground={fg} platform={layout.platform} /> : <WorkerIcon color={status === "failed" ? danger : muted} />}
-			</View>
-			<View style={{ flexGrow: 1, flexShrink: 1, flexBasis: "auto", minWidth: 0 }}>
-				<Text numberOfLines={1} style={{ fontSize: 14, color: fg }}>{presentation?.title ?? label}</Text>
-				<Text numberOfLines={1} style={{ fontSize: 12, color: muted }}>{presentation?.detail}</Text>
-			</View>
-			<Icon name={presentation?.expanded ? "ChevronUp" : "ChevronDown"} size={14} color={muted} />
-		</Pressable>
-	) : (
+	) => (
 		<NativeRow
 			colors={theme.colors}
 			title={presentation?.title ?? label}
@@ -966,7 +952,7 @@ function HarnessPanel({
 			{rows.map((row) => {
 				const id = "jobId" in row ? row.jobId : row.taskId;
 				const title = "jobId" in row ? row.name || "Background job" : row.title;
-				const state = kind === "subagents" && !isActiveRow(row) ? "Reaped" : kind === "subagents" && row.status === "completed"
+				const state = kind === "subagents" && viewMode === "active" && row.status === "completed"
 					? "Idle" : row.status.replace(/[_-]/g, " ").replace(/^./, value => value.toUpperCase());
 				const metadata = "jobId" in row
 					? [state, elapsed(row.createdAt, ["starting", "running"].includes(row.status) ? null : row.updatedAt), row.observationOnly ? "Observation only" : ""].filter(Boolean).join(" · ")
@@ -976,7 +962,7 @@ function HarnessPanel({
 					<View
 						key={"childId" in row ? `${row.childId}/${row.attempt}` : id}
 						style={
-							kind === "jobs" && !isActiveRow(row)
+							!isActiveRow(row)
 								? {
 										borderWidth: 1,
 										borderColor:
