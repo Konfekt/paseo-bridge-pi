@@ -39,6 +39,14 @@ function childSpecs(args: unknown): ChildSpec[] {
   });
 }
 
+// Only recognize launch shapes understood by our projection or the harness's
+// durable resume identity. A tool named `subagent` alone is not ownership proof.
+function isHarnessControl(args: unknown): boolean {
+  if (!isRecord(args)) return false;
+  if (args.operation === "resume") return /^subagent-task-[0-9a-f]{24}$/.test(args.task_id ?? "");
+  return args.background === true && childSpecs({ ...args, background: false }).length > 0;
+}
+
 function childId(parentId: string, index: number): string {
   return `${parentId}::paseo-child::${index}`;
 }
@@ -281,7 +289,9 @@ export class SubagentTaskProjection {
     if (event.type === "tool_execution_start") {
       if (event.toolName !== "subagent" || typeof event.toolCallId !== "string") return [event];
       const specs = childSpecs(event.args);
-      if (!specs.length) return [{ ...event, args: { ...event.args, _paseoWorkAgent: true } }];
+      if (!specs.length) return [isHarnessControl(event.args)
+        ? { ...event, args: { ...event.args, _paseoWorkAgent: true } }
+        : event];
       const projection = { parentId: event.toolCallId, specs, updates: new Map<number, ProjectedUpdateState>() };
       this.active.set(event.toolCallId, projection);
       return specs.map((spec) => startEvent(projection, spec));
@@ -364,7 +374,9 @@ export function projectSubagentMessages(messages: unknown[]): unknown[] {
         }
         const specs = childSpecs(part.arguments);
         if (!specs.length) {
-          content.push({ ...part, arguments: { ...part.arguments, _paseoWorkAgent: true } });
+          content.push(isHarnessControl(part.arguments)
+            ? { ...part, arguments: { ...part.arguments, _paseoWorkAgent: true } }
+            : part);
           continue;
         }
         const projection = { parentId: part.id, specs, updates: new Map<number, ProjectedUpdateState>() };

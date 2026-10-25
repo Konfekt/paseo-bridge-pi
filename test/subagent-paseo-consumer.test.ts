@@ -7,11 +7,11 @@ import { SubagentTaskProjection, projectSubagentMessages } from "../extension/su
 const consumerModule = process.env.PASEO_SUBAGENT_ADAPTER_MODULE;
 async function production() {
   const url = pathToFileURL(consumerModule!);
-  const [{ piSubagents }, { PiExtensionHost }, { PiRpcAgentSession }, { ProviderSubagentStore }] = await Promise.all([
-    import(url.href), import(new URL("../host.js", url).href), import(new URL("../../agent.js", url).href),
+  const [{ piExtensions }, { PiExtensionHost }, { PiRpcAgentSession }, { ProviderSubagentStore }] = await Promise.all([
+    import(new URL("../registry.js", url).href), import(new URL("../host.js", url).href), import(new URL("../../agent.js", url).href),
     import(new URL("../../../../provider-subagents/store.js", url).href),
   ]);
-  const host = new PiExtensionHost([piSubagents]);
+  const host = new PiExtensionHost(piExtensions);
   const store = new ProviderSubagentStore();
   const apply = (mapping: any) => {
     assert.deepEqual(mapping?.childSessions ?? [], [], "Work workers must never start native transcript readers");
@@ -61,6 +61,28 @@ for (const args of [
         }
         assert.deepEqual(store.list("parent"), []);
         assert.deepEqual(store.listAll(), []);
+      }
+    } finally { host.close(); }
+  });
+}
+
+for (const toolName of ["subagent", "Agent"]) {
+  test(`unrelated native ${toolName} survives actual live/history projection and full registry`, { skip: !consumerModule }, async () => {
+    const { host, store } = await production();
+    try {
+      const args = { subagent_type: "research", prompt: "Investigate independently" };
+      const start = { type: "tool_execution_start", toolCallId: "unrelated", toolName, args };
+      const [live] = new SubagentTaskProjection().project(start);
+      assert.deepEqual(live, start);
+      const messages = [{ role: "assistant", content: [{ type: "toolCall", id: "unrelated", name: toolName, arguments: args }] }];
+      const history = projectSubagentMessages(messages) as any[];
+      assert.deepEqual(history, messages);
+      for (const projectedArgs of [live.args, history[0].content[0].arguments]) {
+        const mapping = host.mapToolCall({ callId: "unrelated", toolName, args: projectedArgs, status: "running", result: null });
+        assert(mapping.events.some((event: any) => event.type === "provider_subagent" && event.event.type === "upsert"));
+        assert(!mapping.events.some((event: any) => event.type === "provider_subagent" && event.event.type === "hide"));
+        for (const event of mapping.events) if (event.type === "provider_subagent") store.apply("parent", "pi", event.event);
+        assert.equal(store.list("parent").length, 1);
       }
     } finally { host.close(); }
   });

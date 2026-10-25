@@ -207,12 +207,23 @@ test("reports a foreground handoff as running instead of fabricating a launch fa
   assert.doesNotMatch(end.result.content[0].text, /did not start/);
 });
 
+test("unrecognized subagent arguments never gain harness ownership in live or history", () => {
+  for (const args of [undefined, {}, { subagent_type: "research", prompt: "inspect" },
+    { operation: "resume", task_id: "another-provider-task" }, { background: true, prompt: "inspect" },
+    { action: "review" }, { operation: "status", job_id: "another-provider-job" }]) {
+    const start = { type: "tool_execution_start", toolCallId: "external", toolName: "subagent", args };
+    assert.deepEqual(new SubagentTaskProjection().project(start), [start]);
+    const messages = [{ role: "assistant", content: [{ type: "toolCall", id: "external", name: "subagent", arguments: args }] }];
+    assert.deepEqual(projectSubagentMessages(messages), messages);
+  }
+});
+
 test("leaves non-subagent, lifecycle, and draft disposition events unchanged", () => {
   const projection = new SubagentTaskProjection();
   const bash = { type: "tool_execution_start", toolCallId: "b", toolName: "bash", args: { command: "true" } };
   const lifecycle = { type: "tool_execution_start", toolCallId: "s", toolName: "subagent", args: { operation: "status", job_id: "subagent-job-0123456789abcdef01234567" } };
   const draft = { type: "tool_execution_start", toolCallId: "d", toolName: "subagent", args: { action: "review" } };
   assert.deepEqual(projection.project(bash), [bash]);
-  assert.deepEqual(projection.project(lifecycle), [{ ...lifecycle, args: { ...lifecycle.args, _paseoWorkAgent: true } }]);
-  assert.deepEqual(projection.project(draft), [{ ...draft, args: { ...draft.args, _paseoWorkAgent: true } }]);
+  assert.deepEqual(projection.project(lifecycle), [lifecycle]);
+  assert.deepEqual(projection.project(draft), [draft]);
 });
