@@ -50,6 +50,7 @@ function startEvent(parent: Projection, spec: ChildSpec): RecordValue {
     toolName: "subagent",
     args: {
       task: spec.task,
+      _paseoWorkAgent: true,
       ...(spec.agent ? { agent: spec.agent } : {}),
     },
   };
@@ -280,7 +281,7 @@ export class SubagentTaskProjection {
     if (event.type === "tool_execution_start") {
       if (event.toolName !== "subagent" || typeof event.toolCallId !== "string") return [event];
       const specs = childSpecs(event.args);
-      if (!specs.length) return [event];
+      if (!specs.length) return [{ ...event, args: { ...event.args, _paseoWorkAgent: true } }];
       const projection = { parentId: event.toolCallId, specs, updates: new Map<number, ProjectedUpdateState>() };
       this.active.set(event.toolCallId, projection);
       return specs.map((spec) => startEvent(projection, spec));
@@ -328,7 +329,7 @@ export class SubagentTaskProjection {
           type: "tool_execution_update",
           toolCallId: childId(parent.parentId, spec.index),
           toolName: "subagent",
-          args: { task: spec.task, ...(spec.agent ? { agent: spec.agent } : {}) },
+          args: { task: spec.task, _paseoWorkAgent: true, ...(spec.agent ? { agent: spec.agent } : {}) },
           partialResult: projectedResult(child, result, spec.agent),
         }];
       }
@@ -363,7 +364,7 @@ export function projectSubagentMessages(messages: unknown[]): unknown[] {
         }
         const specs = childSpecs(part.arguments);
         if (!specs.length) {
-          content.push(part);
+          content.push({ ...part, arguments: { ...part.arguments, _paseoWorkAgent: true } });
           continue;
         }
         const projection = { parentId: part.id, specs, updates: new Map<number, ProjectedUpdateState>() };
@@ -372,7 +373,7 @@ export function projectSubagentMessages(messages: unknown[]): unknown[] {
           ...specs.map((spec) => ({
             ...part,
             id: childId(part.id, spec.index),
-            arguments: { task: spec.task, ...(spec.agent ? { agent: spec.agent } : {}) },
+            arguments: { task: spec.task, _paseoWorkAgent: true, ...(spec.agent ? { agent: spec.agent } : {}) },
           })),
         );
       }

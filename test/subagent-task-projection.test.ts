@@ -13,8 +13,8 @@ test("projects parallel children into independent live task executions", () => {
   assert.deepEqual(
     starts.map((event) => [event.type, event.toolCallId, event.args]),
     [
-      ["tool_execution_start", "parent::paseo-child::0", { task: "inspect", agent: "fast" }],
-      ["tool_execution_start", "parent::paseo-child::1", { task: "test" }],
+      ["tool_execution_start", "parent::paseo-child::0", { task: "inspect", agent: "fast", _paseoWorkAgent: true }],
+      ["tool_execution_start", "parent::paseo-child::1", { task: "test", _paseoWorkAgent: true }],
     ],
   );
 
@@ -166,13 +166,13 @@ test("preserves explicit background starts and their opaque job handles", () => 
     },
     isError: false,
   };
-  assert.deepEqual(projection.project(start), [start]);
+  assert.deepEqual(projection.project(start), [{ ...start, args: { ...start.args, _paseoWorkAgent: true } }]);
   assert.deepEqual(projection.project(end), [end]);
   assert.deepEqual(projectSubagentMessages([
     { role: "assistant", content: [{ type: "toolCall", id: "background", name: "subagent", arguments: start.args }] },
     { role: "toolResult", toolCallId: "background", toolName: "subagent", ...end.result, isError: false },
   ]), [
-    { role: "assistant", content: [{ type: "toolCall", id: "background", name: "subagent", arguments: start.args }] },
+    { role: "assistant", content: [{ type: "toolCall", id: "background", name: "subagent", arguments: { ...start.args, _paseoWorkAgent: true } }] },
     { role: "toolResult", toolCallId: "background", toolName: "subagent", ...end.result, isError: false },
   ]);
 });
@@ -213,6 +213,6 @@ test("leaves non-subagent, lifecycle, and draft disposition events unchanged", (
   const lifecycle = { type: "tool_execution_start", toolCallId: "s", toolName: "subagent", args: { operation: "status", job_id: "subagent-job-0123456789abcdef01234567" } };
   const draft = { type: "tool_execution_start", toolCallId: "d", toolName: "subagent", args: { action: "review" } };
   assert.deepEqual(projection.project(bash), [bash]);
-  assert.deepEqual(projection.project(lifecycle), [lifecycle]);
-  assert.deepEqual(projection.project(draft), [draft]);
+  assert.deepEqual(projection.project(lifecycle), [{ ...lifecycle, args: { ...lifecycle.args, _paseoWorkAgent: true } }]);
+  assert.deepEqual(projection.project(draft), [{ ...draft, args: { ...draft.args, _paseoWorkAgent: true } }]);
 });
