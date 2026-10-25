@@ -830,7 +830,12 @@ function HarnessPanel({
 		brief = false,
 		status?: string,
 		presentation?: { title: string; detail: string; expanded?: boolean; opensChat: boolean },
-	) => (
+	) => kind === "jobs" ? (
+		<Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled} onPress={onPress}
+			style={{ padding: 10, opacity: disabled ? 0.5 : 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
+			<Text numberOfLines={brief ? 1 : undefined} style={{ color: fg, flexShrink: 1 }}>{label}</Text>
+		</Pressable>
+	) : (
 		<NativeRow
 			colors={theme.colors}
 			title={presentation?.title ?? label}
@@ -901,13 +906,18 @@ function HarnessPanel({
 						{item.truncated ? (
 							<Text style={{ color: muted }}>Output truncated</Text>
 						) : null}
-						<OutputWell
+						{kind === "jobs" ? (
+							<View style={{ borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, backgroundColor: theme.colors.surface0, padding: 12 }}>
+								<Text selectable style={{ color: fg, fontFamily: layout.platform === "ios" ? "Menlo" : "monospace", fontSize: 12, lineHeight: 18 }}>
+									{item.text || "No output or answer recorded yet."}
+								</Text>
+							</View>
+						) : <OutputWell
 							colors={theme.colors}
 							text={item.text || "No output or answer recorded yet."}
-							monospace={kind === "jobs"}
 							platform={layout.platform}
 							maxHeight={320}
-						/>
+						/>}
 					</>
 				) : null}
 				</>}
@@ -924,13 +934,13 @@ function HarnessPanel({
 				paddingHorizontal:
 					embedded && (kind === "subagents" || viewMode === "completed")
 						? 4
-						: 12,
+						: kind === "jobs" ? 16 : 12,
 				paddingVertical:
 					embedded && viewMode === "completed"
 						? 0
 						: embedded && kind === "subagents"
 							? 4
-							: 12,
+							: kind === "jobs" ? 16 : 12,
 				gap: viewMode === "completed" ? 8 : 6,
 			}}
 		>
@@ -979,7 +989,9 @@ function HarnessPanel({
 				const metadata = "jobId" in row
 					? [state, elapsed(row.createdAt, ["starting", "running"].includes(row.status) ? null : row.updatedAt), row.observationOnly ? "Observation only" : ""].filter(Boolean).join(" · ")
 					: [state, row.needsAttention ? "Needs attention" : ""].filter(Boolean).join(" · ");
-				const label = `${title} · ${metadata}`;
+				const label = "jobId" in row
+					? `${row.name ?? row.jobId}${viewMode === "active" || row.status === "completed" ? "" : ` · ${row.status}`} · ${elapsed(row.createdAt, ["starting", "running"].includes(row.status) ? null : row.updatedAt)}${row.observationOnly ? " · observation only" : ""}`
+					: `${title} · ${metadata}`;
 				const opensChat = kind === "subagents" && viewMode === "completed" && !!openConversation;
 				return (
 					<View
@@ -992,7 +1004,7 @@ function HarnessPanel({
 											selectedId === id
 												? theme.colors.foregroundMuted
 												: theme.colors.border,
-										borderRadius: 8,
+										borderRadius: kind === "jobs" ? 10 : 8,
 										backgroundColor: theme.colors.surface1,
 										overflow: "hidden",
 										marginBottom: 0,

@@ -85,12 +85,21 @@ test('compiled read-only panels render lists/details, bind generations and only 
     const job = { jobId: `job-${'a'.repeat(24)}`, status: 'running', name: 'Build', createdAt: new Date().toISOString(), updatedAt: null, observationOnly: false };
     listResult.data.items = [job];
     let tree = render('harness-jobs');
-    const row = nodes(tree).find(node => node.type === 'Pressable' && node.props.accessibilityLabel.startsWith('Build · Running'));
+    const row = nodes(tree).find(node => node.type === 'Pressable' && node.props.accessibilityLabel.startsWith('Build · running'));
+    assert.deepEqual(row.props.style, { padding: 10, opacity: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }, 'Jobs retains pre-f5ae85c row geometry');
+    assert.equal(nodes(row).filter(node => node.type === 'Text').length, 1, 'original single-line label, no metadata row');
+    assert.equal(nodes(row).filter(node => node.type === 'Icon').length, 0, 'no added disclosure icon');
+    assert.ok(nodes(tree).some(node => node.props?.style?.paddingHorizontal === 16 && node.props?.style?.paddingVertical === 16));
     row.props.onPress();
     detailResult = { data: { state: 'available', item: { jobId: job.jobId, text: 'Build output', stale: true, lastUpdated: null, truncated: true } } };
     tree = render('harness-jobs');
     assert.match(text(tree), /Build output/);
     assert.match(text(tree), /truncated/);
+    const output = nodes(tree).find(node => node.type === 'Text' && node.props.children === 'Build output');
+    assert.equal(output.props.selectable, true);
+    assert.deepEqual(output.props.style, { color: '#fff', fontFamily: 'monospace', fontSize: 12, lineHeight: 18 });
+    assert.equal(nodes(tree).filter(node => node.type === 'ScrollView').length, 1, 'original output has no nested bounded scroller');
+    assert.ok(!nodes(tree).some(node => node.props?.accessibilityLabel === 'Copy'), 'no added OutputWell controls');
     await queries[2].queryFn();
     assert.equal(calls.at(-1).name, 'harness_jobs_output');
     assert.equal(calls.at(-1).input.expectedRuntimeEpoch, identity.runtimeEpoch);
@@ -99,6 +108,11 @@ test('compiled read-only panels render lists/details, bind generations and only 
     assert.equal(queries[2].enabled, false, 'old selection invalidated by reload');
 
     statusResult = { data: identity }; states.length = 0;
+    listResult.data.items = [{ ...job, name: null, status: 'completed', observationOnly: true }];
+    tree = render('harness-jobs');
+    assert.ok(nodes(tree).some(node => node.props?.style?.borderRadius === 10), 'original completed Jobs card');
+    assert.match(text(tree), new RegExp(`${job.jobId} · .* · observation only`), 'original fallback name and observation label');
+    states.length = 0;
     const task = { taskId: `subagent-task-${'b'.repeat(24)}`, title: 'Review', status: 'completed', attempt: 1 };
     listResult = { data: { state: 'available', items: [task], stale: true, lastUpdated: null } };
     tree = render('harness-subagents');
