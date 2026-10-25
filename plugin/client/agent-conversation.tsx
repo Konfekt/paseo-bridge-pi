@@ -40,7 +40,7 @@ export function WorkerConversation({ target, epoch, colors, platform }: {
     {!conversation.isPending && !conversation.isError && !item ? <Metadata colors={colors}>{conversation.data?.message ?? "No retained conversation is available."}</Metadata> : null}
     {item ? <View style={{ maxHeight: 320, borderWidth: 1, borderColor: colors.border, borderRadius: 8, backgroundColor: colors.surface0, overflow: "hidden" }}>
       <ScrollView ref={scroll} nestedScrollEnabled style={{ maxHeight: 320 }} contentContainerStyle={{ padding: 12, gap: 12 }}
-        onScroll={(event: NativeSyntheticEvent<NativeScrollEvent>) => { const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent; following.current = contentSize.height - layoutMeasurement.height - contentOffset.y < 48; }}
+        onScroll={(event: NativeSyntheticEvent<NativeScrollEvent>) => { const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent; following.current = contentSize.height - layoutMeasurement.height - contentOffset.y < 32; }}
         scrollEventThrottle={100} onContentSizeChange={() => { if (following.current) scroll.current?.scrollToEnd({ animated: false }); }}>
         {item.messages.map(message => <View key={message.id} style={{ gap: 6 }}>
           {message.role === "assistant" ? null : <Metadata colors={colors}>{message.role}</Metadata>}

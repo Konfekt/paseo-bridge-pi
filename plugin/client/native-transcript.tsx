@@ -25,7 +25,7 @@ export function NativeToolBadge({ name, status, details, colors, expanded, onTog
 
 /** Same compact 24px inline row as Paseo's running turn footer. */
 export function NativeRunningTurnFooter({ color }: { color: string }) {
-  return <View testID="turn-working-indicator" style={{ height: 24, flexDirection: "row", alignItems: "center", justifyContent: "flex-start", gap: 12, paddingBottom: 16 }}>
+  return <View testID="turn-working-indicator" style={{ height: 24, flexDirection: "row", alignItems: "center", justifyContent: "flex-start", gap: 12, marginTop: 13, paddingBottom: 16 }}>
     <View style={{ marginLeft: -2 }}><ActivityIndicator accessibilityLabel="Assistant is working" size="small" color={color} /></View>
   </View>;
 }
