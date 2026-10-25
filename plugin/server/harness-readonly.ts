@@ -8,6 +8,7 @@ import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { harnessJobsListRpc, harnessJobsOutputRpc, harnessSubagentsListRpc, harnessSubagentReportRpc, harnessSubagentConversationRpc,
   harnessStatusRpc } from "../shared/harness-readonly";
 import { callHarnessReadOnly, validateHarnessReadOnlyDescriptor } from "./harness-readonly-transport";
+import { normalizeConversationStale } from "../shared/conversation-compat";
 
 export async function readHarnessDescriptor(agentId: string): Promise<unknown> {
   if (!agentId || agentId.length > 256) return undefined;
@@ -61,9 +62,13 @@ export function createHarnessReadOnlyHandlers(readDescriptor = readHarnessDescri
     jobsList: (input: RpcInput<typeof harnessJobsListRpc>, context: PluginHandlerContext) => invoke(input, "jobs.list", { limit: input.limit, cursor: input.cursor }, context),
     jobsOutput: (input: RpcInput<typeof harnessJobsOutputRpc>, context: PluginHandlerContext) => invoke(input, "jobs.output", { jobId: input.jobId, maxBytes: input.maxBytes }, context),
     subagentsList: (input: RpcInput<typeof harnessSubagentsListRpc>, context: PluginHandlerContext) => invoke(input, "subagents.list", { limit: input.limit, cursor: input.cursor }, context),
-    subagentConversation: (input: RpcInput<typeof harnessSubagentConversationRpc>, context: PluginHandlerContext) => invoke(input, "subagents.conversation", {
-      taskId: input.taskId, childId: input.childId, attempt: input.attempt, runtimeId: input.runtimeId, cursor: input.cursor,
-    }, context),
+    subagentConversation: async (input: RpcInput<typeof harnessSubagentConversationRpc>, context: PluginHandlerContext) => {
+      const result: any = await invoke(input, "subagents.conversation", {
+        taskId: input.taskId, childId: input.childId, attempt: input.attempt, runtimeId: input.runtimeId, cursor: input.cursor,
+      }, context);
+      if (result?.item && typeof result.item === "object") result.item = normalizeConversationStale(result.item);
+      return result;
+    },
     subagentReport: (input: RpcInput<typeof harnessSubagentReportRpc>, context: PluginHandlerContext) => invoke(input, "subagents.report", { taskId: input.taskId, maxBytes: input.maxBytes }, context),
   };
 }

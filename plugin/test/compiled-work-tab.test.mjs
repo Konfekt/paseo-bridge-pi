@@ -10,7 +10,7 @@ assert.ok(compilerPath, 'Set PASEO_PLUGIN_COMPILER to the installed Paseo compil
 // not undeclared bridge-local packages. Missing host dependencies must fail.
 const require = createRequire(resolve(compilerPath));
 const nodes = node => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)];
-const text = node => typeof node === 'string' ? node : nodes(node).filter(n => n.type === 'Text').map(n => [n.props.children].flat().filter(v => typeof v === 'string').join('')).join(' ');
+const text = node => typeof node === 'string' ? node : nodes(node).flatMap(n => [n.props?.children].flat(Infinity).filter(value => typeof value === 'string')).join(' ');
 
 // A small host renderer: execute compiled components, keep hook identity by JSX
 // key/path, and run real effect setup/cleanup on mount/unmount. No Work logic is
@@ -98,7 +98,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
         : key[0] === 'harness-status' ? { available: true, sessionId: 's', runtimeEpoch: 'e' }
         : key[0] === 'harness-list' ? { state: 'available', items: key[1] === 'subagents' ? workAgents : workJobs }
         : key[0] === 'foreground-tasks' ? { available: true, tasks: foregroundJobs }
-        : key[0] === 'worker-conversation' ? { state: 'available', item: { messages, nextCursor: 2, execution: 'running', liveText: 'Streaming assistant delta', liveEvents: [{ sequence: 3, kind: 'tool_start', toolCallId: 'call-1', name: 'read', status: 'running', arguments: '{"path":"README.md"}' }] } }
+        : key[0] === 'worker-conversation' ? { state: 'available', item: { messages, nextCursor: 2, execution: 'running', liveText: 'Streaming assistant delta', liveEvents: [{ sequence: 3, kind: 'tool_end', toolCallId: 'call-1', name: 'bash', status: 'completed', arguments: { command: 'git status --short', private: 'ARGUMENT_SECRET' }, result: 'LIVE_RESULT_SECRET' }] } }
         : undefined;
       return { data, isPending: false, isError: (key[0] === 'worker-conversation' && conversationError) || (key[0] === 'harness-status' && statusError), refetch() {} };
     }, useMutation() { return { isPending: false, mutate() { throw Error('Unexpected mutation'); } }; } };
@@ -226,21 +226,42 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     workAgents[0].status = 'running';
     messages = [...messages, { id: 'm2', role: 'tool', text: 'Live tool execution evidence' }];
     tree = render();
-    assert.match(text(tree), /Live tool execution evidence/, 'poll updates append tool logs before worker finishes');
+    assert.doesNotMatch(text(tree), /Live tool execution evidence/, 'tool output never leaks into the collapsed label');
+    assert.ok(nodes(tree).some(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Tool Tool · unknown'), 'unmatched result remains an honest collapsed tool badge');
     assert.equal(nodes(tree).filter(n => n.props?.testID === 'work-agent-conversation').length, 1);
     assert.ok(nodes(tree).some(n => n.type === 'ScrollView' && n.props.style?.maxHeight === 320), 'bounded native timeline retained');
     assert.match(text(tree), /Streaming assistant delta/);
     assert.ok(nodes(tree).some(n => n.type === 'ActivityIndicator' && n.props.accessibilityLabel === 'Assistant is working'), 'spinner appears only from authoritative running state');
     assert.doesNotMatch(text(tree), /Working…|retained snapshot/i);
-    const toolBadge = nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Tool read · running');
+    messages = [
+      { id: 'call-row', role: 'assistant', text: 'Checking **the current state** with `git`.', parts: [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'git status --short', private: 'ARGUMENT_SECRET' }, status: 'completed', result: 'RESULT_SECRET' }] },
+      { id: 'result-row', role: 'tool', toolCallId: 'call-1', toolName: 'bash', status: 'completed', text: 'RESULT_SECRET' },
+      { id: 'markdown-row', role: 'assistant', text: '# Summary\n\nA **formatted** paragraph with `inline code`.\n\n- one list item' },
+      { id: 'parent-row', role: 'parent', text: 'Please **review** this request.' },
+    ];
+    tree = render();
+    assert.match(text(tree), /git status --short/, 'badge uses the compact native command summary');
+    assert.match(text(tree), /formatted/, 'assistant prose is rendered through the Markdown adapter');
+    assert.ok(nodes(tree).some(n => n.props?.testID === 'transcript-markdown'));
+    assert.ok(nodes(tree).some(n => n.type === 'strong'), 'web markdown keeps strong semantics');
+    assert.ok(nodes(tree).some(n => n.type === 'code'), 'web markdown keeps inline code semantics');
+    assert.ok(nodes(tree).some(n => n.type === 'ul' && nodes(n).some(child => child.type === 'li')), 'web markdown keeps list semantics');
+    assert.ok(nodes(tree).some(n => n.type === 'View' && n.props.style?.alignSelf === 'flex-end'), 'parent input uses the native user-message bubble treatment');
+    assert.equal(nodes(tree).filter(n => n.type === 'Text' && n.props.children === 'parent').length, 0, 'no separate parent role label');
+    assert.doesNotMatch(text(tree), /ARGUMENT_SECRET|RESULT_SECRET|LIVE_RESULT_SECRET/, 'correlated tool results and full arguments stay inside the collapsed badge');
+    const toolBadge = nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Tool Shell · git status --short · completed');
+    assert.ok(toolBadge, 'badge uses native icon/name/summary presentation');
     assert.equal(toolBadge.props.accessibilityState.expanded, false, 'tool details start collapsed');
     toolBadge.props.onPress(); tree = render();
-    assert.match(text(tree), /README\.md/, 'tool args expand only after a user click');
-    nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Next messages').props.onPress(); tree = render();
+    assert.match(text(tree), /ARGUMENT_SECRET/);
+    assert.match(text(tree), /LIVE_RESULT_SECRET/, 'newer live completion overlays the persisted call and reveals its result only on click');
+    assert.doesNotMatch(text(tree), /"result": "RESULT_SECRET"/, 'stale persisted result is superseded by the latest correlated live result');
+    assert.ok(nodes(tree).some(n => n.type === 'Icon' && n.props.name === 'SquareTerminal'));
+    nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Older messages').props.onPress(); tree = render();
     assert.equal(queries.find(q => q.queryKey[0] === 'worker-conversation').queryKey.at(-1), 2);
     workAgents[0].status = 'completed'; tree = render();
     assert.equal(queries.find(q => q.queryKey[0] === 'worker-conversation').queryKey.at(-1), 2, 'settlement does not reset history pagination');
-    nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'First messages').props.onPress(); tree = render();
+    nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Latest messages').props.onPress(); tree = render();
     assert.equal(queries.find(q => q.queryKey[0] === 'worker-conversation').queryKey.at(-1), undefined);
     assert.equal(calls.filter(c => c.name === 'independent_agent_open').length, 0, 'row click only reads transcript');
     workAgents[0].status = 'completed';
@@ -335,6 +356,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
       ? { available: true, sessionId: 'session', runtimeEpoch: 'epoch' }
       : { agentId: 'real-child-agent' };
     workAgents = [{ taskId: 'task', childId: 'child', title: 'Helper', status: 'completed', reaped: false, attempt: 1, runtimeId: 'runtime' }];
+    messages = [{ id: 'm1', role: 'assistant', text: 'Worker transcript evidence' }];
     rpcResponse = async contract => contract.name === 'harness_status'
       ? { available: true, sessionId: 's', runtimeEpoch: 'e' }
       : { agentId: 'real-child-agent' };

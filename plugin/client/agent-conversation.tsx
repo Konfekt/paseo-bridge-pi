@@ -5,6 +5,7 @@ import { SettingsAction } from "@getpaseo/plugin/client/ui";
 import { Metadata, NativeButton } from "./presentation";
 import { NativeRunningTurnFooter, NativeToolBadge } from "./native-transcript";
 import { isNativeScrollViewNearBottom } from "./native-transcript-model";
+import { TranscriptMarkdown } from "./transcript-markdown";
 import { useQuery } from "@tanstack/react-query";
 import { useRpc } from "@getpaseo/plugin/client";
 import { harnessSubagentConversationRpc } from "../shared/harness-readonly";
@@ -34,7 +35,10 @@ export function WorkerConversation({ target, epoch, colors, platform }: {
   });
   const item = !conversation.isError && conversation.data?.state === "available" ? conversation.data.item : undefined;
   const liveTools = [...new Map((item?.liveEvents ?? []).map(event => [event.toolCallId, event])).values()];
-  useEffect(() => { if (following.current) scroll.current?.scrollToEnd({ animated: false }); }, [item?.liveSequence, item?.liveText, item?.messages.length, item?.liveEvents?.length]);
+  const persistedCallIds = new Set((item?.messages ?? []).flatMap(message => (message.parts ?? []).flatMap(part => part.type === "toolCall" ? [part.id] : [])));
+  const liveToolById = new Map(liveTools.map(event => [event.toolCallId, event]));
+  const visibleCallIds = new Set([...persistedCallIds, ...liveTools.map(event => event.toolCallId)]);
+  useEffect(() => { if (following.current) scroll.current?.scrollToEnd({ animated: false }); }, [cursor, item?.lastUpdated, item?.liveSequence, item?.liveText, item?.messages.length, item?.messages.at(-1)?.id, item?.messages.at(-1)?.text, item?.liveEvents?.length]);
   return <View testID="work-agent-conversation" style={{ gap: 8 }}>
     {conversation.isPending ? <Metadata colors={colors}>Loading conversation…</Metadata> : null}
     {conversation.isError ? <><Metadata colors={colors}>Conversation unavailable. Retrying automatically.</Metadata><NativeButton colors={colors} label="Retry conversation" onPress={() => { void conversation.refetch(); }} /></> : null}
@@ -44,20 +48,34 @@ export function WorkerConversation({ target, epoch, colors, platform }: {
         onScroll={(event: NativeSyntheticEvent<NativeScrollEvent>) => { const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent; following.current = isNativeScrollViewNearBottom({ offsetY: contentOffset.y, contentHeight: contentSize.height, viewportHeight: layoutMeasurement.height, threshold: 32 }); }}
         scrollEventThrottle={100} onContentSizeChange={() => { if (following.current) scroll.current?.scrollToEnd({ animated: false }); }}>
         {item.messages.map(message => <View key={message.id} style={{ gap: 6 }}>
-          {message.role === "assistant" ? null : <Metadata colors={colors}>{message.role}</Metadata>}
-          {message.text ? <Text selectable style={{ color: colors.foreground, fontSize: 14, lineHeight: 20 }}>{message.text}</Text> : null}
-          {message.parts?.map(part => part.type === "toolCall" ? <NativeToolBadge key={`${message.id}:${part.id}`} name={part.name} status={part.status ?? "unknown"} details={JSON.stringify(part.arguments, null, 2)} colors={colors} expanded={!!expanded[part.id]} onToggle={() => setExpanded(current => ({ ...current, [part.id]: !current[part.id] }))} /> : null)}
+          {(message.role === "user" || message.role === "parent") && message.text ? <View style={{ alignSelf: "flex-end", maxWidth: "88%", borderRadius: 16, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: colors.surface1 }}><TranscriptMarkdown text={message.text} colors={colors} platform={platform} /></View> : null}
+          {message.role === "assistant" && message.text ? <TranscriptMarkdown text={message.text} colors={colors} platform={platform} /> : null}
+          {message.role === "tool" && (!message.toolCallId || !visibleCallIds.has(message.toolCallId)) ? <NativeToolBadge
+            name={message.toolName ?? "tool"} status={message.status ?? "unknown"}
+            details={message.text} colors={colors} expanded={!!expanded[message.toolCallId ?? message.id]}
+            onToggle={() => { const key = message.toolCallId ?? message.id; setExpanded(current => ({ ...current, [key]: !current[key] })); }} /> : null}
+          {message.parts?.map(part => {
+            if (part.type !== "toolCall") return null;
+            const live = liveToolById.get(part.id);
+            const args = live?.arguments ?? part.arguments;
+            const result = live?.result ?? part.result;
+            return <NativeToolBadge key={`${message.id}:${part.id}`} name={part.name} argumentsValue={args} status={live?.status ?? part.status ?? "unknown"}
+              details={JSON.stringify({ arguments: args, ...(result ? { result } : {}) }, null, 2)} colors={colors}
+              expanded={!!expanded[part.id]} onToggle={() => setExpanded(current => ({ ...current, [part.id]: !current[part.id] }))} />;
+          })}
           {message.truncated ? <Metadata colors={colors}>[truncated]</Metadata> : null}
         </View>)}
-        {item.liveText ? <View style={{ gap: 6 }}><Text style={{ color: colors.foreground, fontSize: 14, lineHeight: 20 }}>{item.liveText}</Text></View> : null}
-        {liveTools.map(event => <NativeToolBadge key={`live:${event.toolCallId}`} name={event.name} status={event.status ?? "running"} details={event.arguments === undefined ? event.result ?? "" : JSON.stringify(event.arguments, null, 2)} colors={colors} expanded={!!expanded[event.toolCallId]} onToggle={() => setExpanded(current => ({ ...current, [event.toolCallId]: !current[event.toolCallId] }))} />)}
-        {item.execution === "running" ? <NativeRunningTurnFooter color={colors.foregroundMuted} /> : null}
+        {cursor == null && item.liveText ? <TranscriptMarkdown text={item.liveText} colors={colors} platform={platform} /> : null}
+        {cursor == null ? liveTools.filter(event => !persistedCallIds.has(event.toolCallId)).map(event => <NativeToolBadge key={`live:${event.toolCallId}`} name={event.name} argumentsValue={event.arguments} status={event.status ?? "running"}
+          details={event.arguments === undefined ? event.result ?? "" : JSON.stringify({ arguments: event.arguments, ...(event.result ? { result: event.result } : {}) }, null, 2)} colors={colors}
+          expanded={!!expanded[event.toolCallId]} onToggle={() => setExpanded(current => ({ ...current, [event.toolCallId]: !current[event.toolCallId] }))} />) : null}
+        {cursor == null && item.execution === "running" ? <NativeRunningTurnFooter color={colors.foregroundMuted} /> : null}
         {!item.messages.length && !item.liveText ? <Metadata colors={colors}>No messages recorded yet.</Metadata> : null}
       </ScrollView>
     </View> : null}
     {item?.truncated ? <Metadata colors={colors}>Conversation excerpt</Metadata> : null}
-    {item?.nextCursor != null ? <NativeButton colors={colors} label="Next messages" onPress={() => setCursor(item.nextCursor)} /> : null}
-    {cursor != null ? <NativeButton colors={colors} label="First messages" onPress={() => setCursor(undefined)} /> : null}
+    {item?.nextCursor != null ? <NativeButton colors={colors} label="Older messages" onPress={() => { following.current = true; setCursor(item.nextCursor); }} /> : null}
+    {cursor != null ? <NativeButton colors={colors} label="Latest messages" onPress={() => { following.current = true; setCursor(undefined); }} /> : null}
   </View>;
 }
 
