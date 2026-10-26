@@ -6,13 +6,18 @@
  * - packages/app/src/agent-stream/strategy-native.tsx:636: inverted-list bottom threshold.
  * - packages/app/src/components/message.tsx:868-994,1866-2175,2210-2397:
  *   ExpandableBadge dimensions/interaction and ToolCall presentation structure.
+ * - packages/app/src/components/highlighted-content.tsx: code line/gutter layout.
+ * - packages/app/src/components/tool-call-details.tsx:701-732: Read/Write
+ *   content sections and Edit diff sections (rendered with public RN primitives).
  * Paseo's private Unistyles, protocol presentation package, detail sheets and icon
  * components are intentionally replaced by the public plugin Icon and local safe
  * summaries. See ../licenses/PASEO-APACHE-2.0.txt.
  */
+import { nativeCodeRows } from "./native-code-model";
+import { toolDetailSections } from "./native-tool-details";
 import { AccessibilityInfo, Pressable, Text, View } from "react-native";
 import { useEffect, useState } from "react";
-import { Icon } from "@getpaseo/plugin/client/react-native";
+import { Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
 import { getNativeSpinnerOpacity, getNativeSpinnerStep, NATIVE_SPINNER_DOT_SIZE as DOT_SIZE, NATIVE_SPINNER_GAP as DOT_GAP } from "./native-transcript-model";
 
 function toolPresentation(name: string, argumentsValue: unknown): { label: string; summary?: string; icon: string } {
@@ -29,12 +34,13 @@ function toolPresentation(name: string, argumentsValue: unknown): { label: strin
   return { label: name.replace(/[._-]+/g, " ").replace(/^./, c => c.toUpperCase()), summary: first("command", "path", "query", "description"), icon: "Wrench" };
 }
 
-export function NativeToolBadge({ name, status, summary, argumentsValue, details, colors, expanded, onToggle }: {
-  name: string; status: "running" | "completed" | "failed" | "unknown"; summary?: string; argumentsValue?: unknown; details: string; colors: any; expanded: boolean; onToggle(): void;
+export function NativeToolBadge({ name, status, summary, argumentsValue, details, result, colors, expanded, onToggle }: {
+  name: string; status: "running" | "completed" | "failed" | "unknown"; summary?: string; argumentsValue?: unknown; details?: string; result?: unknown; colors: any; expanded: boolean; onToggle(): void;
 }) {
   const presentation = toolPresentation(name, argumentsValue);
   const label = presentation.label;
   const subtitle = summary ?? presentation.summary;
+  const args = argumentsValue && typeof argumentsValue === "object" ? argumentsValue as Record<string, unknown> : {};
   return <View style={{ alignSelf: "stretch", marginHorizontal: -13 }}>
     <Pressable accessibilityRole="button" accessibilityLabel={`Tool ${label}${subtitle ? ` · ${subtitle}` : ""} · ${status}`} accessibilityState={{ expanded }} aria-expanded={expanded} onPress={onToggle}
       style={{ flexDirection: "row", alignItems: "center", borderRadius: 8, borderWidth: 1, borderColor: expanded ? colors.border : "transparent", borderBottomLeftRadius: expanded ? 0 : 8, borderBottomRightRadius: expanded ? 0 : 8, backgroundColor: expanded ? colors.surface1 : "transparent", paddingHorizontal: 8, paddingVertical: 4 }}>
@@ -46,7 +52,23 @@ export function NativeToolBadge({ name, status, summary, argumentsValue, details
       <View style={{ flex: 1 }} />
     </Pressable>
     {expanded ? <View style={{ borderWidth: 1, borderTopWidth: 0, borderColor: colors.border, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, padding: 8, backgroundColor: colors.surface1 }}>
-      <Text selectable style={{ color: colors.foreground, fontFamily: "monospace", fontSize: 12, lineHeight: 17 }}>{details}</Text>
+      {toolDetailSections(name, argumentsValue, result ?? details, status === "failed").map((section, index) => <View key={index} style={{ marginBottom: 8 }}>
+        <Text style={{ color: colors.foregroundMuted, fontSize: 11, marginBottom: 4 }}>{section.label}</Text>
+        <ScrollView nestedScrollEnabled style={{ maxHeight: 240 }} showsVerticalScrollIndicator>
+          <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator>
+            <View testID="work-native-code-surface">
+              {nativeCodeRows(section.text, {
+                tone: section.tone,
+                ...(name.toLowerCase() === "read" && section.label === "Content" && status !== "failed" ? { startLine: typeof args.offset === "number" ? args.offset : 1 } : {}),
+                unifiedDiff: name.toLowerCase() === "edit" && section.label === "Result" && /(?:^|\n)@@ -\d/.test(section.text),
+              }).map((row, line) => <View key={line} style={{ flexDirection: "row", backgroundColor: row.tone === "removed" ? "rgba(220,60,60,0.12)" : row.tone === "added" ? "rgba(40,180,90,0.12)" : "transparent" }}>
+                {row.number !== undefined ? <Text testID="work-code-line-number" style={{ color: colors.foregroundMuted, fontFamily: "monospace", fontSize: 12, lineHeight: 17, minWidth: 36, paddingRight: 12, textAlign: "right", userSelect: "none" }}>{String(row.number)}</Text> : null}
+                <Text selectable style={{ color: colors.foreground, fontFamily: "monospace", fontSize: 12, lineHeight: 17 }}>{`${section.tone === "removed" ? "− " : section.tone === "added" ? "+ " : ""}${row.text || " "}`}</Text>
+              </View>)}
+            </View>
+          </ScrollView>
+        </ScrollView>
+      </View>)}
     </View> : null}
   </View>;
 }

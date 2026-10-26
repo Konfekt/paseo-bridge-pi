@@ -303,6 +303,32 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.match(text(tree), /LIVE_RESULT_SECRET/, 'newer live completion overlays the persisted call and reveals its result only on click');
     assert.doesNotMatch(text(tree), /"result": "RESULT_SECRET"/, 'stale persisted result is superseded by the latest correlated live result');
     assert.ok(nodes(tree).some(n => n.type === 'Icon' && n.props.name === 'ChevronDown'), 'expanded badge replaces its leading tool icon with the native disclosure');
+    const previousMessages = messages;
+    const jsonFile = '{"content":[1,2],"title":"literal file"}';
+    messages = [
+      { id: 'shell-fixture', role: 'assistant', text: '', parts: [{ type: 'toolCall', id: 'shell-fixture-call', name: 'bash', arguments: { command: 'printf actual-shell-json' }, status: 'completed', result: JSON.stringify({ content: [{ type: 'text', text: '{"content":[1,2],"shell_stdout":true}' }], details: {}, structuredContent: { output: '{"content":[1,2],"shell_stdout":true}', exit_code: 0 } }) }] },
+      { id: 'unknown-fixture', role: 'assistant', text: '', parts: [{ type: 'toolCall', id: 'unknown-fixture-call', name: 'custom_tool', arguments: { query: 'unknown-tool-query' }, status: 'completed', result: JSON.stringify({ type: 'tool_result', content: JSON.stringify({ content: [{ type: 'text', text: 'unknown tool readable output' }] }) }) }] },
+      { id: 'read-fixture', role: 'assistant', text: '', parts: [{ type: 'toolCall', id: 'read-fixture-call', name: 'read', arguments: { path: '/tmp/actual.json', offset: 7, limit: 20 }, status: 'completed', result: JSON.stringify(JSON.stringify({ content: [{ type: 'text', text: jsonFile }], structuredContent: jsonFile })) }] },
+      { id: 'write-fixture', role: 'assistant', text: '', parts: [{ type: 'toolCall', id: 'write-fixture-call', name: 'write', arguments: { path: '/tmp/written.ts', content: 'export const written = "exact content";\n' }, status: 'completed', result: 'Written successfully' }] },
+      { id: 'edit-fixture', role: 'assistant', text: '', parts: [{ type: 'toolCall', id: 'edit-fixture-call', name: 'edit', arguments: { path: '/tmp/edited.ts', edits: [{ oldText: 'old exact fragment', newText: 'new exact fragment' }] }, status: 'completed', result: 'Edited successfully' }] },
+    ];
+    tree = render();
+    assert.doesNotMatch(text(tree), /literal file|exact content|old exact fragment/, 'all representative details remain collapsed');
+    for (const label of ['Tool Shell · printf actual-shell-json · completed', 'Tool Custom tool · unknown-tool-query · completed', 'Tool Read · /tmp/actual.json · completed', 'Tool Write · /tmp/written.ts · completed', 'Tool Edit · /tmp/edited.ts · completed']) {
+      nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === label).props.onPress();
+      tree = render();
+    }
+    assert.ok(text(tree).includes('{"content":[1,2],"shell_stdout":true}'), 'shell JSON stdout remains literal content');
+    assert.match(text(tree), /unknown tool readable output/, 'unknown tools use the same common transport normalization');
+    assert.ok(text(tree).includes(jsonFile), 'double-stringified MCP result shows exact JSON file text, not its transport envelope');
+    assert.match(text(tree), /export const written = "exact content";/);
+    assert.deepEqual(nodes(tree).filter(n => n.props?.testID === 'work-code-line-number').map(n => text(n)), ['7'], 'only Read content gets absolute positions, using its authoritative offset');
+    assert.ok(nodes(tree).filter(n => n.props?.testID === 'work-native-code-surface').length >= 5, 'all expanded tools share bounded native-style code surfaces');
+    assert.match(text(tree), /− old exact fragment/);
+    assert.match(text(tree), /\+ new exact fragment/);
+    assert.doesNotMatch(text(tree), /structuredContent|\\\\"content\\\\"|@@/, 'no duplicated transport, escaped envelope, or fabricated diff positions');
+    messages = previousMessages;
+    tree = render();
     nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Older messages').props.onPress(); tree = render();
     assert.equal(queries.find(q => q.queryKey[0] === 'worker-conversation').queryKey.at(-1), 2);
     workAgents[0].status = 'completed'; tree = render();
@@ -563,7 +589,10 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     const nativeChild = { id: 'native-child', workspaceId: 'child-workspace', provider: 'pi', title: 'Urgent' };
     const updateChild = agent => titledHost.observers.filter(observer => observer.includeBackground).forEach(observer => observer.update({ type: 'agent_update', payload: { kind: 'upsert', agent } }));
     updateChild(nativeChild);
-    assert.equal(pill(titledHost, nativeChild.id), undefined, 'background title discovery does not enable deferred composer-pill changes');
+    const expectedBackgroundPills = ['pi-btw', 'pi-codex-account', 'work'];
+    const actualBackgroundPills = titledHost.pills.filter(pill => pill.agentId === nativeChild.id && !pill.removed && expectedBackgroundPills.includes(pill.id));
+    assert.deepEqual(actualBackgroundPills.map(pill => pill.id).sort(), expectedBackgroundPills, 'current/new background Pi chats get exactly one Work, BTW and per-chat Codex control');
+    assert.ok(actualBackgroundPills.every(pill => pill.workspaceId === nativeChild.workspaceId), 'composer controls target the exact background chat workspace');
     workAgents = [{ taskId: 'title-task', childId: 'title-child', groupId: 'title-group', attempt: 1, runtimeId: 'title-runtime', status: 'running', title: 'URGENT original instructions remain in expanded metadata', paseoAgentId: nativeChild.id, paseoWorkspaceId: nativeChild.workspaceId }];
     click(titledHost, 'a'); tree = render(titledHost); select(tree, 'Agents'); tree = render(titledHost);
     assert.ok(rows(tree).length, `Native title row missing: ${text(tree)}`);
