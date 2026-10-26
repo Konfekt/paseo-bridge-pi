@@ -5,7 +5,8 @@ import { registerCacheUsage } from "./server/cache-usage";
 import { registerSessionAccountUsage } from "./server/session-account-usage";
 import { createHandlers, readOperatorDescriptor } from "./server/operator";
 import { permissionGateSetRpc, permissionGateStatusRpc } from "./shared/permission-gate";
-import { harnessJobsListRpc, harnessJobsOutputRpc, harnessSubagentsListRpc, harnessSubagentReportRpc, harnessSubagentConversationRpc, harnessStatusRpc } from "./shared/harness-readonly";
+import { createExistingChildRouteHandler } from "./server/existing-child-route";
+import { harnessJobsListRpc, harnessJobsOutputRpc, harnessSubagentsListRpc, harnessSubagentReportRpc, harnessSubagentConversationRpc, harnessSubagentRouteRpc, harnessStatusRpc } from "./shared/harness-readonly";
 import { observabilitySnapshotRpc } from './shared/observability';
 import { createHarnessReadOnlyHandlers } from "./server/harness-readonly";
 import { createForegroundTasksHandlers } from "./server/foreground-tasks";
@@ -32,6 +33,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(harnessSubagentsListRpc, readonly.subagentsList);
   server.handle(harnessSubagentReportRpc, readonly.subagentReport);
   server.handle(harnessSubagentConversationRpc, readonly.subagentConversation);
+  server.handle(harnessSubagentRouteRpc, createExistingChildRouteHandler());
   const foregroundTasks = createForegroundTasksHandlers();
   server.handle(foregroundTasksStatusRpc, foregroundTasks.status);
   server.handle(foregroundTasksRpc, foregroundTasks.control);

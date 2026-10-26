@@ -868,7 +868,7 @@ function HarnessPanel({
 	const selectedWorker = kind === "subagents" && openConversation
 		? rows.find((row): row is WorkerRow => "childId" in row && row.taskId === selectedId) : undefined;
 	const conversationTarget = (row: WorkerRow): AgentConversationTarget => ({ hostId: host.id, agentId, workspaceId,
-		sessionId: session!, taskId: row.taskId, childId: row.childId, attempt: row.attempt, runtimeId: row.runtimeId, title: row.title });
+		sessionId: session!, runtimeEpoch: epoch!, taskId: row.taskId, childId: row.childId, groupId: row.groupId, attempt: row.attempt, runtimeId: row.runtimeId, title: row.title });
 	const openWorker = (row: WorkerRow) => {
 		if (!openConversation || opening.current) return;
 		opening.current = true; setOpeningId(row.childId); setOpenError(undefined);

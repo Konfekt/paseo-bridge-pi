@@ -10,12 +10,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useRpc } from "@getpaseo/plugin/client";
 import { harnessSubagentConversationRpc } from "../shared/harness-readonly";
 import type { PluginClientContext, PluginScreenProps } from "@getpaseo/plugin/client";
-import { harnessStatusRpc } from "../shared/harness-readonly";
-import { independentAgentOpenRpc } from "../shared/independent-agents";
+import { harnessSubagentRouteRpc } from "../shared/harness-readonly";
 
 export type AgentConversationTarget = {
   hostId: string; agentId: string; workspaceId: string; sessionId: string;
-  taskId: string; childId: string; attempt: number; runtimeId: string | null; title: string;
+  taskId: string; childId: string; groupId: string; attempt: number; runtimeId: string | null; runtimeEpoch: string; title: string;
 };
 
 export function WorkerConversation({ target, epoch, colors, platform }: {
@@ -144,16 +143,14 @@ export function createAgentConversationTabs(client: PluginClientContext) {
       const existing = pending.get(key);
       if (existing) return existing;
       const operation = (async () => {
-        const identity = await client.rpc(harnessStatusRpc, { agentId: target.agentId, workspaceId: target.workspaceId });
-        if (disposed || !isCurrent()) throw new Error("The source conversation is no longer selected.");
-        if (!identity.available || identity.sessionId !== target.sessionId || !identity.runtimeEpoch)
-          throw new Error("The source session is unavailable or has changed.");
-        const created = await client.rpc(independentAgentOpenRpc, {
+        if (!target.runtimeId) throw new Error("No existing live child conversation is registered.");
+        const route = await client.rpc(harnessSubagentRouteRpc, {
           agentId: target.agentId, workspaceId: target.workspaceId,
-          expectedSessionId: target.sessionId, expectedRuntimeEpoch: identity.runtimeEpoch,
-          taskId: target.taskId, childId: target.childId, attempt: target.attempt, runtimeId: target.runtimeId,
+          expectedSessionId: target.sessionId, expectedRuntimeEpoch: target.runtimeEpoch,
+          taskId: target.taskId, childId: target.childId, groupId: target.groupId, attempt: target.attempt, runtimeId: target.runtimeId,
         });
-        if (!disposed && isCurrent() && selectedTarget === key) client.openScreen({ screenId: "independent-conversation", params: { agentId: created.agentId } });
+        if (disposed || !isCurrent() || selectedTarget !== key) throw new Error("The source conversation is no longer selected.");
+        client.openScreen({ screenId: "independent-conversation", params: { agentId: route.agentId } });
       })().finally(() => { pending.delete(key); });
       pending.set(key, operation);
       return operation;

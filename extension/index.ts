@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { parseTmuxTarget } from "../shim/tmux-target.js";
 import { paseoImportArgs, importRetryDelay, retryableWorkspaceImportFailure, workspaceIdForPlacement } from "./import-placement.js";
 import { completeWithSessionModel } from "./session-model-request.ts";
+import { sameReadOnlySession } from "./read-only-session.ts";
 import { buildSessionContext, type ExtensionAPI, type ExtensionContext, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import * as sessionManagerApi from "@earendil-works/pi-coding-agent";
 import { BridgeTransport, retainBridgeForReload, takeBridgeAfterReload, discardRetainedBridge } from "./bridge-transport.js";
@@ -304,6 +305,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     writeRuntimeRecord(file, latestCtx.cwd);
   });
   let latestCtx: ExtensionContext | null = null;
+  let readOnlySessionLifecycle = {};
   let isCompacting = false;
   // The extension API cannot read or change Pi's live auto-compaction setting.
   // Do not invent a separate bridge-local setting.
@@ -1099,6 +1101,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     transport?.bind({
       command: handleCommand,
       async harnessReadOnly(request: any) {
+        const lifecycle = readOnlySessionLifecycle;
         const activeTransport = transport;
         const ctx = latestCtx;
         const agentId = currentAgentId;
@@ -1114,7 +1117,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         const assertCurrent = () => {
           const liveRegistry = (globalThis as any)[registryKey];
           const liveService = method === "observability.snapshot" ? liveRegistry?.[request.payload?.feature] : method.startsWith("jobs.") ? liveRegistry?.jobs : method.startsWith("subagents.") ? liveRegistry?.subagents : undefined;
-          if (transport !== activeTransport || latestCtx !== ctx || currentAgentId !== agentId
+          if (transport !== activeTransport || !sameReadOnlySession(lifecycle, readOnlySessionLifecycle, request.sessionId, latestCtx) || currentAgentId !== agentId
             || currentSessionFile !== activeTransport.sessionFile || !activeTransport.connected
             || ctx.sessionManager.getSessionId() !== request.sessionId || activeTransport.operatorEpoch !== request.runtimeEpoch
             || activeTransport.harnessReadOnlyCapability !== request.capability
@@ -1598,6 +1601,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (event, ctx) => {
+    readOnlySessionLifecycle = {};
     preflightAbortController.abort();
     preflightAbortController = new AbortController();
     latestCtx = ctx;
@@ -1655,6 +1659,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (event) => {
+    readOnlySessionLifecycle = {};
     // Reload retains the controller socket: settle old command RPCs before its
     // owner is suspended, rather than hanging them or replying into a new binding.
     for (const reject of [...pendingCommandReplies.values()]) {

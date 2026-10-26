@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { processStartToken } from '../../shim/runtime-registry.js';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -103,6 +104,25 @@ test('compiled plugin backend operates the real bridge without prompt dispatch o
     assert.equal(readonlyStatus.available, true, readonlyStatus.reason ?? '');
     assert.equal(readonlyStatus.sessionId, 'session');
     const readTarget = { ...target, expectedSessionId: readonlyStatus.sessionId, expectedRuntimeEpoch: readonlyStatus.runtimeEpoch };
+    const childIdentity = { taskId: `subagent-task-${'1'.repeat(24)}`, childId: `subagent-child-${'2'.repeat(24)}`,
+      groupId: `subagent-job-${'3'.repeat(24)}`, attempt: 2, runtimeId: 'exact-child-runtime' };
+    const registry = join(root, '.pi', 'paseo-bridge', 'runtimes');
+    await mkdir(registry, { recursive: true, mode: 0o700 });
+    const liveRecord = { ...childIdentity, lifecycle: 'active', managed: true, parentSessionId: 'session',
+      pid: process.pid, processStartToken: processStartToken(), agentId: 'existing-child', workspaceId: 'workspace' };
+    const putRecord = record => writeFile(join(registry, 'child.json'), JSON.stringify(record), { mode: 0o600 });
+    await putRecord(liveRecord);
+    const routeInput = { ...readTarget, ...childIdentity };
+    assert.deepEqual(await invoke('harness_subagent_route', routeInput), { agentId: 'existing-child', workspaceId: 'workspace' });
+    for (const changed of [{ attempt: 1 }, { childId: `subagent-child-${'4'.repeat(24)}` }, { groupId: `subagent-job-${'5'.repeat(24)}` }, { runtimeId: 'other-runtime' }, { expectedSessionId: 'other-session' }, { expectedRuntimeEpoch: '00000000-0000-4000-8000-000000000001' }]) {
+      await assert.rejects(invoke('harness_subagent_route', { ...routeInput, ...changed }));
+    }
+    for (const changed of [{ parentSessionId: 'other-owner' }, { processStartToken: 'dead:pid' }, { lifecycle: 'reaped' }]) {
+      await putRecord({ ...liveRecord, ...changed });
+      await assert.rejects(invoke('harness_subagent_route', routeInput));
+    }
+    await putRecord(liveRecord);
+    assert.equal(commandCalls, 0, 'route lookup never prompts, imports or creates a child');
     const observed = await invoke('observability_snapshot', { ...readTarget, feature: 'progress' });
     assert.equal(observed.data.steps[0].status, 'blocked');
     assert.equal(JSON.stringify(observed).includes('never-forward'), false);

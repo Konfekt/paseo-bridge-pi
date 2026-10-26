@@ -333,8 +333,8 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     await new Promise(resolve => setImmediate(resolve));
     tree = render();
     assert.doesNotMatch(text(tree), /Worker transcript evidence/, 'completed click retains historical direct-chat behavior');
-    assert.deepEqual(first.screens.at(-1), { screenId: 'independent-conversation', params: { agentId: 'history-child' } });
-    assert.equal(calls.filter(c => c.name === 'independent_agent_open').length, 1);
+    assert.equal(first.screens.length, 0, 'missing historical runtime never creates a replacement conversation');
+    assert.equal(calls.filter(c => c.name === 'independent_agent_open').length, 0);
     calls.length = 0; first.screens.length = 0;
     select(tree, 'Agents');
     workAgents = undefined;
@@ -377,7 +377,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.match(text(render()), /Select Work/, 'moving source invalidates old workspace binding');
     assert.equal(queries.length, 0);
     click(first, 'a'); render();
-    const target = { hostId: 'host', agentId: 'a', workspaceId: 'w', sessionId: 'session', taskId: 'task', childId: 'child', attempt: 1, runtimeId: 'runtime', title: 'Helper' };
+    const target = { hostId: 'host', agentId: 'a', workspaceId: 'w', sessionId: 'session', runtimeEpoch: 'epoch', taskId: 'task', childId: 'child', groupId: 'group', attempt: 1, runtimeId: 'runtime', title: 'Helper' };
     let releaseIdentity;
     rpcResponse = () => new Promise(resolve => { releaseIdentity = resolve; });
     const pendingOpen = ui.componentProps.get('WorkOverview').openConversation(target);
@@ -422,7 +422,8 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.ok(continueButton, 'interactive continuation is explicit in the rendered conversation');
     continueButton.props.onPress();
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(calls.filter(c => c.name === 'independent_agent_open').length, 1);
+    assert.equal(calls.filter(c => c.name === 'independent_agent_open').length, 0, 'Open child chat must never create a snapshot chat');
+    assert.equal(calls.filter(c => c.name === 'harness_subagent_route').length, 2, 'stale click and current click each resolve only an existing route');
     assert.deepEqual(first.screens.at(-1), { screenId: 'independent-conversation', params: { agentId: 'real-child-agent' } }, 'existing verified conversation helper owns native conversation navigation');
     ui.componentProps.get('WorkOverview').openWorkspace('native-workspace');
     assert.deepEqual(first.screens.at(-1), { screenId: 'independent-conversation', params: { workspaceId: 'native-workspace', serverId: 'host' } });

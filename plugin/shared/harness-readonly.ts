@@ -43,6 +43,11 @@ export const harnessSubagentConversationRpc = defineRpc({ name: "harness_subagen
   liveText: z.string().max(16 * 1024).optional(), liveSequence: z.number().int().min(0).optional(), liveEvents: z.array(z.object({ sequence: z.number().int().min(0), kind: z.enum(["tool_start", "tool_end"]), toolCallId: z.string().max(128), name: z.string().max(128), status: z.enum(["running", "completed", "failed"]).optional(), arguments: z.unknown().optional(), result: z.string().max(2048).optional() })).max(12).optional(),
 }).optional() }) });
 
+export const harnessSubagentRouteRpc = defineRpc({ name: "harness_subagent_route", input: z.object({
+  ...base, taskId: z.string().regex(/^subagent-task-[a-f0-9]{24}$/), childId: z.string().regex(/^subagent-child-[a-f0-9]{24}$/),
+  groupId: z.string().regex(/^subagent-job-[a-f0-9]{24}$/), attempt: z.number().int().min(1), runtimeId: z.string().min(1).max(256),
+}), output: z.object({ agentId: z.string().min(1).max(256), workspaceId: z.string().min(1).max(256) }) });
+
 export const harnessSubagentReportRpc = defineRpc({ name: "harness_subagent_report", input: z.object({
   ...base, taskId: z.string().regex(/^subagent-task-[a-f0-9]{24}$/), maxBytes: z.number().int().min(1).max(48 * 1024).optional(),
 }), output: z.object({ ...common, item: z.object({ ...taskIdentity, text: z.string().max(48 * 1024), truncated: z.boolean() }).optional() }) });
