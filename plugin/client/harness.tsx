@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { readJobs } from "./jobs-pages";
 import { Pressable, Text, View, type ScrollView as NativeScrollView } from "react-native";
 import { Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
 import {
@@ -354,7 +355,7 @@ function useWorkSummary({ agentId, workspaceId, host }: JobScope) {
 			host.id,
 		],
 		enabled: ready,
-		queryFn: () => jobsCall({ ...bound, limit: 50 }),
+		queryFn: () => readJobs(cursor => jobsCall({ ...bound, limit: 50, ...(cursor ? { cursor } : {}) })),
 		refetchInterval: 5000,
 		refetchOnReconnect: true,
 	});
@@ -781,7 +782,7 @@ function HarnessPanel({
 		enabled: ready,
 		queryFn: () =>
 			kind === "jobs"
-				? jobsCall({ ...bound, limit: 50 })
+				? readJobs(cursor => jobsCall({ ...bound, limit: 50, ...(cursor ? { cursor } : {}) }))
 				: readSubagents(cursor => tasksCall({ ...bound, limit: 50, ...(cursor ? { cursor } : {}) })),
 
 		refetchInterval: 5000,
@@ -971,7 +972,7 @@ function HarnessPanel({
 					This view is unavailable. Retrying automatically.
 				</Text>
 			) : null}
-			{ready && list.data?.state !== "available" ? (
+			{ready && (list.data?.state !== "available" || (kind === "jobs" && list.data?.message)) ? (
 				<Text style={{ color: muted }}>{list.data?.message}</Text>
 			) : null}
 			{ready && !list.isError && list.data?.state === "available" && !rows.length ? (
@@ -980,7 +981,7 @@ function HarnessPanel({
 					this session.
 				</Text>
 			) : null}
-			{rows.map((row) => {
+			{[...rows].sort((a, b) => Number("fromSubagent" in a && a.fromSubagent === true) - Number("fromSubagent" in b && b.fromSubagent === true)).map((row, index, ordered) => {
 				const id = "jobId" in row ? row.jobId : row.taskId;
 				const title = "jobId" in row ? row.name || "Background job" : row.title;
 				const state = kind === "subagents" && viewMode === "active" && row.status === "completed"
@@ -993,8 +994,11 @@ function HarnessPanel({
 					: `${title} · ${metadata}`;
 				const opensChat = kind === "subagents" && viewMode === "completed" && !!openConversation;
 				return (
+					<Fragment key={"childId" in row ? `${row.childId}/${row.attempt}` : id}>
+					{"fromSubagent" in row && row.fromSubagent === true && (index === 0 || !("fromSubagent" in ordered[index - 1] && ordered[index - 1].fromSubagent === true)) ? (
+						<Text accessibilityRole="header" style={{ color: fg, fontSize: 18 }}>From subagents</Text>
+					) : null}
 					<View
-						key={"childId" in row ? `${row.childId}/${row.attempt}` : id}
 						style={
 							!isActiveRow(row)
 								? {
@@ -1024,6 +1028,7 @@ function HarnessPanel({
 						)}
 						{selectedId === id ? selectedDetail : null}
 					</View>
+					</Fragment>
 				);
 			})}
 			{openingId ? <Text style={{ color: muted }}>Opening conversation…</Text> : null}

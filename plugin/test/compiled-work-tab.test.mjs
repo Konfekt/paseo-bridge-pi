@@ -90,13 +90,14 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
       AccessibilityInfo: { isReduceMotionEnabled: async () => true, addEventListener: () => ({ remove() {} }) },
     };
     if (name === 'react/jsx-runtime') return { jsx: ui.jsx, jsxs: ui.jsx, Fragment: 'Fragment' };
-    if (name === 'react') return { ...ui.hooks, useLayoutEffect: ui.hooks.useEffect, createElement: (type, props, ...children) => ui.jsx(type, { ...props, ...(children.length ? { children } : {}) }, props?.key) };
+    if (name === 'react') return { Fragment: 'Fragment', ...ui.hooks, useLayoutEffect: ui.hooks.useEffect, createElement: (type, props, ...children) => ui.jsx(type, { ...props, ...(children.length ? { children } : {}) }, props?.key) };
     if (name === '@tanstack/react-query') return { useQuery(options) {
       queries.push(options);
       const key = options.queryKey;
       const data = workAgents === undefined ? (key[0] === 'harness-status' ? { available: false } : undefined)
         : key[0] === 'harness-status' ? { available: true, sessionId: 's', runtimeEpoch: 'e' }
         : key[0] === 'harness-list' ? { state: 'available', items: key[1] === 'subagents' ? workAgents : workJobs }
+        : key[0] === 'harness-detail' ? { state: 'available', item: { text: 'Owned grandchild job output', truncated: false } }
         : key[0] === 'foreground-tasks' ? { available: true, tasks: foregroundJobs }
         : key[0] === 'worker-conversation' ? { state: 'available', item: { messages, nextCursor: 2, execution: 'running', liveText: 'Streaming assistant delta', liveEvents: [{ sequence: 3, kind: 'tool_end', toolCallId: 'call-1', name: 'bash', status: 'completed', arguments: { command: 'git status --short', private: 'ARGUMENT_SECRET' }, result: 'LIVE_RESULT_SECRET' }] } }
         : undefined;
@@ -149,6 +150,10 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     workJobs = [{ id: 'job-running', status: 'running' }, { id: 'job-done', status: 'completed' }];
     indicator = ui.render(icon, iconProps);
     assert.equal(pillUpdates.at(-1).label, '1 job', 'running job outranks five idle subagents');
+    workJobs.push({ jobId: 'grandchild-indicator', status: 'running', fromSubagent: true });
+    ui.render(icon, iconProps);
+    assert.equal(pillUpdates.at(-1).label, '2 jobs', 'verified descendant jobs count in the same top-level indicator');
+    workJobs.pop();
     assert.ok(!nodes(indicator).some(n => n.props?.accessibilityLabel === 'Idle agents'));
     foregroundJobs = [{ taskId: 'foreground-running', status: 'running' }];
     ui.render(icon, iconProps);
@@ -182,6 +187,23 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     const jobsAction = nodes(tree).find(node => node.type === 'SettingsAction' && node.props.actionLabel === 'Completed');
     assert.ok(jobsAction, 'Jobs uses the host SettingsAction via shared WorkAction');
     assert.equal(jobsAction.props.style, undefined, 'Jobs action has no custom button styling');
+    workAgents = [];
+    workJobs = [
+      { jobId: 'job-grandchild', name: 'Grandchild fixture', status: 'running', createdAt: '2026-01-01', updatedAt: null, observationOnly: false, fromSubagent: true },
+      { jobId: 'job-direct', name: 'Direct fixture', status: 'running', createdAt: '2026-01-01', updatedAt: null, observationOnly: false },
+      { jobId: 'job-child', name: 'Child fixture', status: 'running', createdAt: '2026-01-01', updatedAt: null, observationOnly: true, fromSubagent: true },
+    ];
+    tree = render();
+    assert.equal(nodes(tree).filter(node => node.props?.accessibilityRole === 'header' && node.props.children === 'From subagents').length, 1);
+    assert.ok(text(tree).indexOf('Direct fixture') < text(tree).indexOf('From subagents'), 'direct jobs retain their first section');
+    assert.ok(text(tree).indexOf('Grandchild fixture') > text(tree).indexOf('From subagents'));
+    const grandchild = nodes(tree).find(node => node.type === 'Pressable' && node.props.accessibilityLabel?.startsWith('Grandchild fixture'));
+    assert.ok(grandchild, 'same existing job row is used'); grandchild.props.onPress(); tree = render();
+    assert.match(text(tree), /Owned grandchild job output/);
+    assert.equal(nodes(tree).find(node => node.type === 'Text' && node.props.children === 'Owned grandchild job output').props.style.fontFamily, 'monospace');
+    assert.ok(!nodes(tree).some(node => /cancel|signal|reap/i.test(node.props?.accessibilityLabel ?? '')), 'jobs remain read-only');
+    workJobs = [];
+    workAgents = undefined;
     scroll(tree).props.onScroll({ nativeEvent: { contentOffset: { y: 321 } } });
     tree = render();
     assert.equal(scroll(tree).props.contentOffset.y, 321, 'status/query rerenders must not reset a mounted scroll position');

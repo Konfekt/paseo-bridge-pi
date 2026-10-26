@@ -64,8 +64,12 @@ test('compiled plugin backend operates the real bridge without prompt dispatch o
         if (request.method === 'jobs.list') {
           if (changeWorkspaceAfterList) workspaceId = 'changed-workspace';
           if (changeEpochAfterList) writeHarnessReadOnlyDescriptor(join(root, '.pi', 'paseo-bridge'), { ...readDescriptor, runtimeEpoch: '00000000-0000-4000-8000-000000000002' });
-          return { protocol: 1, state: 'available', sessionId: 'session', items: [], lastUpdated: null, stale: false };
+          return { protocol: 1, state: 'available', sessionId: 'session', items: [
+            { jobId: 'job-' + '1'.repeat(24), status: 'completed', name: 'direct fixture', createdAt: '2026-01-01', updatedAt: null, observationOnly: false },
+            { jobId: 'job-' + '2'.repeat(24), status: 'completed', name: 'grandchild fixture', createdAt: '2026-01-01', updatedAt: null, observationOnly: false, fromSubagent: true },
+          ], nextCursor: 'opaque-page', lastUpdated: null, stale: false };
         }
+        if (request.method === 'jobs.output') return { protocol: 1, state: 'available', sessionId: 'session', item: { jobId: request.payload.jobId, text: 'Grandchild read-only output', truncated: false, source: 'log', lastUpdated: null, stale: true }, lastUpdated: null, stale: true };
         if (request.method === 'subagents.list') return { protocol: 1, state: 'available', sessionId: 'session', items: [{
           taskId: 'subagent-task-111111111111111111111111', childId: 'subagent-child-222222222222222222222222',
           groupId: 'subagent-job-333333333333333333333333', runtimeId: 'runtime-exact', attempt: 1,
@@ -109,6 +113,10 @@ test('compiled plugin backend operates the real bridge without prompt dispatch o
     observationMode = 'valid';
     const jobs = await invoke('harness_jobs_list', readTarget);
     assert.equal(jobs.state, 'available');
+    assert.equal(jobs.items[0].fromSubagent, undefined);
+    assert.equal(jobs.items[1].fromSubagent, true, 'compiled server preserves descendant partition');
+    assert.equal(jobs.nextCursor, 'opaque-page');
+    assert.equal((await invoke('harness_jobs_output', { ...readTarget, jobId: jobs.items[1].jobId })).item.text, 'Grandchild read-only output');
     changeWorkspaceAfterList = true;
     await assert.rejects(invoke('harness_jobs_list', readTarget), /workspace/);
     changeWorkspaceAfterList = false;
