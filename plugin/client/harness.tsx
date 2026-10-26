@@ -869,9 +869,8 @@ function HarnessPanel({
 		? rows.find((row): row is WorkerRow => "childId" in row && row.taskId === selectedId) : undefined;
 	const conversationTarget = (row: WorkerRow): AgentConversationTarget => ({ hostId: host.id, agentId, workspaceId,
 		sessionId: session!, taskId: row.taskId, childId: row.childId, attempt: row.attempt, runtimeId: row.runtimeId, title: row.title });
-	const canOpen = (row: { status: string; needsAttention?: boolean }) => ["completed", "failed", "cancelled"].includes(row.status) && !row.needsAttention;
 	const openWorker = (row: WorkerRow) => {
-		if (!openConversation || opening.current || !canOpen(row)) return;
+		if (!openConversation || opening.current) return;
 		opening.current = true; setOpeningId(row.childId); setOpenError(undefined);
 		void openConversation(conversationTarget(row))
 			.catch(error => { if (mounted.current) setOpenError(error instanceof Error ? error.message.slice(0, 300) : "Could not open the conversation."); })
@@ -923,7 +922,7 @@ function HarnessPanel({
 				) : null}
 				</>}
 				{selectedWorker && openConversation
-					? <NativeButton colors={theme.colors} label="Open child chat" disabled={!!openingId || !canOpen(selectedWorker)} onPress={() => openWorker(selectedWorker)} />
+					? <NativeButton colors={theme.colors} label="Open child chat" disabled={!!openingId} onPress={() => openWorker(selectedWorker)} />
 					: taskLink && navigation?.openAgent
 						? <NativeButton colors={theme.colors} label="Open child chat" onPress={() => navigation.openAgent({ agentId: taskLink, serverId: host.id })} />
 						: null}
@@ -1021,7 +1020,7 @@ function HarnessPanel({
 								if (opensChat && "childId" in row) openWorker(row);
 								else select(selectedId === id ? null : { id, session: session!, epoch: epoch! });
 							},
-							!!openingId || (opensChat && !canOpen(row)),
+							!!openingId,
 							viewMode !== "completed",
 							kind === "subagents" && isActiveRow(row) ? row.status : undefined,
 							{ title, detail: metadata, opensChat, expanded: opensChat ? undefined : selectedId === id },

@@ -182,6 +182,7 @@ export class BridgeTransport {
           let requestAgentId: string | null = null;
           let requestSessionId: string | null = null;
           let requestRuntimeEpoch: string | null = null;
+          let responseLimit = 64 * 1024;
           try {
             const request = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, newline)));
             const cb = this.callbacks?.harnessReadOnly;
@@ -196,6 +197,7 @@ export class BridgeTransport {
             requestAgentId = request.agentId;
             requestSessionId = request.sessionId;
             requestRuntimeEpoch = request.runtimeEpoch;
+            if (request.method === "subagents.conversation") responseLimit = 768 * 1024;
             const data = await cb(request);
             response = { v: 1, type: "harness_readonly", id: request.id, success: true,
               agentId: request.agentId, sessionId: request.sessionId, runtimeEpoch: request.runtimeEpoch, data };
@@ -207,7 +209,7 @@ export class BridgeTransport {
             });
           }
           const frame = `${JSON.stringify(response)}\n`;
-          if (Buffer.byteLength(frame) > 64 * 1024) socket.end(`${JSON.stringify({ v: 1, type: "harness_readonly", id: requestId, success: false,
+          if (Buffer.byteLength(frame) > responseLimit) socket.end(`${JSON.stringify({ v: 1, type: "harness_readonly", id: requestId, success: false,
             ...(requestAgentId && requestSessionId && requestRuntimeEpoch ? { agentId: requestAgentId, sessionId: requestSessionId, runtimeEpoch: requestRuntimeEpoch } : {}),
             error: "Oversized read-only result" })}\n`);
           else socket.end(frame);

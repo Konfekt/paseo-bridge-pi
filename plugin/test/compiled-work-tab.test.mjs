@@ -409,20 +409,15 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     for (const status of ['pending', 'launching', 'starting', 'running', 'waiting', 'lost']) {
       workAgents[0].status = status; tree = render();
       assert.match(text(tree), /Worker transcript evidence/, `${status} transcript remains viewable`);
-      assert.equal(continuation().props.disabled, true, status);
-      continuation().props.onPress();
-      await new Promise(resolve => setImmediate(resolve));
-      assert.equal(calls.filter(c => c.name === 'independent_agent_open').length, 0, `${status} cannot dispatch`);
+      assert.equal(continuation().props.disabled, false, status);
     }
     for (const status of ['failed', 'cancelled', 'completed']) {
       workAgents[0].status = status; tree = render();
       assert.equal(continuation().props.disabled, false, `${status} checkpoint can be checked by server`);
     }
     workAgents[0].needsAttention = true; tree = render();
-    assert.equal(continuation().props.disabled, true, 'unresolved interaction is not eligible');
-    continuation().props.onPress();
-    assert.equal(calls.filter(c => c.name === 'independent_agent_open').length, 0);
-    workAgents[0].needsAttention = false; tree = render();
+    assert.equal(continuation().props.disabled, false, 'opening a copy does not answer the unresolved interaction');
+    workAgents[0].status = 'running'; tree = render();
     const continueButton = continuation();
     assert.ok(continueButton, 'interactive continuation is explicit in the rendered conversation');
     continueButton.props.onPress();

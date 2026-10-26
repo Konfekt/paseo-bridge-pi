@@ -34,7 +34,7 @@ export async function callHarnessReadOnly(descriptor: HarnessReadOnlyDescriptor,
         socket.once("connect", () => socket!.write(frame));
         socket.on("data", chunk => {
           buffer += decoder.write(chunk);
-          if (Buffer.byteLength(buffer, "utf8") > 64 * 1024) { finish(new Error("Oversized read-only harness response")); return; }
+          if (Buffer.byteLength(buffer, "utf8") > (method === "subagents.conversation" ? 768 * 1024 : 64 * 1024)) { finish(new Error("Oversized read-only harness response")); return; }
           const newline = buffer.indexOf("\n"); if (newline < 0) return;
           try {
             if (newline !== buffer.length - 1) throw new Error("Unexpected read-only response framing");
