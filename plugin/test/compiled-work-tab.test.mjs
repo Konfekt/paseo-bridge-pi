@@ -112,7 +112,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
   function host() {
     const observers = [], pills = [], panels = [], opened = [], screens = [];
     const cleanup = contribute({
-      paseo: { config: { get: async () => ({ config: { plugins: { 'paseo-accounts': { enabled: true } } } }) }, agents: { list: async () => ({ subscription: { subscribe: observer => observers.push(observer) } }) } },
+      paseo: { config: { get: async () => ({ config: { plugins: { 'paseo-accounts': { enabled: true } } } }) }, agents: { list: async options => ({ subscription: { subscribe: observer => { observer.includeBackground = options?.includeBackground === true; observers.push(observer); } } }) } },
       addScreen: () => () => {}, openScreen: value => screens.push(value),
       addWorkspacePanel: panel => { panels.push(panel); return () => {}; },
       addHeaderButton: () => ({ update() {}, remove() {} }),
@@ -561,8 +561,9 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     rpcResponse = async () => ({ available: true, sessionId: 's', runtimeEpoch: 'e' });
     const titledHost = host(); t.after(() => titledHost.cleanup()); await tick(); snapshot(titledHost);
     const nativeChild = { id: 'native-child', workspaceId: 'child-workspace', provider: 'pi', title: 'Urgent' };
-    const updateChild = agent => titledHost.observers.forEach(observer => observer.update({ type: 'agent_update', payload: { kind: 'upsert', agent } }));
+    const updateChild = agent => titledHost.observers.filter(observer => observer.includeBackground).forEach(observer => observer.update({ type: 'agent_update', payload: { kind: 'upsert', agent } }));
     updateChild(nativeChild);
+    assert.equal(pill(titledHost, nativeChild.id), undefined, 'background title discovery does not enable deferred composer-pill changes');
     workAgents = [{ taskId: 'title-task', childId: 'title-child', groupId: 'title-group', attempt: 1, runtimeId: 'title-runtime', status: 'running', title: 'URGENT original instructions remain in expanded metadata', paseoAgentId: nativeChild.id, paseoWorkspaceId: nativeChild.workspaceId }];
     click(titledHost, 'a'); tree = render(titledHost); select(tree, 'Agents'); tree = render(titledHost);
     assert.ok(rows(tree).length, `Native title row missing: ${text(tree)}`);

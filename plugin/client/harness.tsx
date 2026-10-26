@@ -79,6 +79,9 @@ export function contributeHarness(client: PluginClientContext) {
 			buttons: PluginButtonRegistration[];
 		}
 	>();
+	// Native title discovery includes background workspaces without changing
+	// composer-pill eligibility or source selection from the regular directory.
+	const nativeTitles = new Map<string, { workspaceId: string; title?: string | null }>();
 	const lifetime = new AbortController();
 	let stopped = false;
 	const conversations = createAgentConversationTabs(client);
@@ -169,7 +172,7 @@ export function contributeHarness(client: PluginClientContext) {
 				agentId={agentId}
 				view={work.view(workspaceId, agentId)}
 				sourceTitle={entry?.title || "Conversation work"}
-				resolveChildTitle={row => nativeChildTitle(row, id => entries.get(id))}
+				resolveChildTitle={row => nativeChildTitle(row, id => nativeTitles.get(id))}
 				openConversation={async (target) => {
 					if (!current() || target.agentId !== agentId ||
 						target.workspaceId !== workspaceId || target.hostId !== props.host.id)
@@ -283,6 +286,34 @@ export function contributeHarness(client: PluginClientContext) {
 		entries.set(agent.id, entry);
 		work.refresh();
 	};
+	const updateNativeTitle = (agent: Agent) => {
+		if (stopped) return;
+		const old = nativeTitles.get(agent.id);
+		if (agent.provider !== "pi" || agent.archivedAt || !agent.workspaceId) {
+			if (nativeTitles.delete(agent.id)) work.refresh();
+			return;
+		}
+		if (old?.workspaceId === agent.workspaceId && old.title === agent.title) return;
+		nativeTitles.set(agent.id, { workspaceId: agent.workspaceId, title: agent.title });
+		work.refresh();
+	};
+	void client.paseo.agents.list({ includeBackground: true, subscribe: {}, signal: lifetime.signal }).then(({ subscription }) => {
+		if (stopped) return;
+		subscription!.subscribe({
+			snapshot: ({ entries: agents }) => {
+				if (stopped) return;
+				const ids = new Set(agents.map(({ agent }) => agent.id));
+				for (const id of nativeTitles.keys()) if (!ids.has(id)) nativeTitles.delete(id);
+				for (const { agent } of agents) updateNativeTitle(agent);
+				work.refresh();
+			},
+			update: message => {
+				if (stopped || message.type !== "agent_update") return;
+				if (message.payload.kind === "remove") { if (nativeTitles.delete(message.payload.agentId)) work.refresh(); }
+				else updateNativeTitle(message.payload.agent);
+			},
+		});
+	}).catch(() => { /* No trusted native title: keep the bounded name/profile label. */ });
 	void client.paseo.agents
 		.list({ subscribe: {}, signal: lifetime.signal })
 		.then(({ subscription }) => {
@@ -310,6 +341,7 @@ export function contributeHarness(client: PluginClientContext) {
 	return () => {
 		stopped = true;
 		lifetime.abort();
+		nativeTitles.clear();
 		for (const timer of retries) clearTimeout(timer);
 		for (const id of entries.keys()) remove(id);
 		panels.forEach((dispose) => dispose());
