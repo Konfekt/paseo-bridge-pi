@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { parseTmuxTarget } from "../shim/tmux-target.js";
 import { paseoImportArgs, importRetryDelay, retryableWorkspaceImportFailure, workspaceIdForPlacement } from "./import-placement.js";
 import { completeWithSessionModel } from "./session-model-request.ts";
-import { sameReadOnlySession } from "./read-only-session.ts";
+import { sameReadOnlySession, assertReadOnlyConversationResponse } from "./read-only-session.ts";
 import { buildSessionContext, type ExtensionAPI, type ExtensionContext, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import * as sessionManagerApi from "@earendil-works/pi-coding-agent";
 import { BridgeTransport, retainBridgeForReload, takeBridgeAfterReload, discardRetainedBridge } from "./bridge-transport.js";
@@ -1181,7 +1181,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
           if (typeof service.conversation !== "function") throw new Error("Reload Pi to enable retained conversations");
           const result = await service.conversation(payload);
           assertCurrent();
-          if (result?.sessionId !== request.sessionId || Buffer.byteLength(JSON.stringify(result)) > 48 * 1024) throw new Error("Invalid conversation response");
+          assertReadOnlyConversationResponse(result, request.sessionId);
           if (result.item && (result.item.taskId !== payload.taskId || result.item.childId !== payload.childId
             || result.item.attempt !== payload.attempt || result.item.runtimeId !== payload.runtimeId)) throw new Error("Conversation identity changed");
           return result;
