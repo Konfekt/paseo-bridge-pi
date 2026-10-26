@@ -147,14 +147,14 @@ test('real HeadlessForegroundManager and Pi workers integrate through the privat
       let latest;
       while (Date.now() < deadline) {
         latest = await invoke('foreground_tasks_status', target);
-        const task = latest.tasks?.find(item => item.title.includes(title) && predicate(item));
+        const task = latest.tasks?.find(item => item.title === title.replaceAll('_', ' ') && predicate(item));
         if (task) return task;
         await delay(100);
       }
       throw new Error(`Timed out waiting for ${title}; last status=${JSON.stringify(latest)}`);
     };
     const launch = (title, taskText) => {
-      const promise = manager.launch({ task: taskText, cwd, model: 'harness-test/mock:off' }, owner, cwd);
+      const promise = manager.launch({ displayName: title.replaceAll('_', ' '), task: taskText, cwd, model: 'harness-test/mock:off' }, owner, cwd);
       promise.catch(() => {});
       return promise;
     };
