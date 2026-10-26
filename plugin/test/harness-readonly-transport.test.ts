@@ -73,7 +73,7 @@ test("retained transport lazily initializes socket state and rejects a stale epo
     transport.start();
     client = (await import("node:net")).connect(transport.pipePath);
     await new Promise<void>((resolve, reject) => client!.once("connect", resolve).once("error", reject));
-    const oldDescriptor = { ...base, socketPath: `${transport.pipePath}.harness-readonly`, capability: transport.harnessReadOnlyCapability, runtimeEpoch: transport.operatorEpoch };
+    const oldDescriptor = { ...base, socketPath: transport.harnessReadOnlySocketPath, capability: transport.harnessReadOnlyCapability, runtimeEpoch: transport.operatorEpoch };
     (transport as any).readonlySockets = undefined; // retained pre-endpoint instances lack this newly added field
     transport.bind({ command: async () => {}, attached() {}, detached() {}, error() {}, harnessReadOnly: callback });
     expectedCapability = transport.harnessReadOnlyCapability;
@@ -94,7 +94,7 @@ test("bridge sanitizes read-only errors and preserves a valid request ID", async
     transport.start();
     client = (await import("node:net")).connect(transport.pipePath);
     await new Promise<void>((resolve, reject) => client!.once("connect", resolve).once("error", reject));
-    const descriptor = { ...base, socketPath: `${transport.pipePath}.harness-readonly`, capability: transport.harnessReadOnlyCapability };
+    const descriptor = { ...base, socketPath: transport.harnessReadOnlySocketPath, capability: transport.harnessReadOnlyCapability };
     await assert.rejects(callHarnessReadOnly(descriptor, "status", { sessionId: "session" }), /bad input /);
   } finally { client?.destroy(); transport.close(); await rm(dir, { recursive: true, force: true }); }
 });

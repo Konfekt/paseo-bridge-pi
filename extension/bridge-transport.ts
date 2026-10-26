@@ -39,6 +39,8 @@ export class BridgeTransport {
   private operatorServer: net.Server | null = null;
   private operatorSockets = new Set<net.Socket>();
   private readonlyServer: net.Server | null = null;
+  private readonlyEndpointVersion = 2;
+  get harnessReadOnlySocketPath(): string { return `${this.pipePath}.harness-readonly-v2`; }
   private readonlySockets = new Set<net.Socket>();
   private foregroundTasksServer: net.Server | null = null;
   private foregroundTasksSockets = new Set<net.Socket>();
@@ -159,22 +161,30 @@ export class BridgeTransport {
   private ensureReadonlyEndpoint(): void {
     this.readonlySockets ??= new Set<net.Socket>();
     if (this.readonlyServer || this.closed) return;
-    const socketPath = `${this.pipePath}.harness-readonly`;
+    const socketPath = this.harnessReadOnlySocketPath;
     if (process.platform !== "win32") { try { fs.unlinkSync(socketPath); } catch {} }
     this.readonlyServer = net.createServer(socket => this.handleReadonlyConnection(socket));
     this.readonlyServer.on("error", (error) => this.callbacks?.error(error));
-    this.readonlyServer.listen(socketPath, () => { if (process.platform !== "win32") { try { fs.chmodSync(socketPath, 0o600); } catch {} } });
+    const makePrivate = () => { if (process.platform !== "win32") { try { fs.chmodSync(socketPath, 0o600); } catch {} } };
+    this.readonlyServer.listen(socketPath, makePrivate);
+    // Bun can create the socket synchronously without invoking Node's listen
+    // callback. Restrict it before publishing a descriptor on either runtime.
+    makePrivate();
   }
 
-  /** Existing net.Server listeners retain their defining module across /reload.
-   * Replace the observation-only listener, not the live provider/controller. */
+  /** Bun retains createServer's original accept callback independently of its
+   * EventEmitter connection listeners. Retire only the legacy observation
+   * endpoint; a versioned path avoids old close/unlink racing the new listener.
+   * The provider/controller socket and all runtime capabilities remain owned. */
   upgradeReadonlyEndpoint(): void {
     this.readonlySockets ??= new Set<net.Socket>();
     for (const socket of this.readonlySockets) socket.destroy();
     this.readonlySockets.clear();
-    if (!this.readonlyServer) return;
-    this.readonlyServer.removeAllListeners("connection");
-    this.readonlyServer.on("connection", socket => this.handleReadonlyConnection(socket));
+    if (this.readonlyEndpointVersion === 2) return;
+    this.readonlyEndpointVersion = 2;
+    const legacy = this.readonlyServer;
+    this.readonlyServer = null;
+    legacy?.close();
   }
 
   private handleReadonlyConnection(socket: net.Socket): void {

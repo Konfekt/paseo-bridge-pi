@@ -85,7 +85,7 @@ test('compiled plugin backend operates the real bridge without prompt dispatch o
     client = net.connect(transport.pipePath);
     await once(client, 'connect');
     writePermissionGateOperatorDescriptor(join(root, '.pi', 'paseo-bridge'), descriptor);
-    const readDescriptor = { version: 1, socketPath: `${transport.pipePath}.harness-readonly`,
+    const readDescriptor = { version: 1, socketPath: transport.harnessReadOnlySocketPath,
       capability: transport.harnessReadOnlyCapability, agentId: 'agent', sessionId: 'session', runtimeEpoch: transport.operatorEpoch };
     writeHarnessReadOnlyDescriptor(join(root, '.pi', 'paseo-bridge'), readDescriptor);
     const foregroundDescriptor = { version: 1, socketPath: foregroundTasksSocketPath(transport.pipePath), capability: transport.foregroundTasksCapability,
@@ -192,7 +192,7 @@ test('compiled plugin backend operates the real bridge without prompt dispatch o
     transport.bind({ command: async () => {}, attached() {}, detached() {}, error: error => errors.push(error),
       harnessReadOnly: async request => ({ available: true, sessionId: request.sessionId, jobs: true, subagents: true }) });
     writeHarnessReadOnlyDescriptor(join(root, '.pi', 'paseo-bridge'), { version: 1,
-      socketPath: `${transport.pipePath}.harness-readonly`, capability: transport.harnessReadOnlyCapability,
+      socketPath: transport.harnessReadOnlySocketPath, capability: transport.harnessReadOnlyCapability,
       agentId: 'agent', sessionId: 'session', runtimeEpoch: transport.operatorEpoch });
     const noGateStatus = await invoke('harness_status', target);
     assert.equal(noGateStatus.available, true);

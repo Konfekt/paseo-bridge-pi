@@ -996,7 +996,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       const sessionId = ctx.sessionManager.getSessionId();
       if (typeof sessionId !== "string" || !sessionId) throw new Error("Session unavailable");
       writeHarnessReadOnlyDescriptor(path.join(os.homedir(), ".pi", "paseo-bridge"), {
-        version: 1, socketPath: `${activeTransport.pipePath}.harness-readonly`,
+        version: 1, socketPath: activeTransport.harnessReadOnlySocketPath,
         capability: activeTransport.harnessReadOnlyCapability, agentId, sessionId, runtimeEpoch: activeTransport.operatorEpoch,
       });
     } catch { revokeHarnessReadOnlyDescriptor(); }

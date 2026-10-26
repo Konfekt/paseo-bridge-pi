@@ -11,7 +11,11 @@ import { callHarnessReadOnly } from "../plugin/server/harness-readonly-transport
 
 test("reload replaces legacy64KiB readonly listener without replacing provider socket or losing500unicode messages", async () => {
   const root = await mkdtemp(join(tmpdir(), "readonly-listener-upgrade-"));
-  const transport = new BridgeTransport("session", join(root, "bridge.sock"));
+  class LegacyTransport extends BridgeTransport {
+    get harnessReadOnlySocketPath(): string { return `${this.pipePath}.harness-readonly`; }
+  }
+  const transport = new LegacyTransport("session", join(root, "bridge.sock"));
+  delete (transport as any).readonlyEndpointVersion;
   let client: net.Socket | undefined, stalled: net.Socket | undefined;
   const result = { sessionId: "session", item: { messages: Array.from({ length: 500 }, (_, id) => ({ id: String(id), role: "assistant", text: "🌍".repeat(150) + "\u0000".repeat(40) })), liveText: "x".repeat(16 * 1024) } };
   const json = JSON.stringify(result);
@@ -26,7 +30,7 @@ test("reload replaces legacy64KiB readonly listener without replacing provider s
       return currentResult;
     },
   };
-  const descriptor = () => ({ version: 1, socketPath: `${transport.pipePath}.harness-readonly`, capability: transport.harnessReadOnlyCapability, agentId: "agent", sessionId: "session", runtimeEpoch: transport.operatorEpoch });
+  const descriptor = () => ({ version: 1, socketPath: transport.harnessReadOnlySocketPath, capability: transport.harnessReadOnlyCapability, agentId: "agent", sessionId: "session", runtimeEpoch: transport.operatorEpoch });
   try {
     transport.bind(callbacks); transport.start();
     client = net.connect(transport.pipePath); await once(client, "connect");
@@ -57,13 +61,14 @@ test("reload replaces legacy64KiB readonly listener without replacing provider s
     assert.equal(takeBridgeAfterReload("session")?.transport, transport);
     await stalledClosed;
     transport.bind(callbacks);
-    assert.equal((transport as any).readonlyServer, readonly, "listening socket/path retained; only connection listener upgraded");
+    assert.notEqual((transport as any).readonlyServer, readonly, "only legacy observation server replaced for Bun compatibility");
+    assert.notEqual(descriptor().socketPath, stale.socketPath, "versioned endpoint cannot race legacy close/unlink");
     assert.equal(transport.connected, true);
     const page: any = await callHarnessReadOnly(descriptor(), "subagents.conversation", {});
     assert.deepEqual(page, result);
     assert.equal(page.item.messages.length, 500);
     assert.equal(legacyCalls, 1, "old module closure no longer handles requests");
-    await assert.rejects(callHarnessReadOnly(stale, "subagents.conversation", {}), /authentication failed/);
+    await assert.rejects(callHarnessReadOnly({ ...stale, socketPath: descriptor().socketPath }, "subagents.conversation", {}), /authentication failed/);
     await assert.rejects(callHarnessReadOnly(descriptor(), "jobs.output", {}), /Oversized read-only result/, "non-conversation limits remain64KiB");
     currentResult = { sessionId: "session", text: "x".repeat(768 * 1024) };
     await assert.rejects(callHarnessReadOnly(descriptor(), "subagents.conversation", {}), /Oversized read-only result/, "conversation wire budget remains bounded including envelope");
