@@ -203,7 +203,7 @@ test("explicit dormant Activity and fallback Accounts modules retain meters, iso
 				list: async (o) => {
 					signal = o.signal;
 					signals.push(o.signal);
-					return { subscription: { subscribe: (x) => { subscriptionCount++; agentSubscriptions.push(x); if (subscriptionCount <= 2) observers.push(x); else accountSubscription = x; } } };
+					return { subscription: { subscribe: (x) => { agentSubscriptions.push(x); /* Exact-chat/background registration is covered separately; do not mistake its subscription for the dormant workspace picker. */ if (o.includeBackground) return; subscriptionCount++; if (subscriptionCount <= 2) observers.push(x); else accountSubscription = x; } } };
 				},
 			},
 		},
@@ -352,7 +352,7 @@ test("explicit dormant Activity and fallback Accounts modules retain meters, iso
 		const accountRender = () => { hook = 0; return header.button.behavior.Content(accountProps); };
 		let accountTree = accountRender();
 		await new Promise(r => setImmediate(r));
-		assert.equal(agentSubscriptions.length, 3, 'explicit Activity, fallback Accounts registration, and opened Accounts popover subscribe');
+		assert.equal(agentSubscriptions.length, 4, 'Activity, exact-chat Codex, fallback Accounts registration, and opened Accounts popover subscribe independently');
 		agentSubscriptions.at(-1).snapshot({ entries: [
 			{ agent: { id: "agent-a", name: "Alpha", workspaceId: "workspace", provider: "pi" } },
 			{ agent: { id: "agent-b", name: "Beta", workspaceId: "workspace", provider: "pi" } },
