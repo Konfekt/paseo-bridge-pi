@@ -1,3 +1,4 @@
+import { observeAgentDirectory, retainContribution } from "./agent-directory";
 import { useQuery } from "@tanstack/react-query";
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { readJobs } from "./jobs-pages";
@@ -71,6 +72,10 @@ type Agent = {
 
 /** Registration is local. Queries run only for a mounted button or open view. */
 export function contributeHarness(client: PluginClientContext) {
+	return retainContribution(client, "work", () => registerHarness(client));
+}
+
+function registerHarness(client: PluginClientContext) {
 	const entries = new Map<
 		string,
 		{
@@ -79,10 +84,8 @@ export function contributeHarness(client: PluginClientContext) {
 			buttons: PluginButtonRegistration[];
 		}
 	>();
-	// Native title discovery includes background workspaces without changing
-	// composer-pill eligibility or source selection from the regular directory.
+	// Titles and controls share the same background-inclusive inventory.
 	const nativeTitles = new Map<string, { workspaceId: string; title?: string | null }>();
-	const lifetime = new AbortController();
 	let stopped = false;
 	const conversations = createAgentConversationTabs(client);
 	const work = createWorkTabState();
@@ -297,50 +300,21 @@ export function contributeHarness(client: PluginClientContext) {
 		nativeTitles.set(agent.id, { workspaceId: agent.workspaceId, title: agent.title });
 		work.refresh();
 	};
-	void client.paseo.agents.list({ includeBackground: true, subscribe: {}, signal: lifetime.signal }).then(({ subscription }) => {
-		if (stopped) return;
-		subscription!.subscribe({
-			snapshot: ({ entries: agents }) => {
-				if (stopped) return;
-				const ids = new Set(agents.map(({ agent }) => agent.id));
-				for (const id of nativeTitles.keys()) if (!ids.has(id)) nativeTitles.delete(id);
-				for (const { agent } of agents) updateNativeTitle(agent);
-				work.refresh();
-			},
-			update: message => {
-				if (stopped || message.type !== "agent_update") return;
-				if (message.payload.kind === "remove") { if (nativeTitles.delete(message.payload.agentId)) work.refresh(); }
-				else updateNativeTitle(message.payload.agent);
-			},
-		});
-	}).catch(() => { /* No trusted native title: keep the bounded name/profile label. */ });
-	void client.paseo.agents
-		.list({ includeBackground: true, subscribe: {}, signal: lifetime.signal })
-		.then(({ subscription }) => {
-			if (stopped) return;
-			subscription.subscribe({
-				snapshot: ({ entries: agents }) => {
-					const ids = new Set(agents.map(({ agent }) => agent.id));
-					for (const id of entries.keys()) if (!ids.has(id)) remove(id);
-					for (const { agent } of agents) register(agent);
-					hydrated = true;
-					work.refresh();
-				},
-				update: (message) => {
-					if (message.type !== "agent_update") return;
-					if (message.payload.kind === "remove")
-						remove(message.payload.agentId);
-					else register(message.payload.agent);
-				},
-			});
-		})
-		.catch((error) => {
-			if (!stopped)
-				console.error("Read-only harness observation unavailable", error);
-		});
+	const stopDirectory = observeAgentDirectory(client, {
+		snapshot: agents => {
+			const ids = new Set(agents.map(agent => agent.id));
+			for (const id of nativeTitles.keys()) if (!ids.has(id)) nativeTitles.delete(id);
+			for (const id of entries.keys()) if (!ids.has(id)) remove(id);
+			for (const agent of agents) { updateNativeTitle(agent); register(agent); }
+			hydrated = true;
+			work.refresh();
+		},
+		upsert: agent => { updateNativeTitle(agent); register(agent); },
+		remove: id => { nativeTitles.delete(id); remove(id); work.refresh(); },
+	});
 	return () => {
 		stopped = true;
-		lifetime.abort();
+		stopDirectory();
 		nativeTitles.clear();
 		for (const timer of retries) clearTimeout(timer);
 		for (const id of entries.keys()) remove(id);

@@ -4,7 +4,7 @@ import { ScrollView } from "@getpaseo/plugin/client/react-native";
 import { SettingsAction } from "@getpaseo/plugin/client/ui";
 import { Metadata, NativeButton } from "./presentation";
 import { NativeRunningTurnFooter, NativeToolBadge } from "./native-transcript";
-import { mergeLiveToolEvents } from "./native-tool-details";
+import { mergeLiveToolEvents, preferredToolResult, literalToolResult } from "./native-tool-details";
 import { isNativeScrollViewNearBottom } from "./native-transcript-model";
 import { TranscriptMarkdown } from "./transcript-markdown";
 import { useQuery } from "@tanstack/react-query";
@@ -63,7 +63,7 @@ export function WorkerConversation({ target, epoch, colors, platform }: {
           {message.role === "assistant" && message.text ? <TranscriptMarkdown text={message.text} colors={colors} platform={platform} /> : null}
           {message.role === "tool" && (!message.toolCallId || !visibleCallIds.has(message.toolCallId)) ? <NativeToolBadge
             name={message.toolName ?? "tool"} status={message.status ?? "unknown"}
-            details={message.text} colors={colors} expanded={!!expanded[message.toolCallId ?? message.id]}
+            result={literalToolResult(message.text, message.resultFormat)} colors={colors} expanded={!!expanded[message.toolCallId ?? message.id]}
             onToggle={() => toggleTool(message.toolCallId ?? message.id)} /> : null}
           {message.parts?.map(part => {
             if (part.type !== "toolCall") return null;
@@ -71,7 +71,7 @@ export function WorkerConversation({ target, epoch, colors, platform }: {
             const retained = retainedResults.get(part.id);
             const args = part.arguments ?? live?.arguments;
             // A correlated live completion can be newer than the retained page.
-            const result = live?.result ?? retained?.text ?? part.result;
+            const result = preferredToolResult(live?.result, retained?.text ?? part.result, live?.resultFormat, retained?.resultFormat ?? part.resultFormat);
             return <NativeToolBadge key={`${message.id}:${part.id}`} name={part.name} argumentsValue={args} status={live?.status ?? retained?.status ?? part.status ?? "unknown"}
               result={result} colors={colors}
               expanded={!!expanded[part.id]} onToggle={() => toggleTool(part.id)} />;
@@ -81,7 +81,7 @@ export function WorkerConversation({ target, epoch, colors, platform }: {
         })}
         {cursor == null && item.liveText ? <TranscriptMarkdown text={item.liveText} colors={colors} platform={platform} /> : null}
         {cursor == null ? liveTools.filter(event => !persistedCallIds.has(event.toolCallId)).map(event => <NativeToolBadge key={`live:${event.toolCallId}`} name={event.name} argumentsValue={event.arguments} status={event.status ?? "running"}
-          result={event.result ?? retainedResults.get(event.toolCallId)?.text} colors={colors}
+          result={preferredToolResult(event.result, retainedResults.get(event.toolCallId)?.text, event.resultFormat, retainedResults.get(event.toolCallId)?.resultFormat)} colors={colors}
           expanded={!!expanded[event.toolCallId]} onToggle={() => toggleTool(event.toolCallId)} />) : null}
         {cursor == null && item.execution === "running" ? <NativeRunningTurnFooter color={colors.foreground} /> : null}
         {!item.messages.length && !item.liveText ? <Metadata colors={colors}>No messages recorded yet.</Metadata> : null}

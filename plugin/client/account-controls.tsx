@@ -1,3 +1,5 @@
+import { observeAgentDirectory, retainContribution } from "./agent-directory";
+import { isDormantIndependentAgent } from "../shared/independent-state";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Linking, Pressable, Text, View } from "react-native";
@@ -30,6 +32,10 @@ type Selection = { agentId: string; sessionId: string; runtimeEpoch: string };
 const selectedSessions = new Map<string, Selection>();
 
 export function contributeAccountControls(client: PluginClientContext) {
+	return retainContribution(client, "accounts", () => registerAccountControls(client));
+}
+
+function registerAccountControls(client: PluginClientContext) {
 	const stopChat = contributeChatAccountControls(client);
 	let disposed = false;
 	let stop: (() => void) | undefined;
@@ -60,17 +66,20 @@ export function contributeAccountControls(client: PluginClientContext) {
 }
 
 export function contributeChatAccountControls(client: PluginClientContext) {
+	return retainContribution(client, "chat-accounts", () => registerChatAccountControls(client));
+}
+
+function registerChatAccountControls(client: PluginClientContext) {
 	const entries = new Map<string, { workspaceId: string; button: PluginButtonRegistration }>();
-	const controller = new AbortController();
 	let stopped = false;
 	const remove = (id: string) => { entries.get(id)?.button.remove(); entries.delete(id); };
 	const register = (agent: Agent) => {
 		if (stopped) return;
-		if (agent.provider !== "pi" || agent.archivedAt || !agent.workspaceId) { remove(agent.id); return; }
+		if (agent.provider !== "pi" || agent.archivedAt || !agent.workspaceId || isDormantIndependentAgent(agent)) { remove(agent.id); return; }
 		if (entries.get(agent.id)?.workspaceId === agent.workspaceId) return;
 		remove(agent.id);
 		const Content = (props: PluginButtonContentProps) => {
-			if (props.context !== "agent" || props.agentId !== agent.id || props.workspaceId !== agent.workspaceId) return <View />;
+			if (stopped || entries.get(agent.id)?.button !== button || props.context !== "agent" || props.agentId !== agent.id || props.workspaceId !== agent.workspaceId) return <View />;
 			return <View style={{ width: 340, maxWidth: "100%", padding: 12 }}>
 				<Metadata colors={props.theme.colors}>This chat and inheriting descendants only. Parent and sibling chats are unchanged.</Metadata>
 				<ProviderAccountSection key={`${props.host.id}/${props.agentId}`} agentId={props.agentId} workspaceId={props.workspaceId} hostId={props.host.id} colors={props.theme.colors} providerId="openai-codex" onBinding={() => {}} />
@@ -80,14 +89,12 @@ export function contributeChatAccountControls(client: PluginClientContext) {
 			button: { title: "Codex account · this chat", label: "Codex", icon: "UserRound", behavior: { kind: "popover", Content } } });
 		entries.set(agent.id, { workspaceId: agent.workspaceId, button });
 	};
-	void client.paseo.agents.list({ includeBackground: true, subscribe: {}, signal: controller.signal }).then(({ subscription }) => {
-		if (stopped) return;
-		subscription.subscribe({
-			snapshot: ({ entries: agents }) => { if (stopped) return; const ids = new Set(agents.map(({ agent }) => agent.id)); for (const id of entries.keys()) if (!ids.has(id)) remove(id); for (const { agent } of agents) register(agent); },
-			update: (message) => { if (stopped || message.type !== "agent_update") return; if (message.payload.kind === "remove") remove(message.payload.agentId); else register(message.payload.agent); },
-		});
-	}).catch(() => {});
-	return () => { stopped = true; controller.abort(); for (const id of entries.keys()) remove(id); };
+	const stopDirectory = observeAgentDirectory(client, {
+		snapshot: agents => { const ids = new Set(agents.map(agent => agent.id)); for (const id of entries.keys()) if (!ids.has(id)) remove(id); for (const agent of agents) register(agent); },
+		upsert: register,
+		remove,
+	});
+	return () => { stopped = true; stopDirectory(); for (const id of entries.keys()) remove(id); };
 }
 
 function contributeLegacyAccountControls(client: PluginClientContext) {

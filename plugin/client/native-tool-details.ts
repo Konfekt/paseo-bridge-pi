@@ -46,6 +46,18 @@ function envelope(value: unknown): value is Record<string, unknown> {
   // force a raw-wrapper fallback (which could expose binary media payloads).
   return Array.isArray(blocks) ? transportHint : structured;
 }
+/** Exact producer carrier only; never attempt to reconstruct partial JSON. */
+export function isLegacyTruncatedResult(value: unknown): value is { truncated: true; preview: string } {
+  return record(value) && value.truncated === true && typeof value.preview === "string" && value.normalized !== true && Object.keys(value).every(key => ["truncated", "preview"].includes(key));
+}
+export function literalToolResult(value: unknown, format?: "text"): unknown {
+  return format === "text" && typeof value === "string" ? { content: [{ type: "text", text: value }] } : value;
+}
+export function preferredToolResult(live: unknown, retained: unknown, liveFormat?: "text", retainedFormat?: "text"): unknown {
+  return isLegacyTruncatedResult(live) && retained !== undefined && retained !== ""
+    ? literalToolResult(retained, retainedFormat)
+    : live !== undefined && live !== null ? literalToolResult(live, liveFormat) : literalToolResult(retained, retainedFormat);
+}
 /** Parse only transport positions. Text blocks are terminal even when they contain JSON. */
 export function normalizeToolResult(input: unknown): string {
   function decode(value: unknown, depth: number): string {
@@ -66,6 +78,13 @@ export function normalizeToolResult(input: unknown): string {
         if (envelope(candidate)) return decode(candidate, level);
       }
       return value;
+    }
+    if (record(value) && value.truncated === true && typeof value.preview === "string" && Object.keys(value).every(key => ["truncated", "preview", "normalized"].includes(key))) {
+      if (value.normalized === true) return bounded(value.preview + "\n[truncated]");
+      // Legacy serialization may have cut INSIDE a JSON string. Only a fully
+      // parseable known envelope can be decoded; otherwise refresh retained source.
+      try { const parsed = JSON.parse(value.preview); if (envelope(parsed)) return bounded(decode(parsed, depth + 1) + "\n[truncated]"); } catch {}
+      return "[structured tool output truncated; refresh source]";
     }
     if (!envelope(value)) return readable(value);
     let output = "";

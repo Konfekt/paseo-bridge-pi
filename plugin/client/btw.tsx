@@ -1,3 +1,4 @@
+import { observeAgentDirectory, retainContribution } from "./agent-directory";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Pressable, Text, View } from "react-native";
@@ -260,8 +261,11 @@ function BtwView({ host, workspaceId, agentId, theme, layout, expanded = false }
 }
 
 export function contributeBtw(client: PluginClientContext) {
+  return retainContribution(client, "btw", () => registerBtw(client));
+}
+
+function registerBtw(client: PluginClientContext) {
   const entries = new Map<string, { workspace: string; button: PluginButtonRegistration }>();
-  const controller = new AbortController();
   let stopped = false;
   const remove = (id: string) => { entries.get(id)?.button.remove(); entries.delete(id); };
   const register = (agent: { id: string; workspaceId?: string | null; provider?: string; archivedAt?: string | null }) => {
@@ -271,7 +275,9 @@ export function contributeBtw(client: PluginClientContext) {
     remove(agent.id);
     const workspaceId = agent.workspaceId;
     let button: PluginButtonRegistration | undefined;
-    const configure = (behavior: PluginButtonBehavior) => button?.update({ behavior });
+    const configure = (behavior: PluginButtonBehavior) => {
+      if (!stopped && entries.get(agent.id)?.button === button) button?.update({ behavior });
+    };
     const modal = createMobileChatState();
     button = client.addComposerPill({ id: "pi-btw", agentId: agent.id, workspaceId,
       button: { label: "btw", title: "btw", icon: props => <BtwButtonIcon {...props} configure={configure} modal={modal} />,
@@ -279,25 +285,18 @@ export function contributeBtw(client: PluginClientContext) {
     });
     entries.set(agent.id, { workspace: workspaceId, button });
   };
-  void client.paseo.agents.list({ includeBackground: true, subscribe: {}, signal: controller.signal }).then(({ subscription }) => {
-    if (stopped) return;
-    subscription.subscribe({
-      snapshot: ({ entries: agents }) => {
-        if (stopped) return;
-        const ids = new Set(agents.map(({ agent }) => agent.id));
-        for (const id of entries.keys()) if (!ids.has(id)) remove(id);
-        for (const { agent } of agents) register(agent);
-      },
-      update: message => {
-        if (stopped || message.type !== "agent_update") return;
-        if (message.payload.kind === "remove") remove(message.payload.agentId);
-        else register(message.payload.agent);
-      },
-    });
-  }).catch(error => { if (!stopped) console.error("BTW subscription unavailable", error); });
+  const stopDirectory = observeAgentDirectory(client, {
+    snapshot: agents => {
+      const ids = new Set(agents.map(agent => agent.id));
+      for (const id of entries.keys()) if (!ids.has(id)) remove(id);
+      for (const agent of agents) register(agent);
+    },
+    upsert: register,
+    remove,
+  });
   return () => {
     stopped = true;
-    controller.abort();
+    stopDirectory();
     for (const id of entries.keys()) remove(id);
   };
 }
