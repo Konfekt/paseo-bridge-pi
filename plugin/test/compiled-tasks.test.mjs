@@ -31,12 +31,12 @@ test('compiled Work replaces legacy task pills, lazily scopes foreground/backgro
   const status = { available:true,sessionId:'session',runtimeEpoch:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',tasks:[task] };
   const load = name => {
     if (name === '@getpaseo/plugin') return { defineRpc: c => c, defineSettings: c => c };
-    if (name === '@getpaseo/plugin/client') return { useSettings: () => ({ status: 'loading' }), useRpc: contract => async input => { contract.input.parse(input); calls.push({name:contract.name,input}); return {}; } };
+    if (name === '@getpaseo/plugin/client') return { useSettings: () => ({ status: 'loading' }), useRpc: contract => async input => { contract.input.parse(input); calls.push({name:contract.name,input}); return contract.name === 'harness_jobs_list' ? { protocol:1,state:'available',sessionId:'session',items:[],lastUpdated:null,stale:false } : {}; } };
     if (name === '@getpaseo/plugin/client/ui') return { SettingsAction:'SettingsAction', SettingsSection:'SettingsSection' };
     if (name === '@getpaseo/plugin/client/react-native') return { ScrollView:'ScrollView',TextInput:'TextInput',Icon:'Icon' };
     if (name === 'react-native') return { Text:'Text',View:'View',Pressable:'Pressable', Animated:{ Value:class { interpolate() { return 'rotation'; } }, View:'AnimatedView' }, Easing:{linear:x=>x}, AccessibilityInfo:{isReduceMotionEnabled:async()=>true,addEventListener:()=>({remove(){}})} };
     if (name === 'react/jsx-runtime') return { jsx,jsxs:jsx,Fragment:'Fragment' };
-    if (name === 'react') return { createElement:(type, props, ...children)=>jsx(type,{...props,...(children.length?{children}:{})},props?.key), useState, useRef:initial=>useState(()=>({current:initial}))[0], useEffect:fn=>{ const cleanup=fn(); if(cleanup) effects.push(cleanup); }, useLayoutEffect(){}, useMemo:fn=>fn(), useCallback:fn=>fn };
+    if (name === 'react') return { Fragment:'Fragment', createElement:(type, props, ...children)=>jsx(type,{...props,...(children.length?{children}:{})},props?.key), useState, useRef:initial=>useState(()=>({current:initial}))[0], useEffect:fn=>{ const cleanup=fn(); if(cleanup) effects.push(cleanup); }, useLayoutEffect(){}, useMemo:fn=>fn(), useCallback:fn=>fn };
     if (name === '@tanstack/react-query') return { useQuery: options => {
       queries.push(options); const key=options.queryKey[0];
       const data=key==='harness-status'||key==='foreground-tasks'?status:key==='harness-list'?{state:'available',items:options.queryKey[1]==='jobs'?[{jobId:'j1',name:'Build',status:'running',createdAt:new Date().toISOString()}]:[{taskId:'t1',childId:'c1',title:'Helper',status:'running',attempt:1}]}:undefined;

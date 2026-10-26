@@ -34,7 +34,7 @@ test('compiled read-only panels render lists/details, bind generations and only 
     if (name === '@getpaseo/plugin/client/react-native') return { ScrollView: 'ScrollView', Icon:'Icon', copyText:async () => {} };
     if (name === 'react-native') return { Text: 'Text', View: 'View', Pressable: 'Pressable' };
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'Fragment' };
-    if (name === 'react') return { useEffect() {}, useRef:initial=>({current:initial}), useMemo:fn=>fn(), useCallback:fn=>fn, useState: initial => {
+    if (name === 'react') return { Fragment:'Fragment', useEffect() {}, useRef:initial=>({current:initial}), useMemo:fn=>fn(), useCallback:fn=>fn, useState: initial => {
       const slot = hookIndex++; if (!(slot in states)) states[slot] = initial;
       return [states[slot], value => { states[slot] = value; }];
     } };
