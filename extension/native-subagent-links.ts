@@ -3,7 +3,7 @@ import * as path from "node:path";
 type RecordValue = Record<string, any>;
 export type NativeSessionSource = {
   taskId: string; childId: string; groupId: string; attempt: number; runtimeId: string | null;
-  reaped?: boolean; sessionFile?: string; status: "running" | "completed" | "failed" | "cancelled" | "lost";
+  reaped?: boolean; sessionFile?: string; title?: string; status: "running" | "completed" | "failed" | "cancelled" | "lost";
 };
 export type ResolveNativeSession = (input: { taskId: string; childId: string; attempt: number }) => Promise<NativeSessionSource | undefined>;
 type Link = { id: string; agent: string; task: string; taskId: string; childId: string; attempt: number; retries: number; nextRead: number; source?: NativeSessionSource; sent?: string };
@@ -128,7 +128,7 @@ export class NativeSubagentLinks {
         const reaped = s.reaped === true || (s.runtimeId !== null && this.reapedBindings.some(binding => binding.taskId === s.taskId && binding.childId === s.childId
           && binding.attempt === s.attempt && binding.runtimeId === s.runtimeId));
         const binding = { id: link.id, taskId: s.taskId, childId: s.childId, attempt: s.attempt, runtimeId: s.runtimeId,
-          ...(s.sessionFile ? { sessionFile: s.sessionFile } : {}), status: s.status, ...(reaped ? { hidden: true } : {}), agent: link.agent, task: link.task };
+          ...(s.sessionFile ? { sessionFile: s.sessionFile } : {}), status: s.status, ...(reaped ? { hidden: true } : {}), agent: link.agent, task: text(s.title, 80) && s.title.trim() === s.title && !/[\p{Cc}\p{Cf}]/u.test(s.title) && s.title.split(/\s+/u).length <= 4 ? s.title : link.task };
         const fingerprint = JSON.stringify(binding);
         if (link.sent === fingerprint) continue;
         bindings.push(binding); delivered.push([link, fingerprint]);

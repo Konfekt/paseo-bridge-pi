@@ -50,6 +50,7 @@ import { compactWithResult } from "./compaction-command.js";
 import { buildProjectedHistory, projectedUserCaptures } from "./session-projection.js";
 import { handleSecurityModeRequest } from "./security-mode-operator.js";
 import { featureSnapshot, handleNativeFeatureRequest } from "./native-features.js";
+import { CanonicalNameSync } from "./canonical-name-sync.js";
 import { createPaseoWsConnection } from "./paseo-ws.js";
 import { applyRemoteModel } from "./model-sync.js";
 import { normalizePiEventForPaseo } from "./tool-result-normalization.js";
@@ -319,6 +320,9 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   let remoteAppliedModel: string | null = null;
   let remoteAppliedThinking: string | null = null;
   let titleAttempted = false;
+  let canonicalNameSync: CanonicalNameSync | undefined;
+  let canonicalNameConnection: ReturnType<typeof openPaseoWs>;
+  let canonicalNameBinding: { agentId: string; sessionId: string; operator: any } | undefined;
   const submittedUserMessages: any[] = [];
   const pendingRemoteUiRequests = new Map<string, PendingRemoteUiRequest>();
   let markedTmuxPane: string | null = null;
@@ -469,7 +473,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   // state the daemon only accepts as client requests (it caches
   // model/thinking/titles and prefers the cache over anything visible
   // through the provider RPC surface).
-  function openPaseoWs(): {
+  function openPaseoWs(onSession?: (message: any) => void, onFailure?: (error: Error) => void): {
     request: (build: (requestId: string) => Record<string, unknown>) => Promise<any>;
     requestWithId: (requestId: string, message: Record<string, unknown>) => Promise<any>;
     close: () => void;
@@ -491,7 +495,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       clientType: "cli",
       protocolVersion: 1,
       appVersion: PASEO_CLIENT_APP_VERSION,
-    }, { log: debugLog });
+    }, { log: debugLog, onSession, onFailure });
   }
 
   async function resolvePaseoSelect(requestId: string, value: string | undefined): Promise<unknown> {
@@ -531,16 +535,16 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
 
   // The sidebar labels workspaces by branch name; give the workspace the
   // same plain session title as the conversation.
-  async function setPaseoWorkspaceTitle(agentId: string, title: string): Promise<void> {
+  async function setPaseoWorkspaceTitle(agentId: string, title: string): Promise<boolean> {
     const conn = openPaseoWs();
-    if (!conn) return;
+    if (!conn) return false;
     const workspaceTitle = title;
     try {
       const fetched = await conn.request((requestId) => ({ type: "fetch_agent_request", agentId, requestId }));
       const workspaceId = fetched?.agent?.workspaceId;
       if (!workspaceId) {
         debugLog(`workspace title: agent ${agentId} has no workspaceId (${fetched?.error ?? "no error"})`);
-        return;
+        return false;
       }
       const result = await conn.request((requestId) => ({
         type: "workspace.title.set.request",
@@ -549,8 +553,10 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         requestId,
       }));
       debugLog(`paseo sync workspace title "${workspaceTitle}": ${result.accepted ? "accepted" : `rejected: ${result.error}`}`);
+      return result.accepted === true;
     } catch (err) {
       debugLog(`workspace title failed: ${String(err)}`);
+      return false;
     } finally {
       conn.close();
     }
@@ -1468,6 +1474,75 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     }
   }
 
+  function stopCanonicalNameSync(): void {
+    canonicalNameSync?.close();
+    canonicalNameSync = undefined;
+    canonicalNameBinding = undefined;
+    const connection = canonicalNameConnection;
+    canonicalNameConnection = null;
+    connection?.close();
+  }
+
+  function startCanonicalNameSync(): void {
+    if (process.env.PI_SUBAGENT_CANONICAL_NAMES !== "1" || lifecycleClosed || !latestCtx || !currentAgentId) return;
+    const operator = (globalThis as any).__paeCanonicalTaskNameV1;
+    const sessionId = latestCtx.sessionManager.getSessionId();
+    if (operator?.protocol !== 1 || operator.sessionId !== sessionId) return;
+    if (canonicalNameBinding?.agentId === currentAgentId && canonicalNameBinding.operator === operator) {
+      canonicalNameSync?.changed();
+      return;
+    }
+    stopCanonicalNameSync();
+    const agentId = currentAgentId;
+    const sessionFile = currentSessionFile;
+    const binding = { agentId, sessionId, operator };
+    const isCurrent = () => !lifecycleClosed && currentAgentId === agentId && currentSessionFile === sessionFile
+      && latestCtx?.sessionManager.getSessionId() === sessionId && (globalThis as any).__paeCanonicalTaskNameV1 === operator;
+    let sync: CanonicalNameSync;
+    let sawSubscribedName = false;
+    const connection = openPaseoWs(message => {
+      if (!isCurrent() || message?.type !== "agent_update" || message.payload?.kind !== "upsert") return;
+      const agent = message.payload.agent;
+      if (agent?.id === agentId) { sawSubscribedName = true; sync?.observe(agent.title ?? null, message.payload); }
+    }, () => {
+      if (canonicalNameBinding === binding) stopCanonicalNameSync();
+    });
+    if (!connection) return;
+    canonicalNameBinding = binding;
+    canonicalNameConnection = connection;
+    sync = new CanonicalNameSync({ authority: operator, isCurrent,
+      warn: message => { debugLog(message); notifyTui(message); notifyEvent(message); },
+      write: async (name, updateAgent) => {
+        if (!isCurrent()) throw new Error("Stale canonical naming session");
+        if (updateAgent) {
+          const result = await connection.request(requestId => ({ type: "update_agent_request", agentId, name, requestId }));
+          if (result.accepted !== true) throw new Error(result.error ?? "Native title update rejected");
+        }
+        if (isCurrent() && !await setPaseoWorkspaceTitle(agentId, name)) throw new Error("Native workspace title update unavailable");
+      },
+    });
+    canonicalNameSync = sync;
+    // Directory subscription includes background titles only; it never moves,
+    // promotes, imports, or recreates a worker or its existing chat.
+    void connection.request(requestId => ({ type: "fetch_agents_request", requestId, includeBackground: true, subscribe: {}, page: { limit: 1 } }))
+      .then(() => connection.request(requestId => ({ type: "fetch_agent_request", agentId, requestId })))
+      .then(result => {
+        if (!isCurrent() || result.agent?.id !== agentId) return;
+        if (!sawSubscribedName) sync.observe(result.agent.title ?? null);
+      }).catch(error => {
+        if (canonicalNameBinding === binding) { debugLog(`canonical name subscription failed: ${String(error)}`); stopCanonicalNameSync(); }
+      });
+  }
+
+  const unsubscribeCanonicalName = pi.events.on("subagent-name-changed", () => {
+    startCanonicalNameSync();
+    canonicalNameSync?.changed();
+  });
+  pi.on("session_info_changed", () => {
+    startCanonicalNameSync();
+    canonicalNameSync?.changed();
+  });
+
   function adoptAgent(agentId: string, reused: boolean): void {
     if (currentAgentId && currentAgentId !== agentId && transport) {
       removePermissionGateOperatorDescriptor(
@@ -1475,7 +1550,9 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       );
       removeHarnessReadOnlyDescriptor(path.join(os.homedir(), ".pi", "paseo-bridge"), currentAgentId, transport.operatorEpoch);
     }
+    if (currentAgentId !== agentId) stopCanonicalNameSync();
     currentAgentId = agentId;
+    startCanonicalNameSync();
     publishPermissionGateOperatorDescriptor();
     publishHarnessReadOnlyDescriptor();
     tagAgentPane();
@@ -1647,6 +1724,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         publishHarnessReadOnlyDescriptor();
         publishForegroundTasksDescriptor();
         publishAccountControlsDescriptor();
+        startCanonicalNameSync();
         if (!placement.infrastructure && !currentAgentId) registerWithPaseo(currentSessionFile, latestCtx.cwd);
         tagAgentPane(placement);
       }, 2000);
@@ -1668,9 +1746,11 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         : "Pi session closed before the command completed; its outcome is unknown.");
     }
     lifecycleClosed = true;
+    stopCanonicalNameSync();
     preflightAbortController.abort();
     latestCtx = null;
     unsubscribeReaping();
+    unsubscribeCanonicalName();
     if (placementTimer) clearInterval(placementTimer);
     placementTimer = undefined;
     if (event.reason === "reload" && transport) {
@@ -1731,6 +1811,10 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   // Imported terminal sessions have no title in Paseo (the UI falls back to
   // the branch name), so generate one from the first user message.
   async function maybeGenerateSessionTitle(ctx: ExtensionContext): Promise<void> {
+    if (process.env.PI_SUBAGENT_CANONICAL_NAMES === "1") {
+      startCanonicalNameSync();
+      return; // Worker/task authority owns names; never ask an LLM for another title.
+    }
     if (titleAttempted || !currentAgentId) return;
     // Legacy NO_TITLE disables all automatic title handling. The declarative
     // generation option only prevents a model call, not cost-free name sync.

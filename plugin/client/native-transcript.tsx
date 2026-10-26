@@ -14,6 +14,7 @@
  * summaries. See ../licenses/PASEO-APACHE-2.0.txt.
  */
 import { nativeCodeRows } from "./native-code-model";
+import { highlightNativeRows, nativeSyntaxPalette } from "./native-code-highlight";
 import { toolDetailSections } from "./native-tool-details";
 import { AccessibilityInfo, Pressable, Text, View } from "react-native";
 import { useEffect, useState } from "react";
@@ -41,6 +42,9 @@ export function NativeToolBadge({ name, status, summary, argumentsValue, details
   const label = presentation.label;
   const subtitle = summary ?? presentation.summary;
   const args = argumentsValue && typeof argumentsValue === "object" ? argumentsValue as Record<string, unknown> : {};
+  const palette = nativeSyntaxPalette(colors);
+  const filePath = [args.filePath, args.path, args.file].find(value => typeof value === "string") as string | undefined;
+  const fileTool = ["read", "write", "edit"].includes(name.toLowerCase());
   return <View style={{ alignSelf: "stretch", marginHorizontal: -13 }}>
     <Pressable accessibilityRole="button" accessibilityLabel={`Tool ${label}${subtitle ? ` · ${subtitle}` : ""} · ${status}`} accessibilityState={{ expanded }} aria-expanded={expanded} onPress={onToggle}
       style={{ flexDirection: "row", alignItems: "center", borderRadius: 8, borderWidth: 1, borderColor: expanded ? colors.border : "transparent", borderBottomLeftRadius: expanded ? 0 : 8, borderBottomRightRadius: expanded ? 0 : 8, backgroundColor: expanded ? colors.surface1 : "transparent", paddingHorizontal: 8, paddingVertical: 4 }}>
@@ -56,14 +60,15 @@ export function NativeToolBadge({ name, status, summary, argumentsValue, details
         <Text style={{ color: colors.foregroundMuted, fontSize: 11, marginBottom: 4 }}>{section.label}</Text>
         <ScrollView nestedScrollEnabled style={{ maxHeight: 240 }} showsVerticalScrollIndicator>
           <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator>
-            <View testID="work-native-code-surface">
-              {nativeCodeRows(section.text, {
+            <View testID="work-native-code-surface" dataSet={{ pmono: "" }}>
+              {highlightNativeRows(nativeCodeRows(section.text, {
                 tone: section.tone,
                 ...(name.toLowerCase() === "read" && section.label === "Content" && status !== "failed" ? { startLine: typeof args.offset === "number" ? args.offset : 1 } : {}),
                 unifiedDiff: name.toLowerCase() === "edit" && section.label === "Result" && /(?:^|\n)@@ -\d/.test(section.text),
-              }).map((row, line) => <View key={line} style={{ flexDirection: "row", backgroundColor: row.tone === "removed" ? "rgba(220,60,60,0.12)" : row.tone === "added" ? "rgba(40,180,90,0.12)" : "transparent" }}>
+              }), section.text, fileTool && (["Content", "Removed", "Added"].includes(section.label) || (name.toLowerCase() === "edit" && section.label === "Result" && /(?:^|\n)@@ -\d/.test(section.text))) ? filePath : undefined,
+                name.toLowerCase() === "edit" && section.label === "Result" && /(?:^|\n)@@ -\d/.test(section.text)).map((row, line) => <View key={line} style={{ flexDirection: "row", backgroundColor: row.tone === "removed" ? "rgba(220,60,60,0.12)" : row.tone === "added" ? "rgba(40,180,90,0.12)" : "transparent" }}>
                 {row.number !== undefined ? <Text testID="work-code-line-number" style={{ color: colors.foregroundMuted, fontFamily: "monospace", fontSize: 12, lineHeight: 17, minWidth: 36, paddingRight: 12, textAlign: "right", userSelect: "none" }}>{String(row.number)}</Text> : null}
-                <Text selectable style={{ color: colors.foreground, fontFamily: "monospace", fontSize: 12, lineHeight: 17 }}>{`${section.tone === "removed" ? "− " : section.tone === "added" ? "+ " : ""}${row.text || " "}`}</Text>
+                <Text testID="work-code-line" selectable style={{ color: colors.foreground, fontFamily: "monospace", fontSize: 12, lineHeight: 17 }}>{section.tone === "removed" ? "− " : section.tone === "added" ? "+ " : ""}{row.tokens ? row.tokens.map((token, tokenIndex) => <Text key={tokenIndex} dataSet={{ syntaxRole: token.style ?? "base" }} style={{ color: token.style ? palette[token.style] ?? colors.foreground : colors.foreground }}>{token.text || " "}</Text>) : row.text || " "}</Text>
               </View>)}
             </View>
           </ScrollView>

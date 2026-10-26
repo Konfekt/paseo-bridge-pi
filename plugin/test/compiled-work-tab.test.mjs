@@ -10,7 +10,9 @@ assert.ok(compilerPath, 'Set PASEO_PLUGIN_COMPILER to the installed Paseo compil
 // not undeclared bridge-local packages. Missing host dependencies must fail.
 const require = createRequire(resolve(compilerPath));
 const nodes = node => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)];
-const text = node => typeof node === 'string' ? node : nodes(node).flatMap(n => [n.props?.children].flat(Infinity).filter(value => typeof value === 'string')).join(' ');
+// Nested native syntax Text tokens concatenate exactly as RN/DOM text nodes do.
+const compactText = node => typeof node === 'string' ? node : Array.isArray(node) ? node.map(compactText).join('') : compactText(node?.props?.children ?? []);
+const text = node => typeof node === 'string' ? node : Array.isArray(node) ? node.map(text).join(' ') : node?.props?.testID === 'work-code-line' ? compactText(node) : text(node?.props?.children ?? []);
 
 // A small host renderer: execute compiled components, keep hook identity by JSX
 // key/path, and run real effect setup/cleanup on mount/unmount. No Work logic is

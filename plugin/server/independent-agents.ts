@@ -134,7 +134,7 @@ export function registerIndependentAgents(server: PluginServerContext) {
         try {
           const sessionId = randomUUID();
           const history = [{ type: "session", version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd: data.cwd }, ...data.entries].map(e => JSON.stringify(e)).join("\n") + "\n";
-          const title = String(source.title || "Independent conversation").trim().split(/\s+/).slice(0, 3).join(" ");
+          const title = String(source.title || "Independent conversation").trim().split(/\s+/).slice(0, 4).join(" ").slice(0, 80);
           const meta = { version: 1, id, cwd: data.cwd, model: data.model, thinkingLevel: data.thinkingLevel, sessionId, title, historySha256: hash(history) };
           await writeFile(join(temporary, "history.jsonl"), history, { mode: 0o400, flag: "wx" });
           await writeFile(join(temporary, "meta.json"), JSON.stringify(meta), { mode: 0o600, flag: "wx" });

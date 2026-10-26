@@ -27,6 +27,22 @@ test("reconciles historical records with authoritative native status and retaine
   links.clear(); assert.deepEqual(await links.notifications(async () => source), []);
 });
 
+test("native notification captions use exact canonical names and follow renames without identity changes", async () => {
+  let now = 0;
+  const links = new NativeSubagentLinks(() => now); links.seed(history());
+  const [initial] = await links.notifications(async () => ({ ...source, title: "Four Word Child Name" }));
+  const first = decode(initial).bindings[0];
+  assert.equal(first.task, "Four Word Child Name");
+  now += 1100;
+  const [renamed] = await links.notifications(async () => ({ ...source, title: "Renamed Child" }));
+  const next = decode(renamed).bindings[0];
+  assert.equal(next.task, "Renamed Child");
+  assert.equal(next.taskId, first.taskId); assert.equal(next.childId, first.childId); assert.equal(next.runtimeId, first.runtimeId);
+  now += 1100;
+  const [invalid] = await links.notifications(async () => ({ ...source, title: "one two three four five" }));
+  assert.equal(decode(invalid).bindings[0].task, args.task, "legacy/untrusted title falls back without rewriting history");
+});
+
 test("publishes completed status without transcript, then attaches the later validated transcript", async () => {
   let now = 0;
   const links = new NativeSubagentLinks(() => now); links.seed(history());

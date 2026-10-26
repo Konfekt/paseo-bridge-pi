@@ -1,0 +1,370 @@
+{
+  "upstream": "https://github.com/getpaseo/paseo",
+  "revision": "cafe4b01c8522ff39560241c5deb01427dc8dc5b",
+  "version": "0.12.0",
+  "implementation": "Unmodified upstream highlighter, parsers, 200-entry/100000-character cache and diff token attachment; only import paths resolved by esbuild",
+  "esbuild": "0.25.12",
+  "bundleSha256": "b3de936773346870ad0a67eacc58e92973a61aa1349987141d570e9f04d27eca",
+  "dependencies": [
+    {
+      "name": "@codemirror/language",
+      "version": "6.12.4",
+      "license": "MIT",
+      "licenseFile": "licenses/codemirror_language.txt"
+    },
+    {
+      "name": "@codemirror/legacy-modes",
+      "version": "6.5.3",
+      "license": "MIT",
+      "licenseFile": "licenses/codemirror_legacy-modes.txt"
+    },
+    {
+      "name": "@codemirror/state",
+      "version": "6.7.1",
+      "license": "MIT",
+      "licenseFile": "licenses/codemirror_state.txt"
+    },
+    {
+      "name": "@codemirror/view",
+      "version": "6.43.6",
+      "license": "MIT",
+      "licenseFile": "licenses/codemirror_view.txt"
+    },
+    {
+      "name": "@lezer/common",
+      "version": "1.5.1",
+      "license": "MIT",
+      "licenseFile": "licenses/lezer_common.txt"
+    },
+    {
+      "name": "@lezer/cpp",
+      "version": "1.1.5",
+      "license": "MIT",
+      "licenseFile": "licenses/lezer_cpp.txt"
+    },
+    {
+      "name": "@lezer/css",
+      "version": "1.3.1",
+      "license": "MIT",
+      "licenseFile": "licenses/lezer_css.txt"
+    },
+    {
+      "name": "@lezer/go",
+      "version": "1.0.1",
+      "license": "MIT",
+      "licenseFile": "licenses/lezer_go.txt"
+    },
+    {
+      "name": "@lezer/highlight",
+      "version": "1.2.3",
+      "license": "MIT",
+      "licenseFile": "licenses/lezer_highlight.txt"
+    },
+    {
+      "name": "@lezer/html",
+      "version": "1.3.13",
+      "license": "MIT",
+      "licenseFile": "licenses/lezer_html.txt"
+    },
+    {
+      "name": "@lezer/java",
+      "version": "1.1.3",
+      "license": "MIT",
+      "licenseFile": "licenses/lezer_java.txt"
+    },
+    {
+      "name": "@lezer/javascript",
+      "version": "1.5.4",
+      "license": "MIT",
+      "licenseFile": "licenses/lezer_javascript.txt"
+    },
+    {
+      "name": "@lezer/json",
+      "version": "1.0.3",
+      "license": "MIT",
+      "licenseFile": "licenses/lezer_json.txt"
+    },
+    {
+      "name": "@lezer/lr",
+      "version": "1.4.8",
+      "license": "MIT",
+      "licenseFile": "licenses/lezer_lr.txt"
+    },
+    {
+      "name": "@lezer/markdown",
+      "version": "1.6.3",
+      "license": "MIT",
+      "licenseFile": "licenses/lezer_markdown.txt"
+    },
+    {
+      "name": "@lezer/php",
+      "version": "1.0.5",
+      "license": "MIT",
+      "licenseFile": "licenses/lezer_php.txt"
+    },
+    {
+      "name": "@lezer/python",
+      "version": "1.1.18",
+      "license": "MIT",
+      "licenseFile": "licenses/lezer_python.txt"
+    },
+    {
+      "name": "@lezer/rust",
+      "version": "1.0.2",
+      "license": "MIT",
+      "licenseFile": "licenses/lezer_rust.txt"
+    },
+    {
+      "name": "@lezer/xml",
+      "version": "1.0.6",
+      "license": "MIT",
+      "licenseFile": "licenses/lezer_xml.txt"
+    },
+    {
+      "name": "@lezer/yaml",
+      "version": "1.0.4",
+      "license": "MIT",
+      "licenseFile": "licenses/lezer_yaml.txt"
+    },
+    {
+      "name": "@marijn/find-cluster-break",
+      "version": "1.0.2",
+      "license": "MIT",
+      "licenseFile": "licenses/marijn_find-cluster-break.txt"
+    },
+    {
+      "name": "crelt",
+      "version": "1.0.6",
+      "license": "MIT",
+      "licenseFile": "licenses/crelt.txt"
+    },
+    {
+      "name": "lezer-elixir",
+      "version": "1.1.3",
+      "license": "Apache-2.0",
+      "licenseFile": "licenses/lezer-elixir.txt"
+    },
+    {
+      "name": "style-mod",
+      "version": "4.1.3",
+      "license": "MIT",
+      "licenseFile": "licenses/style-mod.txt"
+    },
+    {
+      "name": "w3c-keyname",
+      "version": "2.2.8",
+      "license": "MIT",
+      "licenseFile": "licenses/w3c-keyname.txt"
+    }
+  ],
+  "inputs": [
+    {
+      "file": "node_modules/@lezer/common/dist/index.js",
+      "sha256": "024113fdd0af6c3ef3d9bcba10870d0c90920525e623a52cc9ddad78842c8fd7"
+    },
+    {
+      "file": "node_modules/@marijn/find-cluster-break/src/index.js",
+      "sha256": "b388956e964931f9de2e984e0f236f88c33c1e2e7f34f83d01f3676e6c47b616"
+    },
+    {
+      "file": "node_modules/@codemirror/state/dist/index.js",
+      "sha256": "dd5fe354220f9fde94c1449fad2aec0ec3d56be3da949a85df8ca4d84af92866"
+    },
+    {
+      "file": "node_modules/style-mod/src/style-mod.js",
+      "sha256": "43690e452046d6a355a1a9211c1b48aab605613ab63c0aff13f585e742e66c83"
+    },
+    {
+      "file": "node_modules/w3c-keyname/index.js",
+      "sha256": "b649dec4f01c7c5eb05be4641b5b698c6938231ee50b38e17a2f0f822ca3df2e"
+    },
+    {
+      "file": "node_modules/crelt/index.js",
+      "sha256": "924800defa2bf95a0bfd16dde589ecebbcd9e36b03635274da84968c77a3721e"
+    },
+    {
+      "file": "node_modules/@codemirror/view/dist/index.js",
+      "sha256": "e6a3283934e699053a26b5fe2331f35977d37a56291b345203caeb77b282c549"
+    },
+    {
+      "file": "node_modules/@lezer/highlight/dist/index.js",
+      "sha256": "01969c7657e12fa125543d7bfd1d6591f411fa92e5cae468ef00222a1018322f"
+    },
+    {
+      "file": "node_modules/@codemirror/language/dist/index.js",
+      "sha256": "875ce988fbbed53c47cf4b2aad962afe1d6b23c15ecc40466cdc6be5b59d647e"
+    },
+    {
+      "file": "node_modules/@codemirror/legacy-modes/mode/clike.js",
+      "sha256": "232a058c78968156d1df0985d481bda19ee3a191c7d562c8ba365478b1e93478"
+    },
+    {
+      "file": "node_modules/@codemirror/legacy-modes/mode/swift.js",
+      "sha256": "49063ffb21c1e2ef9eddd85b7fa113f56c8c92961160e2e6ea7a7fdcd6ec6d82"
+    },
+    {
+      "file": "node_modules/@lezer/lr/dist/index.js",
+      "sha256": "da0319f45aa229e23b07354e61e0bc54665ef0e69b52001300aaec13d3f1dd82"
+    },
+    {
+      "file": "node_modules/@lezer/javascript/dist/index.js",
+      "sha256": "184d175bd9d6e29e4bcb4853719bfe4d50ef66dcc3a867bff1c98ed88edfbf28"
+    },
+    {
+      "file": "node_modules/@lezer/json/dist/index.js",
+      "sha256": "3310e7216620dc17c6bdfb1665f774e7b0b29918e761ccc74a7e2a83f039a735"
+    },
+    {
+      "file": "node_modules/@lezer/css/dist/index.js",
+      "sha256": "51bdcc4a494a3e3a1119c945dd02146c606ea98f5ebfc9af715a2f805e99f7f5"
+    },
+    {
+      "file": "node_modules/@lezer/cpp/dist/index.js",
+      "sha256": "458bd044b76154cfaf862f0deda3c75dd80335cf8aae492e9c4440ba648c1a81"
+    },
+    {
+      "file": "node_modules/@lezer/go/dist/index.js",
+      "sha256": "55ee4bb362e7f481a0915a8fd9eae5bea84d1a476916fda50180e1956d34966f"
+    },
+    {
+      "file": "node_modules/@lezer/html/dist/index.js",
+      "sha256": "fd4c7f475d40e7cb86346c7c18bbaf0902492a995b03cf372adb8b2a33cc8829"
+    },
+    {
+      "file": "node_modules/@lezer/java/dist/index.js",
+      "sha256": "a429f6c0333ad57cc0d4473d200949f7693e3b85b6f50b0c4a6a36a9c1644f87"
+    },
+    {
+      "file": "node_modules/@lezer/python/dist/index.js",
+      "sha256": "dfb9b9f11fdc0000e66771a0c85b9dea64b72c0ce5c941191a75dc60f8014feb"
+    },
+    {
+      "file": "node_modules/@lezer/markdown/dist/index.js",
+      "sha256": "f30f04bd0aee92c237ec6b41eaa18b05df3b1d7a4eb4e88cec994681e33f85f1"
+    },
+    {
+      "file": "node_modules/@lezer/php/dist/index.js",
+      "sha256": "b1dc1b6c0eb000011f802c7e7f72ffdeb716a72b289a9458e1631f374b9fba5f"
+    },
+    {
+      "file": "node_modules/@lezer/rust/dist/index.js",
+      "sha256": "c416aa8eecbc3211319464e88d32c45d8ed3f5946356ae2232271e56b921d651"
+    },
+    {
+      "file": "node_modules/@lezer/xml/dist/index.js",
+      "sha256": "d1d35ac0d32592a1da777894669f139d25d5125ce79f205f0aa9ebee366fdba3"
+    },
+    {
+      "file": "node_modules/@lezer/yaml/dist/index.js",
+      "sha256": "761bb6fa2f88915f916b33429b8d0f06639efe288b695c8abc6f32c0d116c9c5"
+    },
+    {
+      "file": "node_modules/lezer-elixir/dist/index.js",
+      "sha256": "c5292b43636873e6a1819d21dcdc5d61f9d126b22702b1b0676cb93837efd8a6"
+    },
+    {
+      "file": "packages/highlight/dist/csharp/highlight.js",
+      "sha256": "31571fcc8d7f32933ad3425354e21c6c3b27e97f3ddd5e678cc1ffe2a9eeb275"
+    },
+    {
+      "file": "packages/highlight/dist/csharp/terms.js",
+      "sha256": "124577a99fb508efe7db5fdd419d7fed2b79eeed756a0ac92fb0da8bb0dc5652"
+    },
+    {
+      "file": "packages/highlight/dist/csharp/tokens.js",
+      "sha256": "fa2fcd8daa836435797d23c51e0009a2328ddb852862b9b0b64313ccf5512aa3"
+    },
+    {
+      "file": "packages/highlight/dist/csharp/parser.js",
+      "sha256": "85a0348c63479b4221269e6c9dd4b5520e863fde5f03eac39ad38a43129703f9"
+    },
+    {
+      "file": "packages/highlight/dist/csharp/language.js",
+      "sha256": "bb16edaa15593e0a8bfc807081add3646c1d2026db9836484d16f79c3873a058"
+    },
+    {
+      "file": "packages/highlight/dist/js-scanner.js",
+      "sha256": "62bd9530b545d81528ce43c51e650236ec3cc125cd986ac7b7ae69fd26318d38"
+    },
+    {
+      "file": "packages/highlight/dist/astro/parser.js",
+      "sha256": "5480ed9027f7a988a13c5997b5ddc58b4bc887a6c867e510f98db2f5df05472b"
+    },
+    {
+      "file": "packages/highlight/dist/vue/parser.js",
+      "sha256": "9fe546cef831352048d86af5ecdd14d256c13709a31d00f6fa11ebcf2544552c"
+    },
+    {
+      "file": "packages/highlight/dist/nix/highlight.js",
+      "sha256": "7e093d8ae7498af2c3b8126ecfad367bd3e0635a86cf1c1b668b64ae4c65d77f"
+    },
+    {
+      "file": "packages/highlight/dist/nix/terms.js",
+      "sha256": "aeed55d2c50140009fb7ba5d7797bf0f69be880f82567d9a8c9549b71f18e0ea"
+    },
+    {
+      "file": "packages/highlight/dist/nix/tokens.js",
+      "sha256": "2179a7bf3e0a718b0b7f07801d1b4b3211e73262fa23554f06901ba6095aa0ee"
+    },
+    {
+      "file": "packages/highlight/dist/nix/parser.js",
+      "sha256": "56db5fe9e382537918cf772574ab370597b0d36f0fcb760ce8e97537fa78439c"
+    },
+    {
+      "file": "packages/highlight/dist/nix/language.js",
+      "sha256": "fd1dfa365423c50d55cd2a9a765c03904da96de3e6bf2861494d2e2e5644ba12"
+    },
+    {
+      "file": "packages/highlight/dist/svelte/terms.js",
+      "sha256": "c0864ae0ac61d38bf3587b47c5c2abe478bc52a8e0b550fdeed9faa8d8f316e9"
+    },
+    {
+      "file": "packages/highlight/dist/svelte/tokens.js",
+      "sha256": "ee0d015487b782e4b5025ef88a647f8bf36341322ae35cc25f79213456cad958"
+    },
+    {
+      "file": "packages/highlight/dist/svelte/highlight.js",
+      "sha256": "e5d43ee731e4224ee2502ec9efd556f11d304495fd641fa9dc1ee9e69dc49860"
+    },
+    {
+      "file": "packages/highlight/dist/svelte/parser.js",
+      "sha256": "9cca793a56b3fb109c591877a285a43022c5c185c643ada495edb83ae5576818"
+    },
+    {
+      "file": "packages/highlight/dist/svelte/nesting.js",
+      "sha256": "3ed891f501dc8f575f0fa790c7c08a9cc5e9e722cb4e2c1d825f8b205e3b5614"
+    },
+    {
+      "file": "packages/highlight/dist/parsers.js",
+      "sha256": "364ee20397517264fd17e2beb30ce8d5c47ebeaddb7bd9fcc55d570e88f470bc"
+    },
+    {
+      "file": "packages/highlight/dist/syntax-roles.js",
+      "sha256": "f71629840be16acba4f97bca052dd40ddcd4ff0ce7b3627734b903513a99c190"
+    },
+    {
+      "file": "packages/highlight/dist/highlighter.js",
+      "sha256": "6350ea2b69d5ded83006ffcf95f3d9d768a19e7556311948e6da65ff7842bad0"
+    },
+    {
+      "file": "packages/highlight/dist/colors.js",
+      "sha256": "8497afdce221bb5af0e002a758f1a8fb004f50b4e4275ee9d92e2e351d33d8eb"
+    },
+    {
+      "file": "packages/highlight/dist/themes.js",
+      "sha256": "28328a0a0dbe994f040b0be54feff8a84d0205dca0249ccba0294187ec45803f"
+    },
+    {
+      "file": "packages/highlight/dist/index.js",
+      "sha256": "8b69f4615f5a195007f5dd4d2bc4b1b0bb832425255fcf1fd1875f779f5790a4"
+    },
+    {
+      "file": "packages/app/src/utils/highlight-cache.ts",
+      "sha256": "21a12a436265ec1f7162c57bff4767418020e18033080813d284514ecb3b2a13"
+    },
+    {
+      "file": "packages/app/src/utils/diff-highlight.ts",
+      "sha256": "bee283117d04d9b1b13b7cde0d82f16008af9fbb3bcdcf4998d83d582046ccd0"
+    }
+  ]
+}
