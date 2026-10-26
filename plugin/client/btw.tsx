@@ -279,7 +279,7 @@ export function contributeBtw(client: PluginClientContext) {
     });
     entries.set(agent.id, { workspace: workspaceId, button });
   };
-  void client.paseo.agents.list({ subscribe: {}, signal: controller.signal }).then(({ subscription }) => {
+  void client.paseo.agents.list({ includeBackground: true, subscribe: {}, signal: controller.signal }).then(({ subscription }) => {
     if (stopped) return;
     subscription.subscribe({
       snapshot: ({ entries: agents }) => {

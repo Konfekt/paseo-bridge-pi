@@ -29,6 +29,20 @@ function snapshot(providerId, modern=true) {
 function switchInput(providerId) {
  return {...target,expectedSessionId:'session',expectedRuntimeEpoch:runtimeEpoch,request:{protocol:1,requestId:'11111111-1111-4111-a111-111111111111',expectedSessionId:'session',expectedServiceEpoch:'service',expectedSelectionRevision:2,accountId:'same-name',...(providerId?{providerId}:{})}};
 }
+test('server rejects substituted chat or workspace before any account transport call',async()=>{
+ let calls=0;
+ const handlers=createAccountControlsHandlers(async()=>{calls++;return {...descriptor};},async()=>{calls++;throw new Error('must not call');});
+ for(const input of [{...switchInput('openai-codex'),agentId:'sibling'},{...switchInput('openai-codex'),workspaceId:'other'}]) await assert.rejects(handlers.switch(input,context),/does not match/);
+ assert.equal(calls,0);
+});
+test('clear inheritance intent is forwarded distinctly from explicit default login',async()=>{
+ const calls=[];
+ const value={...snapshot('openai-codex'),inheritance:'explicit'};
+ const handlers=createAccountControlsHandlers(async()=>({...descriptor}),async(_d,request)=>{calls.push(request);return request.operation==='snapshot'?value:{ok:true,requestId:request.request.requestId,snapshot:value};});
+ const input=switchInput('openai-codex'); input.request.accountId=null; input.request.inherit=true;
+ assert.equal((await handlers.switch(input,context)).snapshot.inheritance,'explicit');
+ assert.equal(calls.at(-1).request.inherit,true);assert.equal(calls.at(-1).request.accountId,null);
+});
 test('legacy omitted-provider status and switch remain OpenAI-only',async()=>{
  const calls=[];
  const handlers=createAccountControlsHandlers(async()=>({...descriptor}),async(_d,request)=>{

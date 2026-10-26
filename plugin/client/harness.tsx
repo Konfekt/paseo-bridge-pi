@@ -315,7 +315,7 @@ export function contributeHarness(client: PluginClientContext) {
 		});
 	}).catch(() => { /* No trusted native title: keep the bounded name/profile label. */ });
 	void client.paseo.agents
-		.list({ subscribe: {}, signal: lifetime.signal })
+		.list({ includeBackground: true, subscribe: {}, signal: lifetime.signal })
 		.then(({ subscription }) => {
 			if (stopped) return;
 			subscription.subscribe({

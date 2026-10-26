@@ -30,6 +30,7 @@ type Selection = { agentId: string; sessionId: string; runtimeEpoch: string };
 const selectedSessions = new Map<string, Selection>();
 
 export function contributeAccountControls(client: PluginClientContext) {
+	const stopChat = contributeChatAccountControls(client);
 	let disposed = false;
 	let stop: (() => void) | undefined;
 	void client.paseo.config
@@ -53,8 +54,40 @@ export function contributeAccountControls(client: PluginClientContext) {
 		});
 	return () => {
 		disposed = true;
+		stopChat();
 		stop?.();
 	};
+}
+
+export function contributeChatAccountControls(client: PluginClientContext) {
+	const entries = new Map<string, { workspaceId: string; button: PluginButtonRegistration }>();
+	const controller = new AbortController();
+	let stopped = false;
+	const remove = (id: string) => { entries.get(id)?.button.remove(); entries.delete(id); };
+	const register = (agent: Agent) => {
+		if (stopped) return;
+		if (agent.provider !== "pi" || agent.archivedAt || !agent.workspaceId) { remove(agent.id); return; }
+		if (entries.get(agent.id)?.workspaceId === agent.workspaceId) return;
+		remove(agent.id);
+		const Content = (props: PluginButtonContentProps) => {
+			if (props.context !== "agent" || props.agentId !== agent.id || props.workspaceId !== agent.workspaceId) return <View />;
+			return <View style={{ width: 340, maxWidth: "100%", padding: 12 }}>
+				<Metadata colors={props.theme.colors}>This chat and inheriting descendants only. Parent and sibling chats are unchanged.</Metadata>
+				<ProviderAccountSection key={`${props.host.id}/${props.agentId}`} agentId={props.agentId} workspaceId={props.workspaceId} hostId={props.host.id} colors={props.theme.colors} providerId="openai-codex" onBinding={() => {}} />
+			</View>;
+		};
+		const button = client.addComposerPill({ id: "pi-codex-account", workspaceId: agent.workspaceId, agentId: agent.id,
+			button: { title: "Codex account · this chat", label: "Codex", icon: "UserRound", behavior: { kind: "popover", Content } } });
+		entries.set(agent.id, { workspaceId: agent.workspaceId, button });
+	};
+	void client.paseo.agents.list({ includeBackground: true, subscribe: {}, signal: controller.signal }).then(({ subscription }) => {
+		if (stopped) return;
+		subscription.subscribe({
+			snapshot: ({ entries: agents }) => { if (stopped) return; const ids = new Set(agents.map(({ agent }) => agent.id)); for (const id of entries.keys()) if (!ids.has(id)) remove(id); for (const { agent } of agents) register(agent); },
+			update: (message) => { if (stopped || message.type !== "agent_update") return; if (message.payload.kind === "remove") remove(message.payload.agentId); else register(message.payload.agent); },
+		});
+	}).catch(() => {});
+	return () => { stopped = true; controller.abort(); for (const id of entries.keys()) remove(id); };
 }
 
 function contributeLegacyAccountControls(client: PluginClientContext) {
@@ -318,7 +351,7 @@ function AccountSection(props: AccountSectionProps) {
   return <View style={{ gap: 8 }}>
     <SettingsSelect label="Provider" value={providerId} onValueChange={setProviderId}
       options={[{label:"OpenAI",value:"openai"},{label:"OpenAI Codex",value:"openai-codex"}]} />
-    <Metadata colors={props.colors}>Account selections are independent. Choose a model from the matching provider to use its account.</Metadata>
+    <Metadata colors={props.colors}>Changes this session and inheriting descendants, preserving its role model. Parent and sibling sessions are unchanged.</Metadata>
     <ProviderAccountSection key={`${props.agentId}/${providerId}`} {...props} providerId={providerId} />
   </View>;
 }
@@ -343,6 +376,7 @@ function ProviderAccountSection({
 			id: string | null;
 			label: string;
 			key: string;
+			inherit?: boolean;
 		}>(),
 		[switching, setSwitching] = useState(false),
 		[failure, setFailure] = useState<string>(),
@@ -422,7 +456,9 @@ function ProviderAccountSection({
 		!snap ||
 		!snap.canSwitch ||
 		snap.busy;
-	const current = snap?.defaultSelected
+	const current = snap?.inheritance === "inherited"
+		? "Following parent account · resolved for each request"
+		: snap?.defaultSelected
 		? "Pi built-in login"
 		: (snap?.accounts.find((a) => a.id === snap.currentAccountId)?.label ??
 			"Account unavailable");
@@ -485,6 +521,7 @@ function ProviderAccountSection({
 						expectedSelectionRevision: fresh.selectionRevision,
             ...(providerId === "openai-codex" ? { providerId } : {}),
 						accountId: c.id,
+						...(c.inherit ? { inherit: true } : {}),
 					},
 				});
 			} catch {
@@ -601,13 +638,13 @@ function ProviderAccountSection({
 							accessibilityState={{
 								disabled:
 									blocked ||
-									(a.id === snap.currentAccountId && !snap.defaultSelected),
+									(a.id === snap.currentAccountId && !snap.defaultSelected && snap.inheritance !== "inherited"),
 								selected:
-									a.id === snap.currentAccountId && !snap.defaultSelected,
+									a.id === snap.currentAccountId && !snap.defaultSelected && snap.inheritance !== "inherited",
 							}}
 							disabled={
 								blocked ||
-								(a.id === snap.currentAccountId && !snap.defaultSelected)
+								(a.id === snap.currentAccountId && !snap.defaultSelected && snap.inheritance !== "inherited")
 							}
 							onPress={() => {
 								if (!blocked && lk)
@@ -621,13 +658,14 @@ function ProviderAccountSection({
 						>
 							<Text style={{ color: colors.accent }}>
 								{a.label}
-								{a.id === snap.currentAccountId && !snap.defaultSelected
+								{a.id === snap.currentAccountId && !snap.defaultSelected && snap.inheritance !== "inherited"
 									? " · Current"
 									: ""}
 							</Text>
 						</Pressable>
 					))}
-					{snap && !snap.defaultSelected ? (
+					{snap?.inheritance ? <NativeRow colors={colors} title={snap.inheritance === "inherited" ? "Following parent account" : "Follow parent account"} disabled={blocked || snap.inheritance === "inherited"} onPress={() => { if (lk) setChoice({ id: null, label: "Follow parent account", key: lk, inherit: true }); }} /> : null}
+					{snap && (!snap.defaultSelected || snap.inheritance === "inherited") ? (
 						<Pressable
 							accessibilityRole="button"
 							disabled={blocked}
