@@ -10,8 +10,10 @@
  * components are intentionally replaced by the public plugin Icon and local safe
  * summaries. See ../licenses/PASEO-APACHE-2.0.txt.
  */
-import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { AccessibilityInfo, Pressable, Text, View } from "react-native";
+import { useEffect, useState } from "react";
 import { Icon } from "@getpaseo/plugin/client/react-native";
+import { getNativeSpinnerOpacity, getNativeSpinnerStep, NATIVE_SPINNER_DOT_SIZE as DOT_SIZE, NATIVE_SPINNER_GAP as DOT_GAP } from "./native-transcript-model";
 
 function toolPresentation(name: string, argumentsValue: unknown): { label: string; summary?: string; icon: string } {
   const args = argumentsValue && typeof argumentsValue === "object" && !Array.isArray(argumentsValue) ? argumentsValue as Record<string, unknown> : {};
@@ -49,9 +51,41 @@ export function NativeToolBadge({ name, status, summary, argumentsValue, details
   </View>;
 }
 
+// Adapted from Paseo's SyncedLoader state (Apache-2.0); see ../licenses/PASEO-APACHE-2.0.txt.
+
+function NativeSpinner({ color }: { color: string }) {
+  const [step, setStep] = useState(() => getNativeSpinnerStep(Date.now()));
+  useEffect(() => {
+    let frame = 0;
+    let disposed = false, reduceMotion = false;
+    const tick = () => {
+      if (disposed || reduceMotion) return;
+      setStep(getNativeSpinnerStep(Date.now()));
+      frame = requestAnimationFrame(tick);
+    };
+    const onMotion = (reduced: boolean) => {
+      if (disposed) return;
+      reduceMotion = reduced;
+      cancelAnimationFrame(frame);
+      setStep(reduced ? 0 : getNativeSpinnerStep(Date.now()));
+      if (!reduced) frame = requestAnimationFrame(tick);
+    };
+    void AccessibilityInfo.isReduceMotionEnabled().then(onMotion);
+    const subscription = AccessibilityInfo.addEventListener("reduceMotionChanged", onMotion);
+    frame = requestAnimationFrame(tick);
+    return () => { disposed = true; cancelAnimationFrame(frame); subscription.remove(); };
+  }, []);
+  const dot = DOT_SIZE, gap = DOT_GAP;
+  return <View accessibilityLabel="Assistant is working" style={{ width: 14, height: 14, alignItems: "center", justifyContent: "center" }}>
+    <View style={{ width: dot * 2 + gap, height: dot * 3 + gap * 2, position: "relative" }}>
+      {Array.from({ length: 6 }, (_, i) => <View key={i} style={{ position: "absolute", left: (i % 2) * (dot + gap), top: Math.floor(i / 2) * (dot + gap), width: dot, height: dot, borderRadius: dot / 2, backgroundColor: color, opacity: getNativeSpinnerOpacity(step, i) }} />)}
+    </View>
+  </View>;
+}
+
 /** Same compact 24px inline row as Paseo's RunningTurnFooter/WorkingIndicator. */
 export function NativeRunningTurnFooter({ color }: { color: string }) {
   return <View testID="turn-working-indicator" style={{ height: 24, flexDirection: "row", alignItems: "center", justifyContent: "flex-start", gap: 12, marginTop: 13, paddingBottom: 16 }}>
-    <View style={{ marginLeft: -2 }}><ActivityIndicator accessibilityLabel="Assistant is working" size="small" color={color} /></View>
+    <View style={{ marginLeft: -2 }}><NativeSpinner color={color} /></View>
   </View>;
 }

@@ -94,7 +94,8 @@ test('compiled plugin backend operates the real bridge without prompt dispatch o
     assert.equal(validateHarnessReadOnlyDescriptor(readDescriptor, 'agent'), true);
     assert.deepEqual((await (await import('node:fs/promises')).readdir(join(root, '.pi', 'paseo-bridge', 'operators'))).sort(),
       [`${(await import('node:crypto')).createHash('sha256').update('agent').digest('hex')}.foreground.json`, `${(await import('node:crypto')).createHash('sha256').update('agent').digest('hex')}.readonly.json`, `${(await import('node:crypto')).createHash('sha256').update('agent').digest('hex')}.json`].sort());
-    const context = { paseo: { agents: { ref: id => ({ refresh: async () => ({ agent: { id, workspaceId, provider: 'pi' } }) }) } } };
+    const refreshedAgents = [];
+    const context = { paseo: { agents: { ref: id => ({ refresh: async () => { refreshedAgents.push(id); return { agent: { id, workspaceId, provider: 'pi' } }; } }) } } };
     const invoke = async (name, input) => {
       const { contract, handler } = handlers.get(name);
       return contract.output.parse(await handler(contract.input.parse(input), context));
@@ -147,7 +148,14 @@ test('compiled plugin backend operates the real bridge without prompt dispatch o
     writeHarnessReadOnlyDescriptor(join(root, '.pi', 'paseo-bridge'), readDescriptor);
     const tasks = await invoke('harness_subagents_list', readTarget);
     assert.equal(tasks.items[0].taskId, 'subagent-task-111111111111111111111111');
-    assert.equal(tasks.items[0].paseoAgentId, undefined);
+    assert.equal(tasks.items[0].paseoAgentId, undefined, 'wrong attempt/runtime never obtains another child title route');
+    await putRecord({ ...liveRecord, attempt: 1, runtimeId: 'runtime-exact' });
+    const beforeTitleLookup = refreshedAgents.length;
+    const titled = await invoke('harness_subagents_list', readTarget);
+    assert.equal(titled.items[0].paseoAgentId, 'existing-child');
+    assert.equal(titled.items[0].paseoWorkspaceId, 'workspace');
+    assert.deepEqual(refreshedAgents.slice(beforeTitleLookup), ['agent', 'agent'], 'batch route metadata adds no per-child RPC or catalog snapshots');
+    await putRecord(liveRecord);
     const foreground = await invoke('foreground_tasks_status', target);
     assert.equal(foreground.available, true, foreground.reason ?? '');
     assert.equal(foreground.tasks[0].workerEpoch, 'worker-epoch-1');

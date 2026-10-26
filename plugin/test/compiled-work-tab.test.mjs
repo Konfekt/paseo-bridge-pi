@@ -65,6 +65,9 @@ function renderer() {
 }
 
 test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-only close', async t => {
+  const previousRAF = globalThis.requestAnimationFrame, previousCancelRAF = globalThis.cancelAnimationFrame;
+  globalThis.requestAnimationFrame = () => 1; globalThis.cancelAnimationFrame = () => {};
+  t.after(() => { if (previousRAF) globalThis.requestAnimationFrame = previousRAF; else delete globalThis.requestAnimationFrame; if (previousCancelRAF) globalThis.cancelAnimationFrame = previousCancelRAF; else delete globalThis.cancelAnimationFrame; });
   const { compilePlugin } = await import(pathToFileURL(resolve(compilerPath)));
   const { clientBundle } = await compilePlugin({ client: fileURLToPath(new URL('../index.client.tsx', import.meta.url)) });
   const { defineSettings } = await import(pathToFileURL(require.resolve('@getpaseo/plugin')));
@@ -221,7 +224,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
       { taskId: 'old-task', childId: 'old-child', title: 'Old worker', status: 'completed', reaped: true, attempt: 1, runtimeId: null },
     ];
     tree = render();
-    const rows = tree => nodes(tree).filter(n => n.type === 'Pressable' && /^(Worker \d|Old worker|Helper) ·/.test(n.props?.accessibilityLabel ?? ''));
+    const rows = tree => nodes(tree).filter(n => n.type === 'Pressable' && /^(Worker \d|Old worker|Helper|Urgent|Renamed native child|URGENT[^·]*) ·/.test(n.props?.accessibilityLabel ?? ''));
     assert.equal(rows(tree).length, 5);
     const desktopStyle = Object.assign({}, ...rows(tree)[0].props.style({ pressed: false }));
     assert.equal(desktopStyle.gap, 6);
@@ -253,7 +256,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.equal(nodes(tree).filter(n => n.props?.testID === 'work-agent-conversation').length, 1);
     assert.ok(nodes(tree).some(n => n.type === 'ScrollView' && n.props.style?.maxHeight === 320), 'bounded native timeline retained');
     assert.match(text(tree), /Streaming assistant delta/);
-    assert.ok(nodes(tree).some(n => n.type === 'ActivityIndicator' && n.props.accessibilityLabel === 'Assistant is working'), 'spinner appears only from authoritative running state');
+    assert.ok(nodes(tree).some(n => n.props.accessibilityLabel === 'Assistant is working'), 'native loader appears only from authoritative running state');
     assert.doesNotMatch(text(tree), /Working…|retained snapshot/i);
     messages = [
       { id: 'call-row', role: 'assistant', text: 'Checking **the current state** with `git`.', parts: [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'git status --short', private: 'ARGUMENT_SECRET' }, status: 'completed', result: 'RESULT_SECRET' }] },
@@ -552,5 +555,27 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     await tick();
     assert.match(text(render(removedExplicit)), /Select Work/, 'removal of an explicitly selected source cannot revive an older pending restore');
     ui.unmount(); removedExplicit.cleanup();
+
+    // Work titles reuse the exact verified child route and native catalog, not task text.
+    settings.values = { sources: [] };
+    rpcResponse = async () => ({ available: true, sessionId: 's', runtimeEpoch: 'e' });
+    const titledHost = host(); t.after(() => titledHost.cleanup()); await tick(); snapshot(titledHost);
+    const nativeChild = { id: 'native-child', workspaceId: 'child-workspace', provider: 'pi', title: 'Urgent' };
+    const updateChild = agent => titledHost.observers.forEach(observer => observer.update({ type: 'agent_update', payload: { kind: 'upsert', agent } }));
+    updateChild(nativeChild);
+    workAgents = [{ taskId: 'title-task', childId: 'title-child', groupId: 'title-group', attempt: 1, runtimeId: 'title-runtime', status: 'running', title: 'URGENT original instructions remain in expanded metadata', paseoAgentId: nativeChild.id, paseoWorkspaceId: nativeChild.workspaceId }];
+    click(titledHost, 'a'); tree = render(titledHost); select(tree, 'Agents'); tree = render(titledHost);
+    assert.ok(rows(tree).length, `Native title row missing: ${text(tree)}`);
+    assert.match(rows(tree)[0].props.accessibilityLabel, /^Urgent/);
+    assert.doesNotMatch(rows(tree)[0].props.accessibilityLabel, /original instructions/);
+    rows(tree)[0].props.onPress(); tree = render(titledHost);
+    assert.match(text(tree), /Task:\s+URGENT original instructions remain in expanded metadata/);
+    updateChild({ ...nativeChild, title: 'Renamed native child' }); tree = render(titledHost);
+    assert.match(rows(tree)[0].props.accessibilityLabel, /^Renamed native child/);
+    assert.ok(nodes(tree).some(node => node.type === 'Text' && node.props.accessibilityRole === 'header' && text(node) === 'Renamed native child'), 'expanded header tracks the same authoritative rename');
+    updateChild({ ...nativeChild, workspaceId: 'unrelated-workspace', title: 'Unrelated private title' }); tree = render(titledHost);
+    assert.doesNotMatch(rows(tree)[0].props.accessibilityLabel, /Unrelated private title/);
+    assert.match(rows(tree)[0].props.accessibilityLabel, /^URGENT/);
+    ui.unmount(); titledHost.cleanup();
   } finally { ui.unmount(); first.cleanup(); second.cleanup(); }
 });

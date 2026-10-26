@@ -40,6 +40,8 @@ import {
 
 import { createWorkTabState, type WorkViewState } from "./work-tab";
 import { workSourceSettings } from "../shared/work-source";
+import { nativeChildTitle, type ChildTitleRow } from "../shared/existing-child-identity";
+type ChildTitleResolver = (row: ChildTitleRow) => string;
 
 type Kind = "jobs" | "subagents";
 
@@ -167,6 +169,7 @@ export function contributeHarness(client: PluginClientContext) {
 				agentId={agentId}
 				view={work.view(workspaceId, agentId)}
 				sourceTitle={entry?.title || "Conversation work"}
+				resolveChildTitle={row => nativeChildTitle(row, id => entries.get(id))}
 				openConversation={async (target) => {
 					if (!current() || target.agentId !== agentId ||
 						target.workspaceId !== workspaceId || target.hostId !== props.host.id)
@@ -225,7 +228,7 @@ export function contributeHarness(client: PluginClientContext) {
 		const entry = entries.get(id);
 		entry?.buttons.forEach((button) => button.remove());
 		entries.delete(id);
-		if (entry) work.remove(entry.workspaceId, id);
+		if (entry) { work.remove(entry.workspaceId, id); work.refresh(); }
 	};
 	const register = (agent: Agent) => {
 		if (stopped) return;
@@ -278,6 +281,7 @@ export function contributeHarness(client: PluginClientContext) {
 			}),
 		);
 		entries.set(agent.id, entry);
+		work.refresh();
 	};
 	void client.paseo.agents
 		.list({ subscribe: {}, signal: lifetime.signal })
@@ -465,6 +469,7 @@ function WorkOverview(
 	props: PluginAgentPanelProps & {
 		view: WorkViewState;
 		sourceTitle: string;
+		resolveChildTitle: ChildTitleResolver;
 		openConversation(target: AgentConversationTarget): Promise<void>;
 		openWorkspace(id: string): void;
 	},
@@ -675,6 +680,7 @@ function JobsOverview(
 function AgentsOverview(
 	props: PluginAgentPanelProps &
 		CompletedView & {
+			resolveChildTitle: ChildTitleResolver;
 			openConversation(target: AgentConversationTarget): Promise<void>;
 		},
 ) {
@@ -728,6 +734,7 @@ function HarnessPanel({
 	viewMode = "all",
 	excludeTaskIds,
 	openConversation,
+	resolveChildTitle,
 }: Omit<PluginAgentPanelProps, "navigation"> & {
 	navigation?: PluginAgentPanelProps["navigation"];
 	kind: Kind;
@@ -735,6 +742,7 @@ function HarnessPanel({
 	viewMode?: "all" | "active" | "completed";
 	excludeTaskIds?: ReadonlySet<string>;
 	openConversation?: (target: AgentConversationTarget) => Promise<void>;
+	resolveChildTitle?: ChildTitleResolver;
 }) {
 	const statusCall = useRpc(harnessStatusRpc);
 	const jobsCall = useRpc(harnessJobsListRpc);
@@ -867,8 +875,9 @@ function HarnessPanel({
 	type WorkerRow = Extract<(typeof rows)[number], { childId: string }>;
 	const selectedWorker = kind === "subagents" && openConversation
 		? rows.find((row): row is WorkerRow => "childId" in row && row.taskId === selectedId) : undefined;
+	const workerTitle = (row: ChildTitleRow) => resolveChildTitle?.(row) ?? nativeChildTitle(row, () => undefined);
 	const conversationTarget = (row: WorkerRow): AgentConversationTarget => ({ hostId: host.id, agentId, workspaceId,
-		sessionId: session!, runtimeEpoch: epoch!, taskId: row.taskId, childId: row.childId, groupId: row.groupId, attempt: row.attempt, runtimeId: row.runtimeId, title: row.title });
+		sessionId: session!, runtimeEpoch: epoch!, taskId: row.taskId, childId: row.childId, groupId: row.groupId, attempt: row.attempt, runtimeId: row.runtimeId, title: workerTitle(row) });
 	const openWorker = (row: WorkerRow) => {
 		if (!openConversation || opening.current) return;
 		opening.current = true; setOpeningId(row.childId); setOpenError(undefined);
@@ -885,8 +894,12 @@ function HarnessPanel({
 	const selectedDetail =
 		selectedId && ready ? (
 			<View style={{ gap: 8, padding: 10, paddingTop: 0 }}>
-				{selectedWorker ? <WorkerConversation key={JSON.stringify([session, epoch, selectedWorker.childId, selectedWorker.attempt, selectedWorker.runtimeId])}
-					target={conversationTarget(selectedWorker)} epoch={epoch!} colors={theme.colors} platform={layout.platform} /> : <>
+				{selectedWorker ? <>
+					<Text accessibilityRole="header" style={{ color: fg, fontSize: 14, fontWeight: "600" }}>{workerTitle(selectedWorker)}</Text>
+					{selectedWorker.title !== workerTitle(selectedWorker) ? <Metadata colors={theme.colors}>Task: {selectedWorker.title}</Metadata> : null}
+					<WorkerConversation key={JSON.stringify([session, epoch, selectedWorker.childId, selectedWorker.attempt, selectedWorker.runtimeId])}
+						target={conversationTarget(selectedWorker)} epoch={epoch!} colors={theme.colors} platform={layout.platform} />
+				</> : <>
 				{detail.isPending ? (
 					<Text style={{ color: muted }}>Loading selected item…</Text>
 				) : null}
@@ -982,7 +995,7 @@ function HarnessPanel({
 			) : null}
 			{[...rows].sort((a, b) => Number("fromSubagent" in a && a.fromSubagent === true) - Number("fromSubagent" in b && b.fromSubagent === true)).map((row, index, ordered) => {
 				const id = "jobId" in row ? row.jobId : row.taskId;
-				const title = "jobId" in row ? row.name || "Background job" : row.title;
+				const title = "jobId" in row ? row.name || "Background job" : workerTitle(row);
 				const state = kind === "subagents" && viewMode === "active" && row.status === "completed"
 					? "Idle" : row.status.replace(/[_-]/g, " ").replace(/^./, value => value.toUpperCase());
 				const metadata = "jobId" in row

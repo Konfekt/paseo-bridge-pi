@@ -9,6 +9,8 @@ import { harnessJobsListRpc, harnessJobsOutputRpc, harnessSubagentsListRpc, harn
   harnessStatusRpc } from "../shared/harness-readonly";
 import { callHarnessReadOnly, validateHarnessReadOnlyDescriptor } from "./harness-readonly-transport";
 import { normalizeConversationStale } from "../shared/conversation-compat";
+import { correlateChildRoutes } from "../shared/existing-child-identity";
+import { readPrivateChildRuntimes, processStartToken } from "./child-runtime-registry";
 
 export async function readHarnessDescriptor(agentId: string): Promise<unknown> {
   if (!agentId || agentId.length > 256) return undefined;
@@ -28,11 +30,12 @@ export function createHarnessReadOnlyHandlers(readDescriptor = readHarnessDescri
     const current = await context.paseo.agents.ref(input.agentId).refresh();
     if (!current || current.agent.id !== input.agentId || current.agent.workspaceId !== input.workspaceId) throw new Error("Read-only request does not match the current agent workspace.");
   }
-  async function invoke(input: { agentId: string; workspaceId: string; expectedSessionId: string; expectedRuntimeEpoch: string }, method: string, payload: Record<string, unknown>, context: PluginHandlerContext) {
+  async function invoke(input: { agentId: string; workspaceId: string; expectedSessionId: string; expectedRuntimeEpoch: string }, method: string, payload: Record<string, unknown>, context: PluginHandlerContext, project?: (result: any) => Promise<any>) {
     await validateTarget(input, context);
     const descriptor = await readDescriptor(input.agentId);
     if (!validateHarnessReadOnlyDescriptor(descriptor, input.agentId) || descriptor.sessionId !== input.expectedSessionId || descriptor.runtimeEpoch !== input.expectedRuntimeEpoch) throw new Error("The active Pi session changed; refresh before requesting harness data.");
-    const result = await callHarnessReadOnly(descriptor, method, { ...payload, sessionId: descriptor.sessionId });
+    const raw = await callHarnessReadOnly(descriptor, method, { ...payload, sessionId: descriptor.sessionId });
+    const result = project ? await project(raw) : raw;
     await validateTarget(input, context);
     const currentDescriptor = await readDescriptor(input.agentId);
     if (!validateHarnessReadOnlyDescriptor(currentDescriptor, input.agentId) || currentDescriptor.sessionId !== descriptor.sessionId
@@ -61,7 +64,12 @@ export function createHarnessReadOnlyHandlers(readDescriptor = readHarnessDescri
     },
     jobsList: (input: RpcInput<typeof harnessJobsListRpc>, context: PluginHandlerContext) => invoke(input, "jobs.list", { limit: input.limit, cursor: input.cursor }, context),
     jobsOutput: (input: RpcInput<typeof harnessJobsOutputRpc>, context: PluginHandlerContext) => invoke(input, "jobs.output", { jobId: input.jobId, maxBytes: input.maxBytes }, context),
-    subagentsList: (input: RpcInput<typeof harnessSubagentsListRpc>, context: PluginHandlerContext) => invoke(input, "subagents.list", { limit: input.limit, cursor: input.cursor }, context),
+    subagentsList: (input: RpcInput<typeof harnessSubagentsListRpc>, context: PluginHandlerContext) => invoke(input, "subagents.list", { limit: input.limit, cursor: input.cursor }, context, async page => {
+      if (page?.state !== "available" || !Array.isArray(page.items) || !page.items.length) return page;
+      let records: any[] = [];
+      try { records = await readPrivateChildRuntimes(); } catch { /* No trusted mapping: retain bounded task labels, never stale route hints. */ }
+      return correlateChildRoutes(page, input.expectedSessionId, records, processStartToken);
+    }),
     subagentConversation: async (input: RpcInput<typeof harnessSubagentConversationRpc>, context: PluginHandlerContext) => {
       const result: any = await invoke(input, "subagents.conversation", {
         taskId: input.taskId, childId: input.childId, attempt: input.attempt, runtimeId: input.runtimeId, cursor: input.cursor,

@@ -79,7 +79,7 @@ export function WorkerConversation({ target, epoch, colors, platform }: {
         {cursor == null ? liveTools.filter(event => !persistedCallIds.has(event.toolCallId)).map(event => <NativeToolBadge key={`live:${event.toolCallId}`} name={event.name} argumentsValue={event.arguments} status={event.status ?? "running"}
           details={event.arguments === undefined ? event.result ?? "" : JSON.stringify({ arguments: event.arguments, ...(event.result ? { result: event.result } : {}) }, null, 2)} colors={colors}
           expanded={!!expanded[event.toolCallId]} onToggle={() => toggleTool(event.toolCallId)} />) : null}
-        {cursor == null && item.execution === "running" ? <NativeRunningTurnFooter color={colors.foregroundMuted} /> : null}
+        {cursor == null && item.execution === "running" ? <NativeRunningTurnFooter color={colors.foreground} /> : null}
         {!item.messages.length && !item.liveText ? <Metadata colors={colors}>No messages recorded yet.</Metadata> : null}
       </ScrollView>
     </View> : null}
