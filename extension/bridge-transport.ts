@@ -161,7 +161,23 @@ export class BridgeTransport {
     if (this.readonlyServer || this.closed) return;
     const socketPath = `${this.pipePath}.harness-readonly`;
     if (process.platform !== "win32") { try { fs.unlinkSync(socketPath); } catch {} }
-    this.readonlyServer = net.createServer((socket) => {
+    this.readonlyServer = net.createServer(socket => this.handleReadonlyConnection(socket));
+    this.readonlyServer.on("error", (error) => this.callbacks?.error(error));
+    this.readonlyServer.listen(socketPath, () => { if (process.platform !== "win32") { try { fs.chmodSync(socketPath, 0o600); } catch {} } });
+  }
+
+  /** Existing net.Server listeners retain their defining module across /reload.
+   * Replace the observation-only listener, not the live provider/controller. */
+  upgradeReadonlyEndpoint(): void {
+    this.readonlySockets ??= new Set<net.Socket>();
+    for (const socket of this.readonlySockets) socket.destroy();
+    this.readonlySockets.clear();
+    if (!this.readonlyServer) return;
+    this.readonlyServer.removeAllListeners("connection");
+    this.readonlyServer.on("connection", socket => this.handleReadonlyConnection(socket));
+  }
+
+  private handleReadonlyConnection(socket: net.Socket): void {
       if (this.readonlySockets.size >= 16 || this.closed) { socket.destroy(); return; }
       this.readonlySockets.add(socket);
       socket.on("close", () => this.readonlySockets.delete(socket));
@@ -215,9 +231,6 @@ export class BridgeTransport {
           else socket.end(frame);
         })().catch(() => socket.destroy());
       });
-    });
-    this.readonlyServer.on("error", (error) => this.callbacks?.error(error));
-    this.readonlyServer.listen(socketPath, () => { if (process.platform !== "win32") { try { fs.chmodSync(socketPath, 0o600); } catch {} } });
   }
 
   private ensureForegroundTasksEndpoint(): void {
@@ -463,6 +476,7 @@ export function takeBridgeAfterReload(sessionFile: string | undefined): Omit<Ret
   // methods in place, preserving its live controller/server; bind() adds only
   // the new read-only endpoint and close() owns its cleanup.
   Object.setPrototypeOf(retained.transport, BridgeTransport.prototype);
+  retained.transport.upgradeReadonlyEndpoint();
   return { transport: retained.transport, agentId: retained.agentId, titleAttempted: retained.titleAttempted };
 }
 
