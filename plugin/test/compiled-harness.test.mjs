@@ -113,7 +113,8 @@ test('compiled read-only panels render lists/details, bind generations and only 
     assert.ok(nodes(tree).some(node => node.props?.style?.borderRadius === 10), 'original completed Jobs card');
     assert.match(text(tree), new RegExp(`${job.jobId} · .* · observation only`), 'original fallback name and observation label');
     states.length = 0;
-    const task = { taskId: `subagent-task-${'b'.repeat(24)}`, title: 'Review', status: 'completed', attempt: 1 };
+    const task = { taskId: `subagent-task-${'b'.repeat(24)}`, childId: `subagent-child-${'c'.repeat(24)}`, groupId: `subagent-job-${'d'.repeat(24)}`, runtimeId: 'runtime', title: 'Review', status: 'completed', attempt: 1,
+      source: { agentId: 'nested-owner', workspaceId: 'nested-workspace', sessionId: 'nested-session', runtimeEpoch: identity.runtimeEpoch } };
     listResult = { data: { state: 'available', items: [task], stale: true, lastUpdated: null } };
     tree = render('harness-subagents');
     press(tree, 'Review · Completed');
@@ -124,6 +125,11 @@ test('compiled read-only panels render lists/details, bind generations and only 
     assert.deepEqual(opened.pop(), { agentId: 'verified-child', serverId: 'host' });
     await queries[2].queryFn();
     assert.equal(calls.at(-1).name, 'harness_subagent_report');
+    assert.equal(calls.at(-1).input.taskId, task.taskId, 'standalone report uses task ID, never the scoped selection key');
+    assert.equal(calls.at(-1).input.agentId, 'nested-owner');
+    assert.equal(calls.at(-1).input.workspaceId, 'nested-workspace');
+    assert.equal(calls.at(-1).input.expectedSessionId, 'nested-session');
+    assert.equal(calls.at(-1).input.expectedRuntimeEpoch, identity.runtimeEpoch);
     delete detailResult.data.item.paseoAgentId;
     assert.doesNotMatch(text(render('harness-subagents')), /Open child chat/);
     assert.ok(calls.every(call => ['harness_jobs_output', 'harness_subagent_report'].includes(call.name)));

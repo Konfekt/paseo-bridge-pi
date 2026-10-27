@@ -2,6 +2,8 @@ import { observeAgentDirectory, retainContribution } from "./agent-directory";
 import { useQuery } from "@tanstack/react-query";
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { readJobs } from "./jobs-pages";
+import { readSubagents } from './subagent-pages';
+import { orderTaskTree, taskGroupKey, treeAttemptKey } from "../shared/subagent-tree";
 import { groupSubagentAttempts, attemptIdentity } from "./subagent-attempts";
 import { Pressable, Text, View, type ScrollView as NativeScrollView } from "react-native";
 import { Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
@@ -47,22 +49,6 @@ type ChildTitleResolver = (row: ChildTitleRow) => string;
 
 type Kind = "jobs" | "subagents";
 
-async function readSubagents<T extends { items: any[]; nextCursor?: string; sessionId: string; state: string }>(load: (cursor?: string) => Promise<T>): Promise<T> {
-	const first = await load();
-	const items = [...first.items];
-	let cursor = first.nextCursor;
-	const seen = new Set<string>();
-	while (cursor) {
-		if (seen.has(cursor) || seen.size >= 100) throw new Error("Invalid subagent pagination");
-		seen.add(cursor);
-		const page = await load(cursor);
-		if (page.state !== "available" || page.sessionId !== first.sessionId) throw new Error("Subagent inventory changed");
-		items.push(...page.items);
-		cursor = page.nextCursor;
-	}
-	const unique = new Map(items.map(item => [`${item.childId}/${item.attempt}`, item]));
-	return { ...first, items: [...unique.values()], nextCursor: undefined };
-}
 type Agent = {
 	id: string;
 	workspaceId?: string | null;
@@ -178,8 +164,7 @@ function registerHarness(client: PluginClientContext) {
 				sourceTitle={entry?.title || "Conversation work"}
 				resolveChildTitle={row => nativeChildTitle(row, id => nativeTitles.get(id))}
 				openConversation={async (target) => {
-					if (!current() || target.agentId !== agentId ||
-						target.workspaceId !== workspaceId || target.hostId !== props.host.id)
+					if (!current() || target.hostId !== props.host.id)
 						throw new Error("The source conversation is no longer selected.");
 					await conversations.open(target, current);
 				}}
@@ -381,7 +366,7 @@ function useWorkSummary({ agentId, workspaceId, host }: JobScope) {
 			host.id,
 		],
 		enabled: ready,
-		queryFn: () => readSubagents(cursor => agentsCall({ ...bound, limit: 50, ...(cursor ? { cursor } : {}) })),
+		queryFn: () => readSubagents(cursor => agentsCall({ ...bound, includeDescendants: true, limit: 50, ...(cursor ? { cursor } : {}) })),
 		refetchInterval: 5000,
 		refetchOnReconnect: true,
 	});
@@ -421,6 +406,7 @@ function useWorkSummary({ agentId, workspaceId, host }: JobScope) {
 		),
 		foreground: count(foregroundRows),
 		foregroundIds,
+		hierarchyMessage: agents.data?.hierarchyMessage,
 		agents: count(
 			ready && !agents.isError && agents.data?.state === "available"
 				? [...groupSubagentAttempts(agents.data.items).values()].map(attempts => attempts[0]).filter(
@@ -711,6 +697,7 @@ function AgentsOverview(
 				openConversation={props.openConversation}
 				embedded
 			/> : null}
+			{!count && summary.hierarchyMessage ? <Metadata colors={props.theme.colors}>{summary.hierarchyMessage}</Metadata> : null}
 			{completed ? (!count ? <Text style={{ color: props.theme.colors.foregroundMuted, padding: 12 }}>{emptyLabel}</Text> : null) : (
 				<WorkAction label={count ? "" : emptyLabel} actionLabel="Completed" onPress={props.toggleCompleted} />
 			)}
@@ -799,7 +786,7 @@ function HarnessPanel({
 		queryFn: () =>
 			kind === "jobs"
 				? readJobs(cursor => jobsCall({ ...bound, limit: 50, ...(cursor ? { cursor } : {}) }))
-				: readSubagents(cursor => tasksCall({ ...bound, limit: 50, ...(cursor ? { cursor } : {}) })),
+				: readSubagents(cursor => tasksCall({ ...bound, includeDescendants: true, limit: 50, ...(cursor ? { cursor } : {}) })),
 
 		refetchInterval: 5000,
 		refetchOnReconnect: true,
@@ -812,14 +799,19 @@ function HarnessPanel({
 		selected.session === session &&
 		selected.epoch === epoch &&
 		(kind !== "subagents" || (!!attemptGroups.get(selected.id)?.[0] && attemptIdentity(attemptGroups.get(selected.id)![0]) === selected.attemptIdentity)) &&
-		(viewMode === "all" ||
+		(kind === "subagents" || viewMode === "all" ||
 			list.data?.items.some(
 				(row) =>
-					("jobId" in row ? row.jobId : row.taskId) === selected.id &&
+					("jobId" in row ? row.jobId : taskGroupKey(row)) === selected.id &&
 					isActiveRow(row) === (viewMode === "active"),
 			))
 			? selected.id
 			: undefined;
+	const selectedAttempt = selectedId ? attemptGroups.get(selectedId)?.[0] : undefined;
+	const detailBound = selectedAttempt?.source ? {
+		agentId: selectedAttempt.source.agentId, workspaceId: selectedAttempt.source.workspaceId,
+		expectedSessionId: selectedAttempt.source.sessionId, expectedRuntimeEpoch: selectedAttempt.source.runtimeEpoch,
+	} : bound;
 	const detail = useQuery({
 		queryKey: [
 			"harness-detail",
@@ -835,7 +827,7 @@ function HarnessPanel({
 		queryFn: () =>
 			kind === "jobs"
 				? outputCall({ ...bound, jobId: selectedId!, maxBytes: 24000 })
-				: reportCall({ ...bound, taskId: selectedId!, maxBytes: 24000 }),
+				: reportCall({ ...detailBound, taskId: selectedAttempt?.taskId ?? selectedId!, maxBytes: 24000 }),
 		refetchInterval: 5000,
 		refetchOnReconnect: true,
 	});
@@ -872,24 +864,32 @@ function HarnessPanel({
 		/>
 	);
 	const primaryItems = kind === "subagents" ? [...attemptGroups.values()].map(attempts => attempts[0]) : list.data?.items ?? [];
+	const tree = orderTaskTree([...attemptGroups.values()].map(attempts => attempts[0]).filter(row => row.kind !== "foreground" && !excludeTaskIds?.has(row.taskId)));
+	const depths = new Map(tree.map(({ row, depth }) => [taskGroupKey(row), depth]));
+	const retained = new Set<string>();
+	const ancestors: string[] = [];
+	for (const { row, depth } of tree) {
+		ancestors.length = depth;
+		ancestors[depth] = taskGroupKey(row);
+		if (viewMode === "all" || isActiveRow(row) === (viewMode === "active")) for (const key of ancestors) retained.add(key);
+	}
 	const rows =
 		ready && !list.isError && list.data?.state === "available"
-			? primaryItems.filter(
+			? (kind === "subagents" ? tree.map(entry => entry.row) : primaryItems).filter(
 					(row) =>
 						(kind !== "subagents" ||
 							!("kind" in row) ||
 							row.kind !== "foreground") &&
 						(!("taskId" in row) || !excludeTaskIds?.has(row.taskId)) &&
-						(viewMode === "all" ||
-							isActiveRow(row) === (viewMode === "active")),
+						(kind === "subagents" && "taskId" in row ? retained.has(taskGroupKey(row)) : viewMode === "all" || isActiveRow(row) === (viewMode === "active")),
 				)
 			: [];
 	type WorkerRow = Extract<(typeof rows)[number], { childId: string }>;
 	const selectedWorker = kind === "subagents" && openConversation
-		? rows.find((row): row is WorkerRow => "childId" in row && row.taskId === selectedId && attemptIdentity(row) === selected?.attemptIdentity) : undefined;
+		? rows.find((row): row is WorkerRow => "childId" in row && taskGroupKey(row) === selectedId && attemptIdentity(row) === selected?.attemptIdentity) : undefined;
 	const workerTitle = (row: ChildTitleRow) => resolveChildTitle?.(row) ?? nativeChildTitle(row, () => undefined);
-	const conversationTarget = (row: WorkerRow): AgentConversationTarget => ({ hostId: host.id, agentId, workspaceId,
-		sessionId: session!, runtimeEpoch: epoch!, taskId: row.taskId, childId: row.childId, groupId: row.groupId, attempt: row.attempt, runtimeId: row.runtimeId, title: workerTitle(row) });
+	const conversationTarget = (row: WorkerRow): AgentConversationTarget => ({ hostId: host.id, agentId: row.source?.agentId ?? agentId, workspaceId: row.source?.workspaceId ?? workspaceId,
+		sessionId: row.source?.sessionId ?? session!, runtimeEpoch: row.source?.runtimeEpoch ?? epoch!, taskId: row.taskId, childId: row.childId, groupId: row.groupId, attempt: row.attempt, runtimeId: row.runtimeId, title: workerTitle(row) });
 	const openWorker = (row: WorkerRow) => {
 		if (!openConversation || opening.current) return;
 		opening.current = true; setOpeningId(row.childId); setOpenError(undefined);
@@ -909,7 +909,7 @@ function HarnessPanel({
 				{selectedWorker ? <>
 					{selectedWorker.title !== workerTitle(selectedWorker) ? <Metadata colors={theme.colors}>Task: {selectedWorker.title}</Metadata> : null}
 					<WorkerConversation key={JSON.stringify([session, epoch, selectedWorker.childId, selectedWorker.attempt, selectedWorker.runtimeId])}
-						target={conversationTarget(selectedWorker)} epoch={epoch!} colors={theme.colors} platform={layout.platform} />
+						target={conversationTarget(selectedWorker)} epoch={conversationTarget(selectedWorker).runtimeEpoch} colors={theme.colors} platform={layout.platform} />
 				</> : <>
 				{detail.isPending ? (
 					<Text style={{ color: muted }}>Loading selected item…</Text>
@@ -950,9 +950,10 @@ function HarnessPanel({
 					: taskLink && navigation?.openAgent
 						? <NativeButton colors={theme.colors} label="Open child chat" onPress={() => navigation.openAgent({ agentId: taskLink, serverId: host.id })} />
 						: null}
-				{selectedWorker && (attemptGroups.get(selectedWorker.taskId)?.length ?? 0) > 1 ? <AttemptHistory key={JSON.stringify([session, epoch, attemptIdentity(selectedWorker)])} rows={attemptGroups.get(selectedWorker.taskId)!.slice(1)} target={conversationTarget} colors={theme.colors} platform={layout.platform} /> : null}
+				{selectedWorker && (attemptGroups.get(taskGroupKey(selectedWorker))?.length ?? 0) > 1 ? <AttemptHistory key={JSON.stringify([session, epoch, attemptIdentity(selectedWorker)])} rows={attemptGroups.get(taskGroupKey(selectedWorker))!.slice(1)} target={conversationTarget} colors={theme.colors} platform={layout.platform} /> : null}
 			</View>
 		) : null;
+	const hierarchyMessage = list.data && "hierarchyMessage" in list.data ? list.data.hierarchyMessage : undefined;
 	const content = (
 		<View
 			style={{
@@ -996,6 +997,7 @@ function HarnessPanel({
 					This view is unavailable. Retrying automatically.
 				</Text>
 			) : null}
+			{ready && kind === "subagents" && !list.isError && hierarchyMessage ? <Metadata colors={theme.colors}>{hierarchyMessage}</Metadata> : null}
 			{ready && (list.data?.state !== "available" || (kind === "jobs" && list.data?.message)) ? (
 				<Text style={{ color: muted }}>{list.data?.message}</Text>
 			) : null}
@@ -1006,7 +1008,7 @@ function HarnessPanel({
 				</Text>
 			) : null}
 			{[...rows].sort((a, b) => Number("fromSubagent" in a && a.fromSubagent === true) - Number("fromSubagent" in b && b.fromSubagent === true)).map((row, index, ordered) => {
-				const id = "jobId" in row ? row.jobId : row.taskId;
+				const id = "jobId" in row ? row.jobId : taskGroupKey(row);
 				const title = "jobId" in row ? row.name || "Background job" : workerTitle(row);
 				const state = kind === "subagents" && viewMode === "active" && row.status === "completed"
 					? "Idle" : row.status.replace(/[_-]/g, " ").replace(/^./, value => value.toUpperCase());
@@ -1016,15 +1018,16 @@ function HarnessPanel({
 				const label = "jobId" in row
 					? `${row.name ?? row.jobId}${viewMode === "active" || row.status === "completed" ? "" : ` · ${row.status}`} · ${elapsed(row.createdAt, ["starting", "running"].includes(row.status) ? null : row.updatedAt)}${row.observationOnly ? " · observation only" : ""}`
 					: `${title} · ${metadata}`;
-				const opensChat = kind === "subagents" && viewMode === "completed" && !!openConversation && !("childId" in row && (attemptGroups.get(row.taskId)?.length ?? 0) > 1);
+				const opensChat = kind === "subagents" && viewMode === "completed" && !!openConversation && !("childId" in row && (attemptGroups.get(taskGroupKey(row))?.length ?? 0) > 1);
 				return (
-					<Fragment key={"childId" in row ? `${row.childId}/${row.attempt}` : id}>
+					<Fragment key={"childId" in row ? treeAttemptKey(row) : id}>
 					{"fromSubagent" in row && row.fromSubagent === true && (index === 0 || !("fromSubagent" in ordered[index - 1] && ordered[index - 1].fromSubagent === true)) ? (
 						<Text accessibilityRole="header" style={{ color: fg, fontSize: 18 }}>From subagents</Text>
 					) : null}
-					<View
-						style={
-							!isActiveRow(row)
+					<View accessibilityLabel={"childId" in row ? `Agent hierarchy level ${(depths.get(id) ?? 0) + 1}` : undefined}
+						style={{
+							...("childId" in row ? { marginLeft: Math.min(depths.get(id) ?? 0, 3) * 16 } : {}),
+							...(!isActiveRow(row) && !(kind === "subagents" && viewMode === "active")
 								? {
 										borderWidth: 1,
 										borderColor:
@@ -1036,8 +1039,8 @@ function HarnessPanel({
 										overflow: "hidden",
 										marginBottom: 0,
 									}
-								: undefined
-						}
+								: {})
+						}}
 					>
 						{button(
 							label,
@@ -1047,7 +1050,7 @@ function HarnessPanel({
 							},
 							!!openingId,
 							viewMode !== "completed",
-							kind === "subagents" && isActiveRow(row) ? row.status : undefined,
+							kind === "subagents" && (isActiveRow(row) || viewMode === "active") ? row.status : undefined,
 							{ title, detail: metadata, opensChat, expanded: opensChat ? undefined : selectedId === id },
 						)}
 						{selectedId === id ? selectedDetail : null}

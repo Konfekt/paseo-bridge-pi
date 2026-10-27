@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { treeAttemptKey } from '../shared/subagent-tree.ts';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -79,6 +80,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
   let settingsContract;
   let rpcResponse = async () => ({ available: false });
   let workAgents;
+  let hierarchyMessage;
   let workJobs = [], foregroundJobs = [];
   let conversationError = false;
   let messages = [{ id: 'm1', role: 'assistant', text: 'Worker transcript evidence' }];
@@ -101,7 +103,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
       const key = options.queryKey;
       const data = workAgents === undefined ? (key[0] === 'harness-status' ? { available: false } : undefined)
         : key[0] === 'harness-status' ? { available: true, sessionId: 's', runtimeEpoch: 'e' }
-        : key[0] === 'harness-list' ? { state: 'available', items: key[1] === 'subagents' ? workAgents : workJobs }
+        : key[0] === 'harness-list' ? { state: 'available', items: key[1] === 'subagents' ? workAgents : workJobs, ...(key[1] === 'subagents' ? { hierarchyMessage } : {}) }
         : key[0] === 'harness-detail' ? { state: 'available', item: { text: 'Owned grandchild job output', truncated: false } }
         : key[0] === 'foreground-tasks' ? { available: true, tasks: foregroundJobs }
         : key[0] === 'worker-conversation' ? { state: 'available', item: { messages, nextCursor: 2, execution: 'running', liveText: 'Streaming assistant delta', liveEvents: [{ sequence: 3, kind: 'tool_end', toolCallId: 'call-1', name: 'bash', status: 'completed', arguments: { command: 'git status --short', private: 'ARGUMENT_SECRET' }, result: 'LIVE_RESULT_SECRET' }] } }
@@ -228,6 +230,27 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     tree = render();
     const rows = tree => nodes(tree).filter(n => n.type === 'Pressable' && /^(Worker \d|Old worker|Helper|Urgent|Renamed native child|URGENT[^·]*) ·/.test(n.props?.accessibilityLabel ?? ''));
     assert.equal(rows(tree).length, 5);
+    {
+      const originalRows = workAgents;
+      const source = { agentId: 'nested-owner', workspaceId: 'nested-workspace', sessionId: 'nested-session', runtimeEpoch: 'nested-epoch' };
+      const parent = { ...originalRows[0], reaped: true };
+      const child = { ...originalRows[3], title: 'Worker 6', source, parentKey: treeAttemptKey(parent) };
+      hierarchyMessage = 'Some descendant inventories are unavailable (stale evidence or read limits). Descendants of exited or unverifiable agents are unavailable; historical ancestry is not inferred.';
+      workAgents = [child, parent]; tree = render();
+      assert.match(text(tree), /Some descendant inventories are unavailable/);
+      assert.match(text(tree), /historical ancestry is not inferred/);
+      const ancestor = nodes(tree).find(n => n.props?.accessibilityLabel === 'Agent hierarchy level 1');
+      assert.equal(ancestor.props.style.borderWidth, undefined, 'idle ancestor in active tree uses existing active-row wrapper, not completed card');
+      assert.ok(nodes(ancestor).some(n => n.props?.accessibilityLabel === 'Idle'), 'idle ancestor retains existing green idle indicator');
+      assert.deepEqual(rows(tree).map(n => n.props.accessibilityLabel.split(' · ')[0]), ['Worker 0', 'Worker 6'], 'finished parent retained before active descendant');
+      assert.deepEqual(nodes(tree).filter(n => /^Agent hierarchy level /.test(n.props?.accessibilityLabel ?? '')).map(n => [n.props.accessibilityLabel, n.props.style.marginLeft]), [['Agent hierarchy level 1', 0], ['Agent hierarchy level 2', 16]], 'narrow child retains common right edge without changing row padding');
+      rows(tree)[1].props.onPress(); tree = render();
+      const nestedQuery = queries.find(q => q.queryKey[0] === 'worker-conversation');
+      assert.ok(nestedQuery.queryKey.includes('nested-session') && nestedQuery.queryKey.includes('nested-epoch') && nestedQuery.queryKey.includes('nested-owner'), 'nested trace bound to actual parent session and epoch');
+      rows(tree)[1].props.onPress();
+      hierarchyMessage = undefined;
+      workAgents = originalRows; tree = render();
+    }
     const desktopStyle = Object.assign({}, ...rows(tree)[0].props.style({ pressed: false }));
     assert.equal(desktopStyle.gap, 6);
     assert.equal(desktopStyle.paddingHorizontal, 12);

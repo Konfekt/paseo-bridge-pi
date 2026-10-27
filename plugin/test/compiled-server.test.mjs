@@ -29,6 +29,8 @@ test('compiled plugin backend operates the real bridge without prompt dispatch o
   let changeWorkspaceAfterList = false;
   let changeEpochAfterList = false;
   let observationMode = 'valid';
+  let descendantMode = 'valid';
+  let childReadCalls = 0;
   const foregroundCalls = [];
   const task = { taskId: 'task-1', childId: 'child-1', workerEpoch: 'worker-epoch-1', groupId: 'group-1', attempt: 1, title: 'Helper', model: 'harness-test/mock:off', status: 'waiting-permission',
     createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:01.000Z', pendingInteractions: 1, canPrompt: true, canStop: true };
@@ -71,6 +73,14 @@ test('compiled plugin backend operates the real bridge without prompt dispatch o
           ], nextCursor: 'opaque-page', lastUpdated: null, stale: false };
         }
         if (request.method === 'jobs.output') return { protocol: 1, state: 'available', sessionId: 'session', item: { jobId: request.payload.jobId, text: 'Grandchild read-only output', truncated: false, source: 'log', lastUpdated: null, stale: true }, lastUpdated: null, stale: true };
+        if (request.method === 'subagents.list' && request.sessionId === 'child-session') {
+          childReadCalls++;
+          if (descendantMode === 'slow') await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+        if (request.method === 'subagents.list' && request.sessionId === 'child-session') return { protocol: 1, state: 'available', sessionId: descendantMode === 'wrong-session' ? 'wrong-session' : 'child-session', ...(descendantMode === 'cursor-cycle' ? { nextCursor: 'repeated' } : {}), items: [{
+          taskId: 'subagent-task-' + '4'.repeat(24), childId: 'subagent-child-' + '5'.repeat(24), groupId: 'subagent-job-' + '6'.repeat(24), runtimeId: 'grandchild-runtime', attempt: 1, status: 'running', title: 'descendant', lastUpdated: null, stale: false,
+          source: { agentId: 'forged', workspaceId: 'forged', sessionId: 'forged', runtimeEpoch: 'forged' }, parentKey: 'forged',
+        }], lastUpdated: null, stale: descendantMode === 'stale' };
         if (request.method === 'subagents.list') return { protocol: 1, state: 'available', sessionId: 'session', items: [{
           taskId: 'subagent-task-111111111111111111111111', childId: 'subagent-child-222222222222222222222222',
           groupId: 'subagent-job-333333333333333333333333', runtimeId: 'runtime-exact', attempt: 1,
@@ -124,6 +134,51 @@ test('compiled plugin backend operates the real bridge without prompt dispatch o
     }
     await putRecord(liveRecord);
     assert.equal(commandCalls, 0, 'route lookup never prompts, imports or creates a child');
+    {
+      const childDescriptor = { ...readDescriptor, agentId: 'existing-child', sessionId: 'child-session' };
+      writeHarnessReadOnlyDescriptor(join(root, '.pi', 'paseo-bridge'), childDescriptor);
+      const matchingRecord = { ...liveRecord, attempt: 1, runtimeId: 'runtime-exact' };
+      await putRecord(matchingRecord);
+      const treeInput = { ...readTarget, includeDescendants: true };
+      const tree = await invoke('harness_subagents_list', treeInput);
+      assert.equal(tree.items.length, 2, 'verified readonly child inventory exposes descendants');
+      const beforeConcurrent = childReadCalls;
+      const concurrent = await Promise.all([invoke('harness_subagents_list', treeInput), invoke('harness_subagents_list', treeInput)]);
+      assert.equal(childReadCalls - beforeConcurrent, 1, 'same exact source/session/epoch/page shares a single subtree read');
+      assert.deepEqual(concurrent[0], concurrent[1]);
+      const beforeOtherPage = childReadCalls;
+      await Promise.all([invoke('harness_subagents_list', treeInput), invoke('harness_subagents_list', { ...treeInput, cursor: 'other-page' })]);
+      assert.equal(childReadCalls - beforeOtherPage, 2, 'different page snapshots are never incorrectly coalesced');
+      await assert.rejects(invoke('harness_subagents_list', { ...treeInput, expectedSessionId: 'wrong-source-session' }), 'single-flight must not cross source identity');
+      assert.equal(tree.items[0].source.sessionId, 'session');
+      assert.equal(tree.items[1].source.sessionId, 'child-session');
+      assert.equal(tree.items[1].source.agentId, 'existing-child', 'producer cannot forge source routing');
+      assert.notEqual(tree.items[1].parentKey, 'forged', 'producer cannot forge ancestry');
+      assert.equal(tree.items[1].parentKey, JSON.stringify([JSON.stringify(['agent', 'workspace', 'session', readTarget.expectedRuntimeEpoch, tree.items[0].taskId]), tree.items[0].childId, 1, 'runtime-exact']));
+      for (const changed of [{ parentSessionId: 'other-owner' }, { processStartToken: 'dead:pid' }, { attempt: 2 }, { lifecycle: 'reaped' }]) {
+        await putRecord({ ...matchingRecord, ...changed });
+        assert.equal((await invoke('harness_subagents_list', treeInput)).items.length, 1, 'missing ownership evidence omits descendant relation');
+      }
+      for (const mode of ['wrong-session', 'cursor-cycle', 'stale']) {
+        descendantMode = mode;
+        await putRecord(matchingRecord);
+        const omitted = await invoke('harness_subagents_list', treeInput);
+        assert.equal(omitted.items.length, 1, 'stale identity or pagination cannot manufacture descendants');
+        assert.equal(omitted.hierarchyPartial, true);
+        assert.match(omitted.hierarchyMessage, /unavailable/);
+      }
+      descendantMode = 'slow';
+      await putRecord(matchingRecord);
+      const started = Date.now();
+      const bounded = await invoke('harness_subagents_list', treeInput);
+      assert.ok(Date.now() - started < 1800, 'slow descendant cannot extend traversal beyond its overall deadline');
+      assert.equal(bounded.items.length, 1, 'direct rows survive slow child inventory');
+      assert.equal(bounded.hierarchyPartial, true);
+      assert.match(bounded.hierarchyMessage, /unavailable|budget/);
+      descendantMode = 'valid';
+      await putRecord(liveRecord);
+      assert.equal(commandCalls, 0, 'descent remains readonly, no child creation');
+    }
     const observed = await invoke('observability_snapshot', { ...readTarget, feature: 'progress' });
     assert.equal(observed.data.steps[0].status, 'blocked');
     assert.equal(JSON.stringify(observed).includes('never-forward'), false);
@@ -154,7 +209,7 @@ test('compiled plugin backend operates the real bridge without prompt dispatch o
     const titled = await invoke('harness_subagents_list', readTarget);
     assert.equal(titled.items[0].paseoAgentId, 'existing-child');
     assert.equal(titled.items[0].paseoWorkspaceId, 'workspace');
-    assert.deepEqual(refreshedAgents.slice(beforeTitleLookup), ['agent', 'agent'], 'batch route metadata adds no per-child RPC or catalog snapshots');
+    assert.deepEqual(refreshedAgents.slice(beforeTitleLookup), ['agent', 'agent', 'agent'], 'root read and final registry attribution are revalidated without per-child catalog snapshots');
     await putRecord(liveRecord);
     const foreground = await invoke('foreground_tasks_status', target);
     assert.equal(foreground.available, true, foreground.reason ?? '');

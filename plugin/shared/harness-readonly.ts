@@ -17,7 +17,8 @@ const taskIdentity = {
   runtimeId: z.string().max(256).nullable(), attempt: z.number().int().min(1), lastUpdated: z.string().nullable(), stale: z.boolean(),
   paseoAgentId: z.string().max(256).optional(), paseoWorkspaceId: z.string().max(256).optional(),
 };
-const task = z.object({ ...taskIdentity, reaped: z.boolean().optional(), status: z.string().max(40), title: z.string().max(500), summary: z.string().max(4000).optional(), kind: z.enum(["foreground", "subagent"]).optional(), needsAttention: z.boolean().optional() });
+const taskSource = z.object({ agentId: z.string().min(1).max(256), workspaceId: z.string().min(1).max(256), sessionId: z.string().min(1).max(256), runtimeEpoch: z.string().uuid() });
+const task = z.object({ source: taskSource.optional(), parentKey: z.string().max(2048).optional(), ...taskIdentity, reaped: z.boolean().optional(), status: z.string().max(40), title: z.string().max(500), summary: z.string().max(4000).optional(), kind: z.enum(["foreground", "subagent"]).optional(), needsAttention: z.boolean().optional() });
 export const harnessStatusRpc = defineRpc({ name: "harness_status", input: z.object(target), output: z.object({
   available: z.boolean(), sessionId: z.string().nullable(), runtimeEpoch: z.string().uuid().nullable(), reason: z.string().nullable(),
 }) });
@@ -30,8 +31,8 @@ export const harnessJobsOutputRpc = defineRpc({ name: "harness_jobs_output", inp
   jobId: z.string(), text: z.string().max(48 * 1024), truncated: z.boolean(), source: z.enum(["log", "pane", "none"]),
   lastUpdated: z.string().nullable(), stale: z.boolean(),
 }).optional() }) });
-export const harnessSubagentsListRpc = defineRpc({ name: "harness_subagents_list", input: z.object(page), output: z.object({
-  ...common, items: z.array(task).max(50), nextCursor: z.string().max(1024).optional(),
+export const harnessSubagentsListRpc = defineRpc({ name: "harness_subagents_list", input: z.object({ ...page, includeDescendants: z.boolean().optional() }), output: z.object({
+  ...common, hierarchyPartial: z.boolean().optional(), hierarchyMessage: z.string().max(1000).optional(), items: z.array(task).max(200), nextCursor: z.string().max(1024).optional(),
 }) });
 export const harnessSubagentConversationRpc = defineRpc({ name: "harness_subagent_conversation", input: z.object({
   ...base, taskId: z.string().regex(/^subagent-task-[a-f0-9]{24}$/), childId: z.string().regex(/^subagent-child-[a-f0-9]{24}$/),

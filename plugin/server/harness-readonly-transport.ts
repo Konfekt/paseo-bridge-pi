@@ -28,6 +28,7 @@ export async function callHarnessReadOnly(descriptor: HarnessReadOnlyDescriptor,
       try {
         const stat = await lstat(descriptor.socketPath);
         if (!stat.isSocket() || (typeof process.getuid === "function" && stat.uid !== process.getuid()) || (stat.mode & 0o777) !== 0o600) throw new Error("Read-only harness socket is not private");
+        if (settled) return; // A slow filesystem read must not open a socket after its deadline.
         socket = connect(descriptor.socketPath);
         socket.setTimeout(timeoutMs, () => finish(new Error("Read-only harness request timed out")));
         socket.once("error", error => finish(error));
