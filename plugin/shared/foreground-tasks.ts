@@ -1,5 +1,6 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { validateToolPresentationArguments, validateToolPresentation } from "./tool-presentation";
 
 // Mirrored from pi-agent-extensions/shared/foreground-tasks.ts. Keep protocol changes coordinated.
 const taskTarget = z.object({ taskId: z.string().min(1).max(256), childId: z.string().min(1).max(256), workerEpoch: z.string().min(1).max(256) }).strict();
@@ -19,7 +20,18 @@ const task = z.object({
   createdAt: z.string().max(100), updatedAt: z.string().max(100), pendingInteractions: z.number().int().min(0).max(1000), canPrompt: z.boolean(), canStop: z.boolean(),
 }).strict();
 const interaction = z.object({ id: z.string().min(1).max(256), workerEpoch: z.string().min(1).max(256), createdAt: z.string().max(100), request: interactionInput }).strict();
-const message = z.object({ id: z.string().min(1).max(256), role: z.enum(["parent", "user", "assistant", "tool", "system"]), text: z.string().max(48 * 1024), timestamp: z.string().max(100), toolName: z.string().max(500).optional(), truncated: z.boolean().optional() }).strict();
+const message = z.object({
+  id: z.string().min(1).max(256), role: z.enum(["parent", "user", "assistant", "tool", "system"]),
+  text: z.string().max(48 * 1024), timestamp: z.string().max(100), toolName: z.string().max(500).optional(), truncated: z.boolean().optional(),
+  toolCallId: z.string().regex(/^[a-zA-Z0-9._:|\-]{1,128}$/).optional(),
+  arguments: z.unknown().optional(), toolPhase: z.enum(["call", "result"]).optional(),
+  status: z.enum(["running", "completed", "failed", "unknown", "canceled", "cancelled"]).optional(),
+  resultFormat: z.literal("text").optional(), toolPresentation: z.unknown().transform(validateToolPresentation).optional(),
+}).strict().transform(entry => ({
+  ...entry,
+  arguments: entry.toolName && entry.arguments !== undefined ? validateToolPresentationArguments(entry.toolName, entry.arguments) : undefined,
+  toolPresentation: entry.toolPresentation?.toolName === entry.toolName ? entry.toolPresentation : undefined,
+}));
 const view = z.object({ task, messages: z.array(message).max(500), interactions: z.array(interaction).max(100), nextCursor: z.string().max(1024).optional(), liveText: z.string().max(48 * 1024).optional(), truncated: z.boolean() }).strict();
 const requestId = z.string().uuid();
 const command = z.discriminatedUnion("operation", [

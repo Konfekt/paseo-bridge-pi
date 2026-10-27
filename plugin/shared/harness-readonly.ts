@@ -1,5 +1,32 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { validateToolPresentationArguments, validateToolPresentation } from "./tool-presentation";
+
+// Optional display-only data. Invalid/oversized new metadata is rejected while
+// original text remains usable for old snapshots and bounded fallback.
+const toolPresentation = z.unknown().transform(validateToolPresentation).optional();
+const transcriptCall = z.object({
+  type: z.literal("toolCall"), id: z.string().max(128), name: z.string().max(128), arguments: z.unknown(),
+  toolArguments: z.unknown().optional(), status: z.enum(["completed", "failed", "unknown"]).optional(),
+  result: z.string().max(4096).optional(), resultFormat: z.literal("text").optional(), toolPresentation,
+}).transform(part => ({ ...part,
+  toolArguments: part.toolArguments === undefined ? undefined : validateToolPresentationArguments(part.name, part.toolArguments),
+  toolPresentation: part.toolPresentation?.toolName === part.name ? part.toolPresentation : undefined,
+}));
+const transcriptMessage = z.object({
+  id: z.string().max(128), role: z.enum(["user", "assistant", "tool", "parent"]), text: z.string().max(24 * 1024),
+  truncated: z.boolean().optional(), parts: z.array(z.union([z.object({ type: z.literal("text"), text: z.string().max(24 * 1024) }), transcriptCall])).max(32).optional(),
+  resultFormat: z.literal("text").optional(), toolPresentation, toolCallId: z.string().max(128).optional(), toolName: z.string().max(128).optional(),
+  status: z.enum(["completed", "failed", "unknown"]).optional(),
+}).transform(entry => ({ ...entry, toolPresentation: entry.toolPresentation?.toolName === entry.toolName ? entry.toolPresentation : undefined }));
+const transcriptLiveEvent = z.object({
+  sequence: z.number().int().min(0), kind: z.enum(["tool_start", "tool_end"]), toolCallId: z.string().max(128), name: z.string().max(128),
+  status: z.enum(["running", "completed", "failed"]).optional(), arguments: z.unknown().optional(), toolArguments: z.unknown().optional(),
+  result: z.string().max(2048).optional(), resultFormat: z.literal("text").optional(), toolPresentation,
+}).transform(event => ({ ...event,
+  toolArguments: event.toolArguments === undefined ? undefined : validateToolPresentationArguments(event.name, event.toolArguments),
+  toolPresentation: event.toolPresentation?.toolName === event.name ? event.toolPresentation : undefined,
+}));
 
 const target = { agentId: z.string().min(1).max(256), workspaceId: z.string().min(1).max(256) };
 const base = { ...target, expectedSessionId: z.string().min(1).max(256), expectedRuntimeEpoch: z.string().uuid() };
@@ -38,10 +65,9 @@ export const harnessSubagentConversationRpc = defineRpc({ name: "harness_subagen
   ...base, taskId: z.string().regex(/^subagent-task-[a-f0-9]{24}$/), childId: z.string().regex(/^subagent-child-[a-f0-9]{24}$/),
   attempt: z.number().int().min(1), runtimeId: z.string().max(256).nullable(), cursor: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
 }), output: z.object({ ...common, item: z.object({
-  ...taskIdentity, stale: z.boolean().optional(), messages: z.array(z.object({ id: z.string().max(128), role: z.enum(["user", "assistant", "tool", "parent"]),
-    text: z.string().max(24 * 1024), truncated: z.boolean().optional(), parts: z.array(z.union([z.object({ type: z.literal("text"), text: z.string().max(24 * 1024) }), z.object({ type: z.literal("toolCall"), id: z.string().max(128), name: z.string().max(128), arguments: z.unknown(), status: z.enum(["completed", "failed", "unknown"]).optional(), result: z.string().max(4096).optional(), resultFormat: z.literal("text").optional() })])).max(32).optional(), resultFormat: z.literal("text").optional(), toolCallId: z.string().max(128).optional(), toolName: z.string().max(128).optional(), status: z.enum(["completed", "failed", "unknown"]).optional() })).max(500),
+  ...taskIdentity, stale: z.boolean().optional(), messages: z.array(transcriptMessage).max(500),
   truncated: z.boolean(), nextCursor: z.number().int().min(0).optional(), execution: z.enum(["running", "completed", "failed", "cancelled", "lost"]).optional(),
-  liveText: z.string().max(16 * 1024).optional(), liveSequence: z.number().int().min(0).optional(), liveEvents: z.array(z.object({ sequence: z.number().int().min(0), kind: z.enum(["tool_start", "tool_end"]), toolCallId: z.string().max(128), name: z.string().max(128), status: z.enum(["running", "completed", "failed"]).optional(), arguments: z.unknown().optional(), result: z.string().max(2048).optional(), resultFormat: z.literal("text").optional() })).max(12).optional(),
+  liveText: z.string().max(16 * 1024).optional(), liveSequence: z.number().int().min(0).optional(), liveEvents: z.array(transcriptLiveEvent).max(12).optional(),
 }).optional() }) });
 
 export const harnessSubagentRouteRpc = defineRpc({ name: "harness_subagent_route", input: z.object({

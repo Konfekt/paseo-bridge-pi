@@ -18,6 +18,8 @@ import {
 } from "../shared/foreground-tasks";
 
 import { isActiveWorkStatus } from "../shared/work-display";
+import { foregroundTranscriptMessages } from "../shared/transcript-tools";
+import { ForegroundTranscriptEntry } from "./foreground-transcript";
 import { Metadata, NativeButton, NativeRow, OutputWell } from "./presentation";
 
 type Agent = {
@@ -269,6 +271,7 @@ export function ForegroundTasksSection({
 		saved.selected ? (saved.drafts[taskKey(saved.selected)]?.text ?? "") : "",
 	);
 	const [message, setMessage] = useState<string | null>(null);
+	const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
 	const [, rerender] = useState(0);
 	const mounted = useRef(true);
 	const latestIdentity = useRef("");
@@ -368,6 +371,7 @@ export function ForegroundTasksSection({
 		[themeColors],
 	);
 	const selectedKey = selected ? taskKey(selected) : "";
+	const activityMessages = useMemo(() => foregroundTranscriptMessages(view.data?.messages ?? []), [view.data?.messages]);
 	const busy = Boolean(selectedKey && saved.actions[selectedKey]);
 	const uncertain = Boolean(
 		selectedKey && saved.requestIds[`uncertain:${selectedKey}`],
@@ -778,27 +782,17 @@ export function ForegroundTasksSection({
 							{view.data.liveText ? (
 								<OutputWell colors={theme.colors} text={`Current streaming excerpt: ${view.data.liveText}`} monospace platform={layout.platform} maxHeight={200} />
 							) : null}
-							{view.data.messages
+							{activityMessages
 								.slice(-20)
 								.reverse()
-								.map((entry) => (
-									<View
-										key={entry.id}
-										style={[{ padding: 8, borderBottomWidth: 1 }, style.border]}
-									>
-										<Text style={style.muted}>
-											{entry.role}
-											{entry.toolName ? ` · ${entry.toolName}` : ""}
-											{entry.truncated ? " · message truncated" : ""}
-										</Text>
-										<Text selectable style={style.foreground}>
-											{entry.text}
-										</Text>
-									</View>
-								))}
-							{view.data.messages.length > 20 ? (
+								.map((entry) => {
+									const key = `${memoryScope}\0${selectedKey}\0${entry.toolCallId ?? entry.id}`;
+									return <ForegroundTranscriptEntry key={entry.id} entry={entry} colors={theme.colors}
+										expanded={!!expandedTools[key]} onToggle={() => setExpandedTools(previous => ({ ...previous, [key]: !previous[key] }))} />;
+								})}
+							{activityMessages.length > 20 ? (
 								<Text style={style.muted}>
-									Showing the newest 20 of {view.data.messages.length} fetched
+									Showing the newest 20 of {activityMessages.length} fetched
 									messages; older page messages are omitted.
 								</Text>
 							) : null}

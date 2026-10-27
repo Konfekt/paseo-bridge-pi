@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeToolResult, toolDetailSections, mergeLiveToolEvents, TOOL_DETAIL_BYTES } from "../client/native-tool-details.ts";
+import { normalizeToolResult, mergeLiveToolEvents, TOOL_DETAIL_BYTES } from "../client/native-tool-details.ts";
 
 test("live end events preserve only their correlated start arguments", () => {
   const events = mergeLiveToolEvents([
@@ -18,16 +18,11 @@ test("actual retained Read envelope renders text once without JSON escaping", ()
   const text = 'export const value = "hello";\nnext line\n';
   const raw = JSON.stringify({ content: [{ type: "text", text }], structuredContent: text });
   assert.equal(normalizeToolResult(raw), text);
-  assert.deepEqual(toolDetailSections("read", { path: "/src/a.ts", offset: 1, limit: 20 }, raw), [
-    { label: "File", text: "/src/a.ts" }, { label: "Content", text },
-  ]);
 });
 test("double-stringified actual MCP Read wire result is decoded, but terminal text is not", () => {
   const file = 'export const literal = "hello";\n';
   const result = JSON.stringify(JSON.stringify({ content: [{ type: "text", text: file }], structuredContent: file }));
-  assert.deepEqual(toolDetailSections("read", { path: "/tmp/example.ts", offset: 1, limit: 20 }, result), [
-    { label: "File", text: "/tmp/example.ts" }, { label: "Content", text: file },
-  ]);
+  assert.equal(normalizeToolResult(result), file);
   for (const literal of ['{"content":[1,2]}', '{"content":[{"text":"file data"}]}', '{"content":[]}', '{"content":[{"type":"text","text":"file data"}],"title":"JSON document"}']) {
     assert.equal(normalizeToolResult(literal), literal);
     assert.equal(normalizeToolResult(JSON.stringify(literal)), JSON.stringify(literal), "non-envelope wire-looking strings retain exact quoting");
@@ -49,11 +44,7 @@ test("native string, nested MCP result, structured fallback, errors, images", ()
 test("all tools normalize transport, including shell JSON stdout and unknown MCP tools", () => {
   const stdout = '{"content":[{"type":"text","text":"this is command output, not another transport"}],"count":2}';
   const result = JSON.stringify({ content: [{ type: "text", text: stdout }, { type: "text", text: "stderr: warning" }], details: {}, structuredContent: { output: stdout, exit_code: 0 } });
-  for (const name of ["bash", "shell", "custom_unknown_tool"]) {
-    const sections = toolDetailSections(name, { command: "printf JSON" }, result);
-    assert.equal(sections.at(-1)?.text, `${stdout}\nstderr: warning`);
-    assert.equal(sections.filter(section => section.text.includes(stdout)).length, 1);
-  }
+  assert.equal(normalizeToolResult(result), `${stdout}\nstderr: warning`);
   assert.equal(normalizeToolResult({ content: [], structuredContent: { content: [1, 2], business: { retained: true } } }), JSON.stringify({ content: [1, 2], business: { retained: true } }, null, 2));
   assert.equal(normalizeToolResult({ type: "tool_result", content: JSON.stringify({ content: [{ type: "text", text: stdout }] }) }), stdout);
 });
@@ -127,17 +118,6 @@ test("ordinary JSON content arrays and terminal file JSON are never treated as m
   assert.equal(normalizeToolResult({ content: [{ type: "text", text: actualEnvelopeShapedFile }] }), actualEnvelopeShapedFile);
 });
 
-test("Write and Edit use authoritative exact args, not result identity/context", () => {
-  assert.deepEqual(toolDetailSections("write", { path: "a", content: "a\nb" }, "ok"), [
-    { label: "File", text: "a" }, { label: "Content", text: "a\nb" }, { label: "Result", text: "ok" },
-  ]);
-  assert.deepEqual(toolDetailSections("edit", { path: "a", edits: [{ oldText: "before", newText: "after" }] }, undefined), [
-    { label: "File", text: "a" }, { label: "Removed", text: "before", tone: "removed" }, { label: "Added", text: "after", tone: "added" },
-  ]);
-  assert.equal(toolDetailSections("unknown", { name: "read", path: "a" }, "raw")[0].label, "Arguments");
-  assert.equal(toolDetailSections("functions.read", { path: "a" }, "raw")[0].label, "Arguments");
-  assert.equal(toolDetailSections("edit", { path: "a", truncated: true, preview: "not exact" }, undefined).some(section => section.tone), false);
-});
 test("malformed/truncated transport remains readable; depth, bytes, and block count bounded", () => {
   assert.equal(normalizeToolResult('{"content":[{"type":"text","text":"cut'), '{"content":[{"type":"text","text":"cut');
   const boundedEmoji = normalizeToolResult("😀".repeat(TOOL_DETAIL_BYTES));

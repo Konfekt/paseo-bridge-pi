@@ -9,66 +9,63 @@
  * - packages/app/src/components/highlighted-content.tsx: code line/gutter layout.
  * - packages/app/src/components/tool-call-details.tsx:701-732: Read/Write
  *   content sections and Edit diff sections (rendered with public RN primitives).
- * Paseo's private Unistyles, protocol presentation package, detail sheets and icon
- * components are intentionally replaced by the public plugin Icon and local safe
- * summaries. See ../licenses/PASEO-APACHE-2.0.txt.
+ * Private Unistyles/detail sheets/icon components are replaced by public RN
+ * primitives. Tool classification, summaries and detail data now come from the
+ * bundled unchanged native Pi mapper/error helper and public protocol display
+ * modules, not local copies. See ../licenses/PASEO-APACHE-2.0.txt.
  */
 import { nativeCodeRows } from "./native-code-model";
 import { highlightNativeRows, nativeSyntaxPalette } from "./native-code-highlight";
-import { toolDetailSections } from "./native-tool-details";
+import { nativeToolModel } from "./native-tool-presentation";
+import type { NativeToolStatus } from "./native-tool-presentation";
 import { AccessibilityInfo, Pressable, Text, View } from "react-native";
 import { useEffect, useState } from "react";
 import { Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
+import { getMarkdownTextMetrics, SPINNER_DOT_COUNT } from "@getpaseo/plugin/shared";
+
+// Same pure text metrics as native markdown code; the bridge owns only layout.
+const TOOL_CODE_METRICS = getMarkdownTextMetrics(12);
 import { getNativeSpinnerOpacity, getNativeSpinnerStep, NATIVE_SPINNER_DOT_SIZE as DOT_SIZE, NATIVE_SPINNER_GAP as DOT_GAP } from "./native-transcript-model";
 
-function toolPresentation(name: string, argumentsValue: unknown): { label: string; summary?: string; icon: string } {
-  const args = argumentsValue && typeof argumentsValue === "object" && !Array.isArray(argumentsValue) ? argumentsValue as Record<string, unknown> : {};
-  const first = (...keys: string[]) => keys.map(key => args[key]).find(value => typeof value === "string" && value.trim()) as string | undefined;
-  const tool = name.toLowerCase();
-  if (["bash", "shell", "terminal", "run", "exec"].includes(tool)) return { label: "Shell", summary: first("command", "cmd", "script"), icon: "SquareTerminal" };
-  if (["read", "cat", "open"].includes(tool)) return { label: "Read", summary: first("filePath", "path", "file"), icon: "Eye" };
-  if (["edit", "write", "apply_patch"].includes(tool)) return { label: tool === "edit" ? "Edit" : "Write", summary: first("filePath", "path", "file"), icon: "Pencil" };
-  if (["grep", "rg", "find", "search"].includes(tool)) return { label: "Search", summary: first("query", "pattern", "path"), icon: "Search" };
-  if (["task", "task_outcome", "subagent"].includes(tool)) return { label: tool === "task" ? "Task" : name.replace(/[_-]+/g, " ").replace(/^./, c => c.toUpperCase()), summary: first("description", "task", "summary"), icon: "Bot" };
-  if (tool === "thinking") return { label: "Thinking", icon: "Brain" };
-  if (tool === "fetch" || tool === "web_search") return { label: "Search", summary: first("url", "query"), icon: "Search" };
-  return { label: name.replace(/[._-]+/g, " ").replace(/^./, c => c.toUpperCase()), summary: first("command", "path", "query", "description"), icon: "Wrench" };
-}
-
-export function NativeToolBadge({ name, status, summary, argumentsValue, details, result, colors, expanded, onToggle }: {
-  name: string; status: "running" | "completed" | "failed" | "unknown"; summary?: string; argumentsValue?: unknown; details?: string; result?: unknown; colors: any; expanded: boolean; onToggle(): void;
+export function NativeToolBadge({ name, status, summary, argumentsValue, details, result, toolPresentation, resultSource, toolCallId, colors, expanded, onToggle }: {
+  name: string; status: NativeToolStatus; summary?: string; argumentsValue?: unknown; details?: string; result?: unknown; toolPresentation?: unknown; resultSource?: "live" | "history"; toolCallId?: string; colors: any; expanded: boolean; onToggle(): void;
 }) {
-  const presentation = toolPresentation(name, argumentsValue);
-  const label = presentation.label;
-  const subtitle = summary ?? presentation.summary;
-  const args = argumentsValue && typeof argumentsValue === "object" ? argumentsValue as Record<string, unknown> : {};
+  const model = nativeToolModel(name, argumentsValue, result ?? details, status, toolPresentation, resultSource, toolCallId);
+  const label = model.display.displayName;
+  const subtitle = model.display.summary ?? summary;
   const palette = nativeSyntaxPalette(colors);
-  const filePath = [args.filePath, args.path, args.file].find(value => typeof value === "string") as string | undefined;
-  const fileTool = ["read", "write", "edit"].includes(name.toLowerCase());
   return <View style={{ alignSelf: "stretch", marginHorizontal: -13 }}>
     <Pressable accessibilityRole="button" accessibilityLabel={`Tool ${label}${subtitle ? ` · ${subtitle}` : ""} · ${status}`} accessibilityState={{ expanded }} aria-expanded={expanded} onPress={onToggle}
       style={{ flexDirection: "row", alignItems: "center", borderRadius: 8, borderWidth: 1, borderColor: expanded ? colors.border : "transparent", borderBottomLeftRadius: expanded ? 0 : 8, borderBottomRightRadius: expanded ? 0 : 8, backgroundColor: expanded ? colors.surface1 : "transparent", paddingHorizontal: 8, paddingVertical: 4 }}>
       <View style={{ width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center", marginRight: 4 }}>
-        <Icon name={expanded ? "ChevronDown" : status === "failed" ? "TriangleAlert" : presentation.icon} size={12} color={status === "failed" ? colors.statusDanger : colors.foregroundMuted} />
+        <Icon name={expanded ? "ChevronDown" : status === "failed" ? "TriangleAlert" : model.icon} size={12} color={status === "failed" ? colors.statusDanger : colors.foregroundMuted} />
       </View>
       <Text numberOfLines={1} style={{ color: colors.foregroundMuted, fontSize: 14, flexShrink: 0 }}>{label}</Text>
       {subtitle ? <Text numberOfLines={1} style={{ color: colors.foregroundMuted, fontSize: 14, marginLeft: 8, flexShrink: 1, minWidth: 0 }}>{subtitle}</Text> : null}
       <View style={{ flex: 1 }} />
     </Pressable>
     {expanded ? <View style={{ borderWidth: 1, borderTopWidth: 0, borderColor: colors.border, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, padding: 8, backgroundColor: colors.surface1 }}>
-      {toolDetailSections(name, argumentsValue, result ?? details, status === "failed").map((section, index) => <View key={index} style={{ marginBottom: 8 }}>
-        <Text style={{ color: colors.foregroundMuted, fontSize: 11, marginBottom: 4 }}>{section.label}</Text>
+      {model.sections.map((section, index) => section.kind !== "code" ? <View key={index} style={{ marginBottom: 8 }} testID="work-native-tool-section">
+        {section.title ? <Text style={{ color: colors.foregroundMuted, fontSize: 11, marginBottom: 4 }}>{section.title}</Text> : null}
+        <ScrollView nestedScrollEnabled style={{ maxHeight: 240 }} showsVerticalScrollIndicator>
+          {section.kind === "prose" ? <Text selectable style={{ color: colors.foreground, fontSize: 14, lineHeight: 20 }}>{section.text}</Text>
+            : section.fields.map((field, fieldIndex) => <View key={fieldIndex} style={{ flexDirection: "row", gap: 12, marginBottom: 4 }}>
+              <Text style={{ color: colors.foregroundMuted, fontSize: 12, minWidth: 80, flexShrink: 1 }}>{field.label}</Text>
+              <Text selectable style={{ color: colors.foreground, fontSize: 14, flex: 1 }}>{field.value}</Text>
+            </View>)}
+        </ScrollView>
+      </View> : <View key={index} style={{ marginBottom: 8 }}>
+        <Text style={{ color: section.error ? colors.statusDanger : colors.foregroundMuted, fontSize: 11, marginBottom: 4 }}>{section.label}</Text>
         <ScrollView nestedScrollEnabled style={{ maxHeight: 240 }} showsVerticalScrollIndicator>
           <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator>
             <View testID="work-native-code-surface" dataSet={{ pmono: "" }}>
               {highlightNativeRows(nativeCodeRows(section.text, {
                 tone: section.tone,
-                ...(name.toLowerCase() === "read" && section.label === "Content" && status !== "failed" ? { startLine: typeof args.offset === "number" ? args.offset : 1 } : {}),
-                unifiedDiff: name.toLowerCase() === "edit" && section.label === "Result" && /(?:^|\n)@@ -\d/.test(section.text),
-              }), section.text, fileTool && (["Content", "Removed", "Added"].includes(section.label) || (name.toLowerCase() === "edit" && section.label === "Result" && /(?:^|\n)@@ -\d/.test(section.text))) ? filePath : undefined,
-                name.toLowerCase() === "edit" && section.label === "Result" && /(?:^|\n)@@ -\d/.test(section.text)).map((row, line) => <View key={line} style={{ flexDirection: "row", backgroundColor: row.tone === "removed" ? "rgba(220,60,60,0.12)" : row.tone === "added" ? "rgba(40,180,90,0.12)" : "transparent" }}>
-                {row.number !== undefined ? <Text testID="work-code-line-number" style={{ color: colors.foregroundMuted, fontFamily: "monospace", fontSize: 12, lineHeight: 17, minWidth: 36, paddingRight: 12, textAlign: "right", userSelect: "none" }}>{String(row.number)}</Text> : null}
-                <Text testID="work-code-line" selectable style={{ color: colors.foreground, fontFamily: "monospace", fontSize: 12, lineHeight: 17 }}>{section.tone === "removed" ? "− " : section.tone === "added" ? "+ " : ""}{row.tokens ? row.tokens.map((token, tokenIndex) => <Text key={tokenIndex} dataSet={{ syntaxRole: token.style ?? "base" }} style={{ color: token.style ? palette[token.style] ?? colors.foreground : colors.foreground }}>{token.text || " "}</Text>) : row.text || " "}</Text>
+                startLine: section.startLine,
+                unifiedDiff: section.unifiedDiff,
+              }), section.text, section.filePath, section.unifiedDiff).map((row, line) => <View key={line} style={{ flexDirection: "row", backgroundColor: row.tone === "removed" ? "rgba(220,60,60,0.12)" : row.tone === "added" ? "rgba(40,180,90,0.12)" : "transparent" }}>
+                {row.number !== undefined ? <Text testID="work-code-line-number" style={{ color: colors.foregroundMuted, fontFamily: "monospace", ...TOOL_CODE_METRICS, minWidth: 36, paddingRight: 12, textAlign: "right", userSelect: "none" }}>{String(row.number)}</Text> : null}
+                <Text testID="work-code-line" selectable style={{ color: section.error ? colors.statusDanger : colors.foreground, fontFamily: "monospace", ...TOOL_CODE_METRICS }}>{section.tone === "removed" ? "− " : section.tone === "added" ? "+ " : ""}{row.tokens ? row.tokens.map((token, tokenIndex) => <Text key={tokenIndex} dataSet={{ syntaxRole: token.style ?? "base" }} style={{ color: token.style ? palette[token.style] ?? colors.foreground : colors.foreground }}>{token.text || " "}</Text>) : row.text || " "}</Text>
               </View>)}
             </View>
           </ScrollView>
@@ -105,7 +102,7 @@ function NativeSpinner({ color }: { color: string }) {
   const dot = DOT_SIZE, gap = DOT_GAP;
   return <View accessibilityLabel="Assistant is working" style={{ width: 14, height: 14, alignItems: "center", justifyContent: "center" }}>
     <View style={{ width: dot * 2 + gap, height: dot * 3 + gap * 2, position: "relative" }}>
-      {Array.from({ length: 6 }, (_, i) => <View key={i} style={{ position: "absolute", left: (i % 2) * (dot + gap), top: Math.floor(i / 2) * (dot + gap), width: dot, height: dot, borderRadius: dot / 2, backgroundColor: color, opacity: getNativeSpinnerOpacity(step, i) }} />)}
+      {Array.from({ length: SPINNER_DOT_COUNT }, (_, i) => <View key={i} style={{ position: "absolute", left: (i % 2) * (dot + gap), top: Math.floor(i / 2) * (dot + gap), width: dot, height: dot, borderRadius: dot / 2, backgroundColor: color, opacity: getNativeSpinnerOpacity(step, i) }} />)}
     </View>
   </View>;
 }

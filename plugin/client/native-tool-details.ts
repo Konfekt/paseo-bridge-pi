@@ -2,12 +2,13 @@
 export const TOOL_DETAIL_BYTES = 24 * 1024;
 const MAX_DEPTH = 6;
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+const utf8Bytes = (char: string) => char.codePointAt(0)! > 0xffff ? 4 : char.charCodeAt(0) > 0x7ff ? 3 : char.charCodeAt(0) > 0x7f ? 2 : 1;
 function bounded(text: string): string {
   // UTF-8, including astral characters; do not split a code point.
   const marker = "\n[truncated]";
   let bytes = 0, end = 0, safeEnd = 0;
   for (const char of text) {
-    bytes += char.codePointAt(0)! > 0xffff ? 4 : char.charCodeAt(0) > 0x7ff ? 3 : char.charCodeAt(0) > 0x7f ? 2 : 1;
+    bytes += utf8Bytes(char);
     if (bytes > TOOL_DETAIL_BYTES) return text.slice(0, safeEnd) + marker;
     end += char.length;
     if (bytes <= TOOL_DETAIL_BYTES - marker.length) safeEnd = end;
@@ -53,10 +54,17 @@ export function isLegacyTruncatedResult(value: unknown): value is { truncated: t
 export function literalToolResult(value: unknown, format?: "text"): unknown {
   return format === "text" && typeof value === "string" ? { content: [{ type: "text", text: value }] } : value;
 }
+export function selectedToolResultSource(live: unknown, retained: unknown): "live" | "history" {
+  if (isLegacyTruncatedResult(live) && retained !== undefined && retained !== "") return "history";
+  return live !== undefined && live !== null ? "live" : "history";
+}
 export function preferredToolResult(live: unknown, retained: unknown, liveFormat?: "text", retainedFormat?: "text"): unknown {
-  return isLegacyTruncatedResult(live) && retained !== undefined && retained !== ""
-    ? literalToolResult(retained, retainedFormat)
-    : live !== undefined && live !== null ? literalToolResult(live, liveFormat) : literalToolResult(retained, retainedFormat);
+  return selectedToolResultSource(live, retained) === "live" ? literalToolResult(live, liveFormat) : literalToolResult(retained, retainedFormat);
+}
+/** Select metadata from exactly the same producer result as the displayed text.
+ * A newer live result without typed metadata must not inherit stale history. */
+export function preferredToolPresentation<T>(live: unknown, retained: unknown, livePresentation: T | undefined, retainedPresentation: T | undefined): T | undefined {
+  return selectedToolResultSource(live, retained) === "live" ? livePresentation : retainedPresentation;
 }
 /** Parse only transport positions. Text blocks are terminal even when they contain JSON. */
 export function normalizeToolResult(input: unknown): string {
@@ -109,41 +117,88 @@ export function normalizeToolResult(input: unknown): string {
   return decode(input, 0);
 }
 /** End events omit arguments; retain the matching start's authoritative arguments. */
-export function mergeLiveToolEvents<T extends { toolCallId: string; arguments?: unknown }>(events: readonly T[]): T[] {
+export function mergeLiveToolEvents<T extends { toolCallId: string; name?: string; kind?: string; arguments?: unknown; toolArguments?: unknown }>(events: readonly T[]): T[] {
   const tools = new Map<string, T>();
   for (const event of events) {
-    const previous = tools.get(event.toolCallId);
-    tools.set(event.toolCallId, { ...previous, ...event, arguments: event.arguments ?? previous?.arguments });
+    const prior = event.kind === "tool_start" ? undefined : tools.get(event.toolCallId);
+    const previous = prior?.name && event.name && prior.name !== event.name ? undefined : prior;
+    tools.set(event.toolCallId, { ...previous, ...event,
+      arguments: event.arguments ?? previous?.arguments,
+      toolArguments: event.toolArguments ?? previous?.toolArguments,
+    });
   }
   return [...tools.values()];
 }
-export type ToolDetailSection = { label: string; text: string; tone?: "removed" | "added" };
-export function toolDetailSections(name: string, argumentsValue: unknown, result: unknown, failed = false): ToolDetailSection[] {
-  const args = record(argumentsValue) ? argumentsValue : {};
-  const sections: ToolDetailSection[] = [];
-  const path = [args.path, args.filePath, args.file].find(value => typeof value === "string");
-  const tool = name.toLowerCase(); // exact provider name, never output-derived
-  if (["bash", "shell"].includes(tool)) {
-    const command = args.command ?? args.cmd ?? args.script;
-    if (typeof command === "string") sections.push({ label: "Command", text: bounded(command) });
-    if (Object.keys(args).some(key => !["command", "cmd", "script", "timeout", "timeout_ms", "workdir"].includes(key))) sections.push({ label: "Arguments", text: readable(argumentsValue) });
-  }
-  if (["read", "write", "edit"].includes(tool) && typeof path === "string") sections.push({ label: "File", text: bounded(path) });
-  if (tool === "write" && typeof args.content === "string") sections.push({ label: "Content", text: bounded(args.content) });
-  if (tool === "edit") {
-    const edits = Array.isArray(args.edits) ? args.edits : [args];
-    for (const edit of edits.slice(0, 32)) {
-      if (!record(edit)) continue;
-      const old = edit.oldText ?? edit.old_string;
-      const next = edit.newText ?? edit.new_string;
-      // These are exact replacement fragments, not invented file context/line numbers.
-      if (typeof old === "string" && typeof next === "string") {
-        sections.push({ label: "Removed", text: bounded(old), tone: "removed" }, { label: "Added", text: bounded(next), tone: "added" });
+/** A per-render UTF-8 budget for the canonical formatter's input and rendered output. */
+export function toolDetailTextBudget() {
+  let remaining = TOOL_DETAIL_BYTES;
+  return (text: string): string => {
+    const marker = "\n[truncated]";
+    let bytes = 0, end = 0, safeEnd = 0;
+    for (const char of text) {
+      bytes += utf8Bytes(char);
+      if (bytes > remaining) {
+        const result = remaining >= marker.length ? text.slice(0, safeEnd) + marker : "";
+        remaining = 0;
+        return result;
       }
+      end += char.length;
+      if (bytes <= remaining - marker.length) safeEnd = end;
     }
-    if (edits.length > 32) sections.push({ label: "Edits", text: "[truncated]" });
+    remaining -= bytes;
+    return text;
+  };
+}
+/** Transport adaptation only: canonical formatters own labels and human summaries.
+ * Literal text blocks are terminal, even when they contain JSON. Binary blocks
+ * are replaced before generic field formatting can expose their payloads. */
+export function toolPresentationValue(input: unknown, transport = false): unknown {
+  const text = toolDetailTextBudget();
+  const seen = new Set<object>();
+  let nodes = 0;
+  // Canonical subagent metadata includes group.children[].task_outcome fields.
+  // Keep that ordinary producer structure; this is separate from wire peeling.
+  const maxPresentationDepth = 10;
+  function visit(value: unknown, depth: number, transport = false): unknown {
+    if (++nodes > 512 || depth >= maxPresentationDepth) return "[tool output nesting limit]";
+    if (typeof value === "string") {
+      if (!transport) return text(value);
+      const limited = bounded(value);
+      if (limited !== value) return text(/^[\s]*[{"]/.test(value) ? "[structured tool output truncated]" : limited);
+      let candidate: unknown = value;
+      for (let level = depth + 1; level < maxPresentationDepth && typeof candidate === "string"; level++) {
+        try { candidate = JSON.parse(candidate); } catch { break; }
+        if (envelope(candidate)) return visit(candidate, level, true);
+        if (level === maxPresentationDepth - 1 && typeof candidate === "string") return text("[tool output nesting limit]");
+      }
+      return text(value);
+    }
+    if (!value || typeof value !== "object") return value;
+    if (seen.has(value)) return "[circular tool output]";
+    seen.add(value);
+    try {
+      if (Array.isArray(value)) return [...value.slice(0, 128).map(child => visit(child, depth + 1)), ...(value.length > 128 ? ["[truncated]"] : [])];
+      if (!record(value)) return "[unsupported content]";
+      if (transport && value.truncated === true && typeof value.preview === "string") return text(normalizeToolResult(value));
+      if (transport && (value.type === "tool_result" || value.type === "toolResult") && envelope(value)) {
+        return { content: [{ type: "text", text: text(normalizeToolResult(value)) }] };
+      }
+      if (contentBlock(value) && value.type !== "text" && !envelope(value)) return text(normalizeToolResult({ content: [value] }));
+      const result: Record<string, unknown> = {};
+      for (const [key, child] of Object.entries(value).slice(0, 128)) {
+        if (key === "__proto__") continue;
+        if (transport && key === "content" && envelope(value) && Array.isArray(child)) {
+          result[key] = child.slice(0, 128).map(block => {
+            if (record(block) && block.type === "text" && typeof block.text === "string") return { type: "text", text: text(block.text) };
+            if (envelope(block)) return { type: "text", text: text(normalizeToolResult(block)) };
+            return { type: "text", text: text(normalizeToolResult({ type: "tool_result", content: [block] })) };
+          });
+          if (child.length > 128) (result[key] as unknown[]).push({ type: "text", text: "[truncated]" });
+        } else result[key] = visit(child, depth + 1, transport && key === "content" && envelope(value));
+      }
+      if (Object.keys(value).length > 128) result["[truncated]"] = true;
+      return result;
+    } finally { seen.delete(value); }
   }
-  if ((!sections.length || args.truncated === true) && argumentsValue !== undefined) sections.push({ label: "Arguments", text: readable(argumentsValue) });
-  if (result !== undefined && result !== "") sections.push({ label: failed ? "Error" : tool === "read" ? "Content" : "Result", text: normalizeToolResult(result) });
-  return sections;
+  return visit(input, 0, transport);
 }
