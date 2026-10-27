@@ -352,7 +352,7 @@ test("explicit dormant Activity and fallback Accounts modules retain meters, iso
 		const accountRender = () => { hook = 0; return header.button.behavior.Content(accountProps); };
 		let accountTree = accountRender();
 		await new Promise(r => setImmediate(r));
-		assert.equal(agentSubscriptions.length, 4, 'Activity, exact-chat Codex, fallback Accounts registration, and opened Accounts popover subscribe independently');
+		assert.equal(agentSubscriptions.length, 3, 'Activity, fallback Accounts registration, and opened Accounts popover subscribe independently; no duplicate composer account owner');
 		agentSubscriptions.at(-1).snapshot({ entries: [
 			{ agent: { id: "agent-a", name: "Alpha", workspaceId: "workspace", provider: "pi" } },
 			{ agent: { id: "agent-b", name: "Beta", workspaceId: "workspace", provider: "pi" } },
