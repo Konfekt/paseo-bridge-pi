@@ -25,7 +25,7 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 const jwt = claims => `header.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.signature`;
 const identity = (provider, accountId, subject) => hash(JSON.stringify([provider, accountId, subject]));
 
-async function fixture({ provider = 'openai-codex', defaultSelected = false, accountId = 'same-name', subject = 'work-subject', reportedSubject = subject, reportedAccount = accountId, providerMetadata = true, supported = true, snapshots, includeOpenai = false } = {}) {
+async function fixture({ provider = 'openai-codex', defaultSelected = false, accountId = 'same-name', subject = 'work-subject', reportedSubject = subject, reportedAccount = accountId, providerMetadata = true, supported = true, snapshots, includeOpenai = false, quotaBody } = {}) {
   const rootDir = await mkdtemp(join(tmpdir(), 'session-usage-fixture-'));
   activeHome = rootDir;
   const base = join(rootDir, '.pi', 'paseo-bridge');
@@ -84,7 +84,7 @@ async function fixture({ provider = 'openai-codex', defaultSelected = false, acc
   globalThis.fetch = async (url, init = {}) => {
     calls.push({ url: String(url), authorization: init.headers?.Authorization, accountId: init.headers?.['ChatGPT-Account-Id'] });
     const body = String(url).endsWith('/chatpass/apps') ? { items: [{ id: 'native-client', windows: [{ used_percent: 5, limit_window_seconds: 3600 }] }] }
-      : { plan_type: 'synthetic', rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: 3600, reset_at: 2000000000 } } };
+      : quotaBody ?? { plan_type: 'synthetic', rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: 3600, reset_at: 2000000000 } } };
     return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   const scope = model => ({ kind: 'session', provider: 'pi', model, env: { PASEO_AGENT_ID: 'agent', PI_CODING_AGENT_DIR: dir, HOME: rootDir } });
@@ -102,6 +102,25 @@ test('standalone named and default Codex fetch use Codex grant with no OpenAI co
     assert.deepEqual(f.calls.map(call => call.url), ['https://chatgpt.com/backend-api/wham/usage']);
     assert.equal(item.key, identity('openai-codex', 'same-name', 'work-subject'));
   }
+});
+
+test('quota mapping preserves duration IDs, scoped limits, review windows, and over-100 utilization', async t => {
+  const f = await fixture({ quotaBody: {
+    plan_type: 'synthetic',
+    rate_limit: { primary_window: { used_percent: 125, limit_window_seconds: 3600 } },
+    additional_rate_limits: [{ metered_feature: 'feature-x', limit_name: 'Feature X', rate_limit: { secondary_window: { used_percent: 4, limit_window_seconds: 604800 } } }],
+    code_review_rate_limit: { primary_window: { used_percent: 2, limit_window_seconds: 18000 } },
+    credits: { balance: 9 },
+  } }); t.after(f.close);
+  const item = await f.discover('openai-codex/gpt-test');
+  const report = await f.fetchUsage(item.input);
+  assert.equal(report.status, 'available');
+  assert.deepEqual(report.windows.map(({ id, usedPct, summary }) => [id, usedPct, summary ?? false]), [
+    ['3600s', 125, true],
+    ['limit:feature-x:weekly', 4, false],
+    ['code_review:five_hour', 2, false],
+  ]);
+  assert.deepEqual(report.balances, [{ id: 'credits', label: 'Credits', remaining: 9, unit: 'credits', tone: 'ok' }]);
 });
 
 test('Codex usage accepts private session-routing metadata without crossing provider bindings', async t => {

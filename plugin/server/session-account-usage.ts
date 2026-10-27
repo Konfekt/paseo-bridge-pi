@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { join, isAbsolute } from "node:path";
 import { z } from "zod";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { quotaWindowDescriptors } from "@getpaseo/plugin/shared";
 import {
 	toneFromUsedPct,
 	balanceToneFromRemaining,
@@ -58,29 +59,15 @@ function usageWindows(
 	rate: z.infer<typeof rateLimitSchema> | null | undefined,
 	scope?: { id: string; label: string },
 ) {
-	return (["primary_window", "secondary_window"] as const).flatMap((slot) => {
-		const value = rate?.[slot];
-		if (!value) return [];
-		const primary = slot === "primary_window";
-		return [
-			windowFromReportedDuration({
-				durationSeconds: value.limit_window_seconds ?? null,
-				unknown: {
-					id: primary ? "unknown_primary" : "unknown_secondary",
-					label: primary ? "Primary limit" : "Secondary limit",
-					shortLabel: "",
-				},
-				scope,
-				summary: !scope,
-				utilizationPct: value.used_percent,
-				resetsAt:
-					value.reset_at == null
-						? null
-						: new Date(value.reset_at * 1000).toISOString(),
-				tone: toneFromUsedPct(value.used_percent),
-			}),
-		];
-	});
+	return quotaWindowDescriptors(rate, {
+		scope,
+		summary: !scope,
+	}).map((window) =>
+		windowFromReportedDuration({
+			...window,
+			tone: toneFromUsedPct(window.utilizationPct),
+		}),
+	);
 }
 const credentialSchema = z.object({
 	type: z.literal("oauth").optional().default("oauth"),
