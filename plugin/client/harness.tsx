@@ -950,6 +950,7 @@ function HarnessPanel({
 					: taskLink && navigation?.openAgent
 						? <NativeButton colors={theme.colors} label="Open child chat" onPress={() => navigation.openAgent({ agentId: taskLink, serverId: host.id })} />
 						: null}
+				{selectedWorker && (attemptGroups.get(selectedWorker.taskId)?.length ?? 0) > 1 ? <AttemptHistory key={JSON.stringify([session, epoch, attemptIdentity(selectedWorker)])} rows={attemptGroups.get(selectedWorker.taskId)!.slice(1)} target={conversationTarget} colors={theme.colors} platform={layout.platform} /> : null}
 			</View>
 		) : null;
 	const content = (
@@ -1015,7 +1016,7 @@ function HarnessPanel({
 				const label = "jobId" in row
 					? `${row.name ?? row.jobId}${viewMode === "active" || row.status === "completed" ? "" : ` · ${row.status}`} · ${elapsed(row.createdAt, ["starting", "running"].includes(row.status) ? null : row.updatedAt)}${row.observationOnly ? " · observation only" : ""}`
 					: `${title} · ${metadata}`;
-				const opensChat = kind === "subagents" && viewMode === "completed" && !!openConversation;
+				const opensChat = kind === "subagents" && viewMode === "completed" && !!openConversation && !("childId" in row && (attemptGroups.get(row.taskId)?.length ?? 0) > 1);
 				return (
 					<Fragment key={"childId" in row ? `${row.childId}/${row.attempt}` : id}>
 					{"fromSubagent" in row && row.fromSubagent === true && (index === 0 || !("fromSubagent" in ordered[index - 1] && ordered[index - 1].fromSubagent === true)) ? (
@@ -1050,7 +1051,6 @@ function HarnessPanel({
 							{ title, detail: metadata, opensChat, expanded: opensChat ? undefined : selectedId === id },
 						)}
 						{selectedId === id ? selectedDetail : null}
-						{"childId" in row && (attemptGroups.get(row.taskId)?.length ?? 0) > 1 ? <AttemptHistory key={JSON.stringify([session, epoch, row.taskId])} rows={attemptGroups.get(row.taskId)!.slice(1)} target={conversationTarget} colors={theme.colors} platform={layout.platform} /> : null}
 					</View>
 					</Fragment>
 				);

@@ -259,16 +259,37 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.doesNotMatch(text(tree), /Owned grandchild job output|Worker transcript evidence/, 'stale primary selection cannot display cached taskId-only report or trace');
     assert.ok(!queries.some(q => q.queryKey[0] === 'harness-detail' && q.enabled), 'superseded selection never enables fallback task report');
     assert.equal(rows(tree).length, 5, 'resumed attempt does not add a peer row');
+    assert.doesNotMatch(text(tree), /Previous attempts/, 'collapsed primary row has no peer history control');
     rows(tree).find(n => n.props.accessibilityLabel.startsWith('Worker 0 ·')).props.onPress(); tree = render();
     assert.deepEqual(queries.find(q => q.queryKey[0] === 'worker-conversation').queryKey.slice(6, 10), ['task-0', 'resumed-child', 2, 'resumed-runtime'], 'explicit latest click binds resumed trace');
+    assert.ok(text(tree).indexOf('Previous attempts (1)') > text(tree).indexOf('Open child chat'), 'history is at bottom after current trace and child chat action');
     nodes(tree).find(n => n.type === 'Pressable' && text(n).includes('Previous attempts (1)')).props.onPress(); tree = render();
     nodes(tree).find(n => n.type === 'Pressable' && text(n).includes('Attempt 1')).props.onPress(); tree = render();
     assert.deepEqual(queries.filter(q => q.queryKey[0] === 'worker-conversation').map(q => q.queryKey.slice(6, 10)), [
       ['task-0', 'resumed-child', 2, 'resumed-runtime'], ['task-0', 'child-0', 1, 'runtime-0'],
     ], 'history remains separately bound to retained original attempt');
+    rows(tree).find(n => n.props.accessibilityLabel.startsWith('Worker 0 ·')).props.onPress(); tree = render();
+    assert.doesNotMatch(text(tree), /Previous attempts|Attempt 1/, 'collapsing parent unmounts history');
+    rows(tree).find(n => n.props.accessibilityLabel.startsWith('Worker 0 ·')).props.onPress(); tree = render();
+    assert.match(text(tree), /Previous attempts/);
+    assert.doesNotMatch(text(tree), /Attempt 1/, 'history resets collapsed when parent reopens');
+    resumedAttempt.reaped = true;
+    tree = render();
+    nodes(tree).find(n => n.type === 'SettingsAction' && n.props.actionLabel === 'Completed').props.onPress(); tree = render();
+    const completedWithHistory = rows(tree).find(n => n.props.accessibilityLabel.startsWith('Worker 0 ·'));
+    assert.ok(completedWithHistory, 'latest reaped task appears in Completed');
+    completedWithHistory.props.onPress(); tree = render();
+    assert.match(text(tree), /Previous attempts/);
+    assert.ok(nodes(tree).some(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Open child chat'), 'completed task with history expands and preserves chat action');
+    nodes(tree).find(n => n.type === 'Pressable' && text(n).includes('Previous attempts (1)')).props.onPress(); tree = render();
+    nodes(tree).find(n => n.type === 'Pressable' && text(n).includes('Attempt 1')).props.onPress(); tree = render();
+    assert.ok(queries.some(q => q.queryKey[0] === 'worker-conversation' && q.queryKey[7] === 'child-0' && q.queryKey[8] === 1), 'completed task historical trace remains reachable');
+    select(tree, 'Agents');
     workAgents.pop();
     tree = render();
-    rows(tree)[0].props.onPress(); tree = render();
+    if (!nodes(tree).some(n => n.props?.testID === 'work-agent-conversation')) {
+      rows(tree).find(n => n.props.accessibilityLabel.startsWith('Worker 0 ·')).props.onPress(); tree = render();
+    }
     workAgents[0].status = 'running';
     messages = [...messages, { id: 'm2', role: 'tool', text: 'Live tool execution evidence' }];
     tree = render();
