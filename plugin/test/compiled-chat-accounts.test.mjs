@@ -21,6 +21,23 @@ const { compilePlugin } = await import(pathToFileURL(resolve(compiler)));
 const { clientBundle } = await compilePlugin({ client: resolve(root, 'index.client.tsx') });
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+test('retired workspace contribution never reads config, observes agents or registers UI', async () => {
+  const load = name => {
+    if (name === '@getpaseo/plugin') return { defineRpc: x => x, defineSettings: x => x };
+    if (['react', 'react/jsx-runtime', 'react-native', '@getpaseo/plugin/client', '@getpaseo/plugin/client/ui', '@getpaseo/plugin/client/react-native', '@tanstack/react-query'].includes(name)) return {};
+    return require(name);
+  };
+  const { contributeAccountControls } = (0, eval)(clientBundle)(load);
+  for (const config of [{}, { plugins: { 'paseo-accounts': { enabled: false } } }, { plugins: { 'paseo-accounts': { enabled: true } } }, { plugins: null }, null]) {
+    let reads = 0;
+    const forbidden = () => { throw Error('retired workspace controls must not register or subscribe'); };
+    const client = { paseo: { config: { get() { reads++; return config === null ? Promise.reject(Error('unavailable')) : Promise.resolve({ config }); } }, agents: { list: forbidden } }, addHeaderButton: forbidden, addComposerPill: forbidden };
+    const stop = contributeAccountControls(client);
+    await flush(); stop(); stop();
+    assert.equal(reads, 0, 'even missing, disabled or unavailable companion config is irrelevant');
+  }
+});
+
 test('actual composer contribution targets each exact chat, includes background children and rejects context substitution', async () => {
   let observer, options;
   const registrations = [], requests = [], states = [];
@@ -231,9 +248,9 @@ test('full plugin contribution leaves the account pill to the companion and leas
   };
   const { contributeBridge } = (0, eval)(clientBundle)(load);
   const observers = [], pills = [], panels = [];
-  let resolveConfig, configCalls = 0;
+  let configCalls = 0;
   const client = {
-    paseo: { config: { get: () => { configCalls++; return new Promise(resolve => { resolveConfig = resolve; }); } },
+    paseo: { config: { get: () => { configCalls++; throw Error('bridge must not read companion configuration'); } },
       agents: { list: async input => ({ subscription: { subscribe: observer => observers.push({ input, observer }) } }) } },
     rpc: async () => ({}), addScreen: () => () => {},
     addWorkspacePanel: input => { const panel = { ...input, removed: false }; panels.push(panel); return () => { panel.removed = true; }; },
@@ -243,7 +260,7 @@ test('full plugin contribution leaves the account pill to the companion and leas
   const a = contributeBridge(client), b = contributeBridge(client);
   try {
     await flush();
-    assert.equal(configCalls, 1);
+    assert.equal(configCalls, 0);
     const agent = { id: 'main', provider: 'pi', workspaceId: 'workspace', availableModes: [{ id: 'full-access' }, { id: 'dangerous-ask' }] };
     for (const { observer } of observers) observer.snapshot({ entries: [{ agent }] });
     assert.deepEqual(pills.filter(p => ['work', 'pi-btw', 'pi-codex-account'].includes(p.id)).map(p => p.id).sort(), ['pi-btw', 'work']);
@@ -252,7 +269,7 @@ test('full plugin contribution leaves the account pill to the companion and leas
     a(); a(); assert.ok(pills.some(p => !p.removed));
     b(); assert.ok(pills.every(p => p.removed)); assert.ok(panels.every(p => p.removed));
     assert.ok(observers.every(({ input }) => input.signal.aborted));
-    resolveConfig({ config: {} }); await flush();
+    await flush();
     assert.ok(pills.every(p => p.removed));
   } finally { a(); b(); }
 });

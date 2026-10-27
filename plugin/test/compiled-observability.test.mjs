@@ -19,7 +19,7 @@ const text = (x) =>
 			: !x || typeof x !== "object"
 				? ""
 				: [x.props?.children].flat(Infinity).map(text).join(" ");
-test("explicit dormant Activity and fallback Accounts modules retain meters, isolation and guarded account switching", {
+test("explicit dormant Activity retains meters and isolation without retired workspace Accounts", {
 	skip: !process.env.PASEO_PLUGIN_COMPILER,
 }, async () => {
 	const { compilePlugin } = await import(
@@ -259,10 +259,7 @@ test("explicit dormant Activity and fallback Accounts modules retain meters, iso
 		] });
 		assert.equal(pill.id, "pi-activity");
 		assert.equal(pill.agentId, "agent");
-		assert.equal(header.id, "pi-accounts");
-		assert.equal(header.button.behavior.kind, "popover");
-		assert.equal(header.workspaceId, "workspace");
-		assert.equal(headers.length, 1, "workspace receives one Accounts header regardless of Pi agent count");
+		assert.equal(headers.length, 0, "retired workspace Accounts never registers, even with the companion disabled");
 		let tree = render();
 		assert.equal(
 			nodes(tree).filter((n) => n.type === "SettingsSection").length,
@@ -347,102 +344,9 @@ test("explicit dormant Activity and fallback Accounts modules retain meters, iso
 		assert.doesNotMatch(text(tree), /Approve review|gpt-6-astra/);
 		assert.ok(queries.slice(1).every((q) => q.enabled === false));
 		assert.doesNotMatch(text(tree), /not a|not independent/);
-		states.length = 0; hook = 0;
-		const accountProps = { context: "workspace", workspaceId: "workspace", host: { id: "host", label: "Local" }, theme: { colors } };
-		const accountRender = () => { hook = 0; return header.button.behavior.Content(accountProps); };
-		let accountTree = accountRender();
-		await new Promise(r => setImmediate(r));
-		assert.equal(agentSubscriptions.length, 3, 'Activity, fallback Accounts registration, and opened Accounts popover subscribe independently; no duplicate composer account owner');
-		agentSubscriptions.at(-1).snapshot({ entries: [
-			{ agent: { id: "agent-a", name: "Alpha", workspaceId: "workspace", provider: "pi" } },
-			{ agent: { id: "agent-b", name: "Beta", workspaceId: "workspace", provider: "pi" } },
-		] });
-		accountTree = accountRender();
-		assert.match(text(accountTree), /Choose the Pi session/);
-		assert.match(text(accountTree), /Alpha/);
-		assert.match(text(accountTree), /Beta/);
-		assert.equal(accountTree.props.style.maxHeight, 520);
-		let releaseAlpha;
-		statusResponseGates.push({ wait: new Promise(resolve => releaseAlpha = resolve) });
-		const alpha = nodes(accountTree).find(n => n.type === "Pressable" && text(n).includes("Alpha"));
-		alpha.props.onPress();
-		accountTree = accountRender();
-		const beta = nodes(accountTree).find(n => n.type === "Pressable" && text(n).includes("Beta"));
-		beta.props.onPress();
-		releaseAlpha();
-		await new Promise(r => setImmediate(r));
-		accountTree = accountRender();
-		assert.equal(nodes(accountTree).find(n => n.type === "Pressable" && n.props.accessibilityLabel === "Beta").props.accessibilityState.selected, true, "late Alpha status must not replace the explicit Beta selection");
-		assert.ok(calls.filter(c => c.contract.name === "account_controls_status").some(c => c.input.agentId === "agent-b"), "status and actions must target the explicitly selected agent");
-		assert.doesNotMatch(text(accountTree), /aaaaaaaa-aaaa/);
-		accountStatus.data.snapshot = { ...accountSnapshot, busy: true };
-		accountTree = accountRender();
-		assert.equal(nodes(accountTree).find(n => n.type === "Pressable" && text(n).includes("Work")).props.disabled, true, "busy Pi session must disable account changes");
-		accountStatus.data.snapshot = accountSnapshot;
-		accountTree = accountRender();
-		const work = nodes(accountTree).find(n => n.type === "Pressable" && text(n).includes("Work"));
-		work.props.onPress();
-		accountTree = accountRender();
-		assert.match(text(accountTree), /Use\s+Work\s+for this Pi session/);
-		assert.equal(switchCalls.length, 0, "switch requires explicit confirmation");
-		const confirm = nodes(accountTree).find(n => n.type === "Pressable" && text(n) === "Confirm switch");
-		await confirm.props.onPress();
-		await new Promise(r => setImmediate(r));
-		assert.equal(switchCalls.length, 1);
-		assert.equal(switchCalls[0].agentId, "agent-b");
-		assert.equal(switchCalls[0].expectedSessionId, "session");
-		assert.equal(switchCalls[0].request.expectedServiceEpoch, "service-1");
-		assert.equal(switchCalls[0].request.expectedSelectionRevision, 0);
-		assert.equal(switchCalls[0].request.accountId, "named-1");
-		switchResult = { ok: false, requestId: "00000000-0000-4000-8000-000000000002", reason: "stale-selection", snapshot: accountSnapshot };
-		nodes(accountTree).find(n => n.type === "Pressable" && text(n).includes("Work")).props.onPress();
-		accountTree = accountRender();
-		await nodes(accountTree).find(n => n.type === "Pressable" && text(n) === "Confirm switch").props.onPress();
-		await new Promise(r => setImmediate(r));
-		accountTree = accountRender();
-		assert.match(text(accountTree), /Selection changed elsewhere/);
-		switchResult = { ok: false, requestId: "00000000-0000-4000-8000-000000000004", reason: "activation-failed", snapshot: accountSnapshot };
-		nodes(accountTree).find(n => n.type === "Pressable" && text(n).includes("Work")).props.onPress();
-		accountTree = accountRender();
-		await nodes(accountTree).find(n => n.type === "Pressable" && text(n) === "Confirm switch").props.onPress();
-		await new Promise(r => setImmediate(r));
-		accountTree = accountRender();
-		assert.match(text(accountTree), /Account activation failed/);
-		assert.doesNotMatch(text(accountTree), /No account change was made/);
-		switchResult = { ok: true, requestId: "00000000-0000-4000-8000-000000000003", snapshot: accountSnapshot };
-		switchReject = true;
-		nodes(accountTree).find(n => n.type === "Pressable" && text(n).includes("Work")).props.onPress();
-		accountTree = accountRender();
-		await nodes(accountTree).find(n => n.type === "Pressable" && text(n) === "Confirm switch").props.onPress();
-		await new Promise(r => setImmediate(r));
-		accountTree = accountRender();
-		assert.match(text(accountTree), /outcome uncertain/i);
-		switchReject = false;
-
-
-		accountSubscription.update({ type: "agent_update", payload: { kind: "remove", agentId: "agent-b" } });
-		accountTree = accountRender();
-		assert.match(text(accountTree), /Selected Pi session is no longer in this workspace/);
-		assert.equal(nodes(accountTree).filter(n => n.type === "SettingsSection").length, 0, "a removed selection must not silently target the remaining Pi agent");
-		accountSubscription.snapshot({ entries: [{ agent: { id: "agent-a", name: "Alpha", workspaceId: "workspace", provider: "pi" } }] });
-		accountTree = accountRender();
-		assert.match(text(accountTree), /Selected Pi session is no longer in this workspace/);
-		const selectAlpha = nodes(accountTree).find(n => n.type === "Pressable" && text(n).includes("Alpha"));
-		selectAlpha.props.onPress();
-		accountTree = accountRender();
-		assert.doesNotMatch(text(accountTree), /Selected Pi session is no longer/);
-		for (const cleanup of effects.splice(0)) cleanup();
-		states.length = 0;
-		const soloProps = { ...accountProps, workspaceId: "workspace-solo" };
-		const soloRender = () => { hook = 0; return header.button.behavior.Content(soloProps); };
-		soloRender();
-		await new Promise(r => setImmediate(r));
-		agentSubscriptions.at(-1).snapshot({ entries: [{ agent: { id: "solo-agent", name: "Solo", workspaceId: "workspace-solo", provider: "pi" } }] });
-		const soloTree = soloRender();
-		assert.match(text(soloTree), /Solo/);
-		assert.match(text(soloTree), /Account/);
-		assert.doesNotMatch(text(soloTree), /Choose the Pi session/);
-		accountSubscription.update({ type: "agent_update", payload: { kind: "remove", agentId: "agent-a" } });
+		// Guarded switching for the retained chat contribution is covered by
+		// compiled-chat-accounts; the workspace picker no longer exists.
+		assert.ok(!calls.some(c => c.contract.name.startsWith("account_controls_")));
 	} finally {
 		for (const cleanup of effects.splice(0)) cleanup();
 		stop();
@@ -450,7 +354,7 @@ test("explicit dormant Activity and fallback Accounts modules retain meters, iso
 	assert.equal(removed, true);
 	assert.ok(signals.slice(0, 5).every(item => item.aborted));
 	assert.equal(pill.removed, true);
-	assert.equal(header.removed, true);
+	assert.equal(header, undefined);
 });
 
 test("shipped contribution omits retired Activity and delegates Accounts while keeping Work as the workspace destination", { skip: !process.env.PASEO_PLUGIN_COMPILER }, async () => {

@@ -1,11 +1,10 @@
 import { observeAgentDirectory, retainContribution } from "./agent-directory";
 import { isDormantIndependentAgent } from "../shared/independent-state";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Linking, Pressable, Text, View } from "react-native";
-import { SettingsCard, SettingsSection, SettingsSelect } from "@getpaseo/plugin/client/ui";
-import { Metadata, NativeRow, SectionHeading, Surface } from "./presentation";
-import { ScrollView } from "@getpaseo/plugin/client/react-native";
+import { SettingsCard, SettingsSection } from "@getpaseo/plugin/client/ui";
+import { Metadata, NativeRow } from "./presentation";
 import {
 	type PluginButtonContentProps,
 	type PluginButtonRegistration,
@@ -29,39 +28,11 @@ type Agent = {
 	archivedAt?: string | null;
 };
 type Selection = { agentId: string; sessionId: string; runtimeEpoch: string };
-const selectedSessions = new Map<string, Selection>();
 
-export function contributeAccountControls(client: PluginClientContext) {
-	return retainContribution(client, "accounts", () => registerAccountControls(client));
-}
-
-function registerAccountControls(client: PluginClientContext) {
-	// The companion accounts plugin owns the composer account pill.
-	let disposed = false;
-	let stop: (() => void) | undefined;
-	void client.paseo.config
-		.get()
-		.then(({ config }) => {
-			const plugins = config.plugins;
-			const entry =
-				plugins && typeof plugins === "object" && !Array.isArray(plugins)
-					? (plugins as Record<string, unknown>)["paseo-accounts"]
-					: undefined;
-			return (
-				!!entry &&
-				typeof entry === "object" &&
-				(entry as { enabled?: boolean }).enabled !== false
-			);
-		})
-		.catch(() => false)
-		.then((external) => {
-			if (!disposed && !external)
-				stop = contributeLegacyAccountControls(client);
-		});
-	return () => {
-		disposed = true;
-		stop?.();
-	};
+export function contributeAccountControls(_client: PluginClientContext) {
+	// Compatibility entry point for older explicit contributions. Workspace account
+	// controls are retired; the companion plugin owns the account UI in all configs.
+	return () => {};
 }
 
 export function contributeChatAccountControls(client: PluginClientContext) {
@@ -96,249 +67,6 @@ function registerChatAccountControls(client: PluginClientContext) {
 	return () => { stopped = true; stopDirectory(); for (const id of entries.keys()) remove(id); };
 }
 
-function contributeLegacyAccountControls(client: PluginClientContext) {
-	const entries = new Map<
-		string,
-		{
-			workspaceId: string;
-			agents: Map<string, Agent>;
-			button: PluginButtonRegistration;
-		}
-	>();
-	const lifetime = new AbortController();
-	let stopped = false;
-	const remove = (id: string) => {
-		for (const [workspace, entry] of entries) {
-			if (entry.agents.delete(id) && entry.agents.size === 0) {
-				entry.button.remove();
-				entries.delete(workspace);
-			}
-		}
-	};
-	const register = (agent: Agent) => {
-		if (
-			agent.provider !== "pi" ||
-			agent.archivedAt ||
-			!agent.workspaceId ||
-			stopped
-		) {
-			remove(agent.id);
-			return;
-		}
-		const workspaceId = agent.workspaceId;
-		const old = [...entries.entries()].find(([, entry]) =>
-			entry.agents.has(agent.id),
-		);
-		if (old && old[0] !== workspaceId) remove(agent.id);
-		const existing = entries.get(workspaceId);
-		if (existing) {
-			existing.agents.set(agent.id, agent);
-			return;
-		}
-		const agents = new Map([[agent.id, agent]]);
-		const Content = (props: PluginButtonContentProps) => (
-			<AccountsPopover {...props} paseo={client.paseo} />
-		);
-		const button = client.addHeaderButton({
-			id: "pi-accounts",
-			workspaceId,
-			button: {
-				title: "Pi account controls",
-				label: "Accounts",
-				icon: "UserRound",
-				behavior: { kind: "popover", Content },
-			},
-		});
-		entries.set(workspaceId, { workspaceId, agents, button });
-	};
-	void client.paseo.agents
-		.list({ subscribe: {}, signal: lifetime.signal })
-		.then(({ subscription }) => {
-			if (stopped) return;
-			subscription.subscribe({
-				snapshot: ({ entries: agents }) => {
-					if (stopped || lifetime.signal.aborted) return;
-					const relevant = agents
-						.map(({ agent }) => agent)
-						.filter(
-							(a) => a.provider === "pi" && !a.archivedAt && a.workspaceId,
-						);
-					const ids = new Set(relevant.map((a) => a.id));
-					for (const entry of entries.values())
-						for (const id of [...entry.agents.keys()])
-							if (!ids.has(id)) remove(id);
-					for (const agent of relevant) register(agent);
-				},
-				update: (message) => {
-					if (
-						stopped ||
-						lifetime.signal.aborted ||
-						message.type !== "agent_update"
-					)
-						return;
-					if (message.payload.kind === "remove") {
-						remove(message.payload.agentId);
-					} else register(message.payload.agent);
-				},
-			});
-		})
-		.catch((error) => {
-			if (!stopped)
-				console.error("Account controls agent observation failed", error);
-		});
-	return () => {
-		stopped = true;
-		lifetime.abort();
-		for (const entry of entries.values()) entry.button.remove();
-		entries.clear();
-	};
-}
-
-function AccountsPopover(
-	props: PluginButtonContentProps & { paseo: PluginClientContext["paseo"] },
-) {
-	return (
-		<AccountsView
-			key={`${props.host.id}:${props.workspaceId}`}
-			{...props}
-			paseo={props.paseo}
-		/>
-	);
-}
-function AccountsView({
-	workspaceId,
-	host,
-	theme,
-	paseo,
-}: PluginButtonContentProps & {
-	workspaceId: string;
-	paseo: PluginClientContext["paseo"];
-}) {
-	const [selection, setSelection] = useState<Selection | undefined>(
-		selectedSessions.get(`${host.id}\0${workspaceId}`),
-	);
-	const [agents, setAgents] = useState<Agent[]>([]);
-	const lifetime = `${host.id}\0${workspaceId}`;
-	useEffect(() => {
-		let active = true;
-		const controller = new AbortController();
-		void paseo.agents
-			.list({ subscribe: {}, signal: controller.signal })
-			.then(({ subscription }) => {
-				if (!active) return;
-				subscription.subscribe({
-					snapshot: ({ entries }) => {
-						if (active)
-							setAgents(
-								entries
-									.map(({ agent }) => agent)
-									.filter(
-										(a) =>
-											a.provider === "pi" &&
-											!a.archivedAt &&
-											a.workspaceId === workspaceId,
-									),
-							);
-					},
-					update: (m) => {
-						if (!active || m.type !== "agent_update") return;
-						setAgents((current) =>
-							m.payload.kind === "remove"
-								? current.filter((a) => a.id !== m.payload.agentId)
-								: m.payload.agent.provider === "pi" &&
-										!m.payload.agent.archivedAt &&
-										m.payload.agent.workspaceId === workspaceId
-									? [
-											...current.filter((a) => a.id !== m.payload.agent.id),
-											m.payload.agent,
-										]
-									: current.filter((a) => a.id !== m.payload.agent.id),
-						);
-					},
-				});
-			})
-			.catch(() => {});
-		return () => {
-			active = false;
-			controller.abort();
-		};
-	}, [paseo, workspaceId]);
-	const choose = (agent: Agent) => {
-		const next = { agentId: agent.id, sessionId: "", runtimeEpoch: "" };
-		setSelection(next);
-		selectedSessions.set(lifetime, next);
-	};
-	const publishBinding = (expectedAgentId: string, binding: Selection) => {
-		const latest = selectedSessions.get(lifetime);
-		if (
-			latest?.agentId !== expectedAgentId ||
-			binding.agentId !== expectedAgentId
-		)
-			return;
-		setSelection((current) =>
-			current?.agentId === expectedAgentId ? binding : current,
-		);
-		selectedSessions.set(lifetime, binding);
-	};
-	const boundAgent = selection
-		? agents.find((a) => a.id === selection.agentId)
-		: undefined;
-	const sole = agents.length === 1 ? agents[0] : undefined;
-	const chosen = selection ? boundAgent : sole;
-	useEffect(() => {
-		if (!selection && sole) {
-			const next = { agentId: sole.id, sessionId: "", runtimeEpoch: "" };
-			setSelection(next);
-			selectedSessions.set(lifetime, next);
-		}
-	}, [selection, sole?.id]);
-	const colors = theme.colors;
-	return (
-		<ScrollView
-			style={{ maxHeight: 520 }}
-			contentContainerStyle={{ gap: 12, padding: 12 }}
-		>
-			<SectionHeading colors={colors} title="Pi accounts" />
-			{agents.length > 1 ? (
-				<Metadata colors={colors}>Choose the Pi session to manage.</Metadata>
-			) : null}
-			{agents.length === 0 ? (
-				<Surface colors={colors} padded>
-					<Metadata colors={colors}>No Pi sessions in this workspace.</Metadata>
-				</Surface>
-			) : null}
-			{agents.length > 0 ? (
-				<Surface colors={colors}>
-					{agents.map((a) => (
-						<NativeRow
-							key={a.id}
-							colors={colors}
-							title={a.title || a.name || shortId(a.id)}
-							selected={selection?.agentId === a.id}
-							onPress={() => choose(a)}
-						/>
-					))}
-				</Surface>
-			) : null}
-			{selection && !boundAgent ? (
-				<Metadata colors={colors} style={{ color: colors.statusWarning }}>
-					Selected Pi session is no longer in this workspace. Choose another
-					session explicitly.
-				</Metadata>
-			) : null}
-			{chosen ? (
-				<AccountSection
-					key={chosen.id}
-					hostId={host.id}
-					workspaceId={workspaceId}
-					agentId={chosen.id}
-					colors={colors}
-					onBinding={(s) => publishBinding(chosen.id, s)}
-				/>
-			) : null}
-		</ScrollView>
-	);
-}
 const locks = new Map<
 	string,
 	{
@@ -348,19 +76,6 @@ const locks = new Map<
 	}
 >();
 let sequence = 0;
-type AccountSectionProps = {
-  agentId: string; workspaceId: string; hostId: string; colors: Colors;
-  onBinding: (selection: Selection) => void;
-};
-function AccountSection(props: AccountSectionProps) {
-  const [providerId, setProviderId] = useState<AccountProviderId>("openai");
-  return <View style={{ gap: 8 }}>
-    <SettingsSelect label="Provider" value={providerId} onValueChange={setProviderId}
-      options={[{label:"OpenAI",value:"openai"},{label:"OpenAI Codex",value:"openai-codex"}]} />
-    <Metadata colors={props.colors}>Changes this session and inheriting descendants, preserving its role model. Parent and sibling sessions are unchanged.</Metadata>
-    <ProviderAccountSection key={`${props.agentId}/${providerId}`} {...props} providerId={providerId} />
-  </View>;
-}
 function ProviderAccountSection({
   providerId,
 	agentId,
@@ -387,11 +102,7 @@ function ProviderAccountSection({
 		[switching, setSwitching] = useState(false),
 		[failure, setFailure] = useState<string>(),
 		[linkFailure, setLinkFailure] = useState(false);
-	const [bound, setBound] = useState<Selection | undefined>(
-		selectedSessions.get(`${hostId}\0${workspaceId}`)?.agentId === agentId
-			? selectedSessions.get(`${hostId}\0${workspaceId}`)
-			: undefined,
-	);
+	const [bound, setBound] = useState<Selection | undefined>();
 	const query = useQuery({
 		queryKey: ["pi-account-controls", hostId, agentId, workspaceId, providerId],
 		queryFn: async () => {
@@ -773,9 +484,6 @@ function ProviderAccountSection({
 			</SettingsCard>
 		</SettingsSection>
 	);
-}
-function shortId(value: string) {
-	return value.length > 12 ? `${value.slice(0, 6)}…${value.slice(-4)}` : value;
 }
 function key(...parts: string[]) {
 	return JSON.stringify(parts);
