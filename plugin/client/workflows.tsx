@@ -3,17 +3,19 @@ import { useEffect, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { ScrollView, TextInput } from "@getpaseo/plugin/client/react-native";
 import {
-	SettingsSection,
-	SettingsCard,
 	SettingsSelect,
 	SettingsAction,
+	Modal,
 } from "@getpaseo/plugin/client/ui";
 import { useRpc, type PluginAgentPanelProps } from "@getpaseo/plugin/client";
 import { Metadata, NativeButton } from "./presentation";
+import { DelegatedGoals } from "./delegated-goals";
+import { LegacyGoals } from "./legacy-goals";
 import {
 	workflowsStatusRpc,
 	workflowsControlRpc,
 	type WorkflowRequest,
+	type WorkflowSnapshot,
 } from "../shared/workflows";
 
 type Memory = {
@@ -74,13 +76,6 @@ function WorkflowsView({
 	onOpenWorkspace,
 }: WorkflowViewProps) {
 	const [selectedTree, setSelectedTree] = useState<string>();
-	const [editing, setEditing] = useState(false),
-		[objective, setObjective] = useState(""),
-		[budgetText, setBudgetText] = useState(""),
-		[addingTask, setAddingTask] = useState(false),
-		[taskText, setTaskText] = useState(""),
-		[limitsOpen, setLimitsOpen] = useState(false),
-		[completedOpen, setCompletedOpen] = useState(false);
 	const status = useRpc(workflowsStatusRpc),
 		control = useRpc(workflowsControlRpc);
 	const [saved] = useState(() => {
@@ -101,8 +96,7 @@ function WorkflowsView({
 		return item;
 	});
 	const [, update] = useState(0),
-		mounted = useRef(true),
-		resetIdentity = useRef("");
+		mounted = useRef(true);
 	const redraw = () => {
 		if (mounted.current) update((n) => n + 1);
 	};
@@ -145,7 +139,8 @@ function WorkflowsView({
 		},
 		refetchInterval: (q) =>
 			q.state.data?.snapshot?.busy ||
-			q.state.data?.snapshot?.goal?.status === "active"
+			q.state.data?.snapshot?.goal?.status === "active" ||
+			q.state.data?.snapshot?.delegatedGoals?.entries.some((entry) => entry.status === "active")
 				? 1000
 				: 5000,
 		refetchOnReconnect: true,
@@ -171,24 +166,8 @@ function WorkflowsView({
 		visibleWorktrees = snapshot?.worktrees.filter(
 			(tree) => showAllWorktrees || tree.createdInSession === true,
 		) ?? [];
-	const parsedBudget = budgetText.trim() ? Number(budgetText) : undefined;
-	const validBudget = parsedBudget === undefined || (
-		/^\d+$/.test(budgetText.trim()) && Number.isSafeInteger(parsedBudget) &&
-		parsedBudget >= 1 && parsedBudget <= 1_000_000
-	);
-	const goalIdentity = `${binding ?? ""}/${goal?.id ?? "none"}`;
-	useEffect(() => {
-		if (resetIdentity.current && resetIdentity.current !== goalIdentity) {
-			setEditing(false);
-			setObjective("");
-			setBudgetText("");
-			setAddingTask(false);
-			setTaskText("");
-			setLimitsOpen(false);
-		}
-		resetIdentity.current = goalIdentity;
-	}, [goalIdentity]);
-	async function post(fields: Record<string, unknown>): Promise<boolean> {
+	const delegatedGoals = snapshot?.delegatedGoals;
+	async function post(fields: Record<string, unknown>): Promise<false | { snapshot: WorkflowSnapshot }> {
 		if (
 			locked ||
 			saved.pending ||
@@ -226,7 +205,7 @@ function WorkflowsView({
 					});
 				else onOpenWorkspace?.(result.openedWorkspaceId);
 			}
-			return true;
+			return result;
 		} catch {
 			saved.uncertain = true;
 			saved.failedAt = saved.sequence;
@@ -245,298 +224,9 @@ function WorkflowsView({
 			expectedGoalId: goal?.id ?? null,
 			...extra,
 		});
-	const button = (label: string, onPress: () => void, disabled = false) =>
-		section === "goal"
-			? <NativeButton colors={colors} label={label} onPress={onPress} disabled={disabled} style={{ alignSelf: "flex-start", minHeight: 44, maxWidth: "100%", flexShrink: 1 }} />
-			: <NativeButton colors={colors} label={label} onPress={onPress} disabled={disabled} style={{ alignSelf: "flex-start", minHeight: 44 }} />;
+	const button = (label: string, onPress: () => void, disabled = false, primary = false) =>
+		<NativeButton colors={colors} label={label} onPress={onPress} disabled={disabled} primary={primary} style={{ alignSelf: "flex-start", minHeight: 44 }} />;
 	const Container = embedded ? View : ScrollView;
-	const goalSection = (
-		<View style={{ padding: 4, gap: 8, minWidth: 0 }}>
-			{!goal ? (
-				<>
-					<TextInput
-						accessibilityLabel="New goal"
-						placeholder="Describe the goal…"
-						placeholderTextColor={colors.foregroundMuted}
-						value={objective}
-						onChangeText={setObjective}
-						editable={!locked && !snapshot?.busy}
-						multiline
-						maxLength={4000}
-						style={{
-							minHeight: 72,
-							padding: 10,
-							borderWidth: 1,
-							borderColor: colors.border,
-							borderRadius: 8,
-							color: colors.foreground,
-							backgroundColor: colors.surface2,
-						}}
-					/>
-					<View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-						{button(
-							"Create",
-							() => {
-								void post({
-									operation: "start",
-									action: "goal.create_paused",
-									expectedGoalId: null,
-									objective: objective.trim(),
-									...(parsedBudget === undefined ? {} : { tokenBudget: parsedBudget }),
-								});
-							},
-							locked ||
-								!snapshot?.capabilities?.createPausedGoal ||
-								!objective.trim() ||
-								!!snapshot?.busy ||
-								!snapshot?.idle ||
-								!validBudget,
-						)}
-						<TextInput
-							accessibilityLabel="New goal token budget"
-							placeholder="Token budget · unlimited"
-							placeholderTextColor={colors.foregroundMuted}
-							value={budgetText}
-							onChangeText={setBudgetText}
-							keyboardType="numeric"
-							editable={!locked && !snapshot?.busy}
-							style={{
-								minHeight: 44, minWidth: 160, flexGrow: 1, flexShrink: 1,
-								paddingHorizontal: 10, borderWidth: 1,
-								borderColor: colors.border, borderRadius: 8,
-								color: colors.foreground, backgroundColor: colors.surface2,
-							}}
-						/>
-					</View>
-				</>
-			) : (
-				<>
-					<Text selectable style={{ color: colors.foreground }}>
-						{goal.text}
-					</Text>
-					<Text
-						style={{
-							color:
-								goal.status === "blocked" || goal.status.endsWith("_limited")
-									? colors.statusWarning
-									: colors.foregroundMuted,
-						}}
-					>
-						{goal.waiting
-							? "Waiting"
-							: {
-									active: "Working",
-									paused: "Paused",
-									blocked: "Blocked",
-									usage_limited: "Usage limit reached",
-									budget_limited: "Budget reached",
-									complete: "Complete",
-								}[goal.status]}
-					</Text>
-					{goal.tasks?.map((task, index) => (
-						<Text
-							key={`${index}-${task.text}`}
-							accessibilityLabel={`${task.text}, ${task.status.replaceAll("_", " ")}`}
-							style={{
-								color:
-									task.status === "blocked"
-										? colors.statusWarning
-										: task.status === "in_progress"
-											? colors.foreground
-											: colors.foregroundMuted,
-							}}
-						>
-							{
-								{
-									completed: "✓",
-									in_progress: "›",
-									blocked: "!",
-									pending: "○",
-								}[task.status]
-							}{" "}
-							{task.text}
-						</Text>
-					))}
-					{goal.waiting ? (
-						<Text style={{ color: colors.statusWarning }}>{goal.waiting}</Text>
-					) : null}
-					{goal.safetyPauseCause ? (
-						<Text style={{ color: colors.statusWarning }}>
-							{goal.safetyPauseCause === "continuation_limit"
-								? "Automatic response limit reached"
-								: "Paused after repeated lack of progress"}
-						</Text>
-					) : null}
-					{goal.summary ? (
-						<Text selectable style={{ color: colors.foregroundMuted }}>
-							{goal.summary}
-						</Text>
-					) : null}
-					<View style={{ flexDirection: "row", gap: 12, flexWrap: "wrap" }}>
-						{goal.status === "active" && !goal.waiting
-							? button(
-									"Pause",
-									() => start("goal.pause"),
-									locked || snapshot?.busy,
-								)
-							: button(
-									"Resume",
-									() => start("goal.resume"),
-									locked ||
-										snapshot?.busy ||
-										!snapshot?.idle ||
-										goal.status === "complete",
-								)}
-						{button(
-							"Edit",
-							() => {
-								setObjective(goal.text);
-								setBudgetText(goal.tokenBudget === undefined || goal.tokenBudget === null ? "" : String(goal.tokenBudget));
-								setEditing(!editing);
-								setAddingTask(false);
-							},
-							locked || snapshot?.busy,
-						)}
-						{button(
-							"Clear",
-							() => start("goal.clear"),
-							locked || snapshot?.busy,
-						)}
-						{button(limitsOpen ? "Hide limits" : "Limits", () =>
-							setLimitsOpen(!limitsOpen),
-						)}
-					</View>
-					{limitsOpen ? (
-						<Text style={{ color: colors.foregroundMuted }}>
-							Automatic responses: {goal.automaticTurns}/
-							{snapshot?.limits.automaticTurns ?? "Unlimited"} · Tokens:{" "}
-							{goal.tokensUsed.toLocaleString()}/
-							{goal.tokenBudget?.toLocaleString() ?? "Unlimited"} · No-progress
-							limit: {snapshot?.limits.noProgressTurns ?? "Unlimited"}
-						</Text>
-					) : null}
-					{editing ? (
-						<View style={{ gap: 6 }}>
-							<TextInput
-								accessibilityLabel="Goal objective"
-								value={objective}
-								onChangeText={setObjective}
-								multiline
-								maxLength={4000}
-								style={{
-									color: colors.foreground,
-									backgroundColor: colors.surface2,
-									padding: 12,
-									minHeight: 80,
-								}}
-							/>
-							<Text style={{ color: colors.foregroundMuted }}>
-								Token budget
-							</Text>
-							<TextInput
-								accessibilityLabel="Goal token budget"
-								placeholder={goal.tokenBudget == null ? "Unlimited" : "Keep current budget"}
-								placeholderTextColor={colors.foregroundMuted}
-								value={budgetText}
-								onChangeText={setBudgetText}
-								keyboardType="numeric"
-								maxLength={7}
-								style={{
-									color: colors.foreground,
-									backgroundColor: colors.surface2,
-									padding: 12,
-								}}
-							/>
-							{button(
-								"Save changes",
-								() => {
-									if (objective.trim() && validBudget) {
-										void start("goal.edit", {
-											objective: objective.trim(),
-											...(parsedBudget === undefined ? {} : { tokenBudget: parsedBudget }),
-										});
-									}
-								},
-								locked ||
-									snapshot?.busy ||
-									!snapshot?.idle ||
-									!objective.trim() ||
-									!validBudget,
-							)}
-							{button("Cancel", () => setEditing(false), locked)}
-						</View>
-					) : null}
-					{goal.status === "active" ? (
-						<Text style={{ color: colors.foregroundMuted }}>
-							Pause to add a task
-						</Text>
-					) : (
-						<>
-							<View style={{ flexDirection: "row", gap: 12, flexWrap: "wrap" }}>
-								{button(
-									addingTask ? "Cancel subtask" : "Add subtask",
-									() => {
-										setAddingTask(!addingTask);
-										setTaskText("");
-										setEditing(false);
-									},
-									locked || snapshot?.busy || !snapshot?.idle,
-								)}
-								{completedGoals.length > 0 ? button(
-									completedOpen ? "Hide completed" : "Completed",
-									() => setCompletedOpen((open) => !open),
-								) : null}
-							</View>
-							{addingTask ? (
-								<View style={{ gap: 6 }}>
-									<TextInput
-										accessibilityLabel="Subtask"
-										value={taskText}
-										onChangeText={setTaskText}
-										placeholder="Describe a subtask"
-										maxLength={503}
-										style={{
-											color: colors.foreground,
-											backgroundColor: colors.surface2,
-											padding: 12,
-										}}
-									/>
-									{button(
-										"Add task",
-										() => {
-											const text = taskText.trim();
-											if (text) {
-												const identity = goalIdentity;
-												void post({
-													operation: "start",
-													action: "goal.add_task",
-													expectedGoalId: goal.id,
-													text,
-												}).then((applied) => {
-													if (
-														applied &&
-														mounted.current &&
-														resetIdentity.current === identity
-													) {
-														setTaskText("");
-														setAddingTask(false);
-													}
-												});
-											}
-										},
-										locked ||
-											snapshot?.busy ||
-											!snapshot?.idle ||
-											!taskText.trim(),
-									)}
-								</View>
-							) : null}
-						</>
-					)}
-				</>
-			)}
-		</View>
-	);
 	return (
 		<Container
 			{...(embedded
@@ -612,11 +302,13 @@ function WorkflowsView({
 						</Text>
 					) : null}
 					{dialog ? (
-						<SettingsSection title={dialog.title}>
-							<SettingsCard>
-								<View style={{ padding: 12, gap: 12 }}>
+						<Modal title={dialog.title} open onOpenChange={(open) => {
+							if (!open && !locked) void post({ operation: "cancel", operationId: dialog.operationId });
+						}}>
+							<Modal.Content>
+								<View style={{ gap: 16 }}>
 									{dialog.message ? (
-										<Text selectable style={{ color: colors.foreground }}>
+										<Text selectable style={{ color: colors.foreground, fontSize: 14, lineHeight: 20 }}>
 											{dialog.message}
 										</Text>
 									) : null}
@@ -656,6 +348,7 @@ function WorkflowsView({
 											disabled={locked}
 										/>
 									) : null}
+									<View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
 									{button(
 										dialog.kind === "confirm" ? "Confirm" : "Continue",
 										() =>
@@ -673,6 +366,7 @@ function WorkflowsView({
 												!dialog.options.includes(
 													saved.answers[dialog.id] ?? "",
 												)),
+										snapshot.operationAction === "goals.start" || snapshot.operationAction === "goals.resume",
 									)}
 									{button(
 										"Cancel operation",
@@ -683,9 +377,10 @@ function WorkflowsView({
 											}),
 										locked,
 									)}
+									</View>
 								</View>
-							</SettingsCard>
-						</SettingsSection>
+							</Modal.Content>
+						</Modal>
 					) : snapshot.busy ? (
 						<View>
 							<Text style={{ color: colors.foregroundMuted }}>
@@ -704,52 +399,17 @@ function WorkflowsView({
 								: null}
 						</View>
 					) : null}
-					{section === "goal" ? (
+					{section === "goal" && delegatedGoals ? (
 						<>
-							{dialog || snapshot.busy ? null : goalSection}
-							{completedGoals.length > 0 ? (
-								<View style={{ gap: 8 }}>
-									{!goal || goal.status === "active" || dialog || snapshot.busy ? button(
-										completedOpen
-											? "Hide completed"
-											: "Completed",
-										() => setCompletedOpen((open) => !open),
-									) : null}
-									{completedOpen ? (
-										<SettingsCard>
-											<View style={{ padding: 12, gap: 12 }}>
-												{completedGoals.map((item) => (
-													<View key={item.id} style={{ gap: 4 }}>
-														<View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-															<Text style={{ color: item.status === "completed" ? colors.statusSuccess : colors.foregroundMuted, fontSize: 12, fontWeight: "600" }}>
-																{item.status === "completed" ? "Completed" : "Cleared"}
-															</Text>
-															{item.endedAt > 0 ? (
-																<Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>
-																	{new Date(item.endedAt).toLocaleDateString()}
-																</Text>
-															) : null}
-														</View>
-														<Text selectable style={{ color: colors.foreground }}>
-															{item.text}
-														</Text>
-														{item.summary ? (
-															<Text selectable style={{ color: colors.foregroundMuted }}>
-																{item.summary}
-															</Text>
-														) : null}
-														{item.tasks.length ? (
-															<Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>
-																{item.tasks.filter((task) => task.status === "completed").length}/{item.tasks.length} subtasks completed
-															</Text>
-														) : null}
-													</View>
-												))}
-											</View>
-										</SettingsCard>
-									) : null}
-								</View>
-							) : null}
+							<DelegatedGoals key={binding} registry={delegatedGoals} colors={colors} identity={binding ?? ""}
+								locked={locked || !!dialog || snapshot.capabilities?.delegatedGoals !== true} busy={snapshot.busy} executionAvailable={snapshot.capabilities?.delegatedGoalExecution === true} model="gpt-6.1-sol" limits={snapshot.limits} post={post} />
+							<LegacyGoals goal={goal ?? null} completed={completedGoals} colors={colors} />
+						</>
+					) : section === "goal" ? (
+						<>
+							<Metadata colors={colors}>Reload Pi to enable independent child goals. Legacy parent goals are read-only here.</Metadata>
+							<LegacyGoals goal={goal ?? null} completed={completedGoals} colors={colors} />
+
 						</>
 					) : (
 						<View style={{ gap: 4 }}>
@@ -903,10 +563,11 @@ function WorkflowsView({
 																				: "Wait until Pi and Goal are idle"}
 													</Text>
 												) : null}
-												<View style={{ flexDirection: "row", gap: 12 }}>
+												<View style={{ gap: 8, minWidth: 0, width: "100%", maxWidth: 720 }}>
 													{onOpenWorkspace || navigation?.openWorkspace ? (
 														<SettingsAction
-															label=""
+															label="Open workspace"
+															hint="View this branch in its own workspace"
 															actionLabel="Open"
 															disabled={locked || snapshot.busy || tree.stale}
 															onPress={() =>
@@ -915,7 +576,8 @@ function WorkflowsView({
 														/>
 													) : null}
 													<SettingsAction
-														label=""
+														label="Remove worktree"
+														hint="Keeps the branch; confirmation required"
 														actionLabel="Remove"
 														disabled={guarded}
 														onPress={() =>

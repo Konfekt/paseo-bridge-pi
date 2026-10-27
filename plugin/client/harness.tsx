@@ -7,6 +7,7 @@ import { orderTaskTree, taskGroupKey, treeAttemptKey } from "../shared/subagent-
 import { groupSubagentAttempts, attemptIdentity } from "./subagent-attempts";
 import { Pressable, Text, View, type ScrollView as NativeScrollView } from "react-native";
 import { Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
+import { SettingsAction } from "@getpaseo/plugin/client/ui";
 import {
 	useRpc,
 	useSettings,
@@ -1010,8 +1011,10 @@ function HarnessPanel({
 			{[...rows].sort((a, b) => Number("fromSubagent" in a && a.fromSubagent === true) - Number("fromSubagent" in b && b.fromSubagent === true)).map((row, index, ordered) => {
 				const id = "jobId" in row ? row.jobId : taskGroupKey(row);
 				const title = "jobId" in row ? row.name || "Background job" : workerTitle(row);
-				const state = kind === "subagents" && viewMode === "active" && row.status === "completed"
-					? "Idle" : row.status.replace(/[_-]/g, " ").replace(/^./, value => value.toUpperCase());
+				const state = row.status === "completed" && viewMode === "completed"
+					? "jobId" in row ? "Succeeded" : "Finished"
+					: kind === "subagents" && viewMode === "active" && row.status === "completed"
+						? "Idle" : row.status.replace(/[_-]/g, " ").replace(/^./, value => value.toUpperCase());
 				const metadata = "jobId" in row
 					? [state, elapsed(row.createdAt, ["starting", "running"].includes(row.status) ? null : row.updatedAt), row.observationOnly ? "Observation only" : ""].filter(Boolean).join(" · ")
 					: [state, row.needsAttention ? "Needs attention" : ""].filter(Boolean).join(" · ");
@@ -1027,7 +1030,7 @@ function HarnessPanel({
 					<View accessibilityLabel={"childId" in row ? `Agent hierarchy level ${(depths.get(id) ?? 0) + 1}` : undefined}
 						style={{
 							...("childId" in row ? { marginLeft: Math.min(depths.get(id) ?? 0, 3) * 16 } : {}),
-							...(!isActiveRow(row) && !(kind === "subagents" && viewMode === "active")
+							...(viewMode !== "completed" && !isActiveRow(row) && !(kind === "subagents" && viewMode === "active")
 								? {
 										borderWidth: 1,
 										borderColor:
@@ -1042,7 +1045,15 @@ function HarnessPanel({
 								: {})
 						}}
 					>
-						{button(
+						{viewMode === "completed" ? <SettingsAction
+							label={title} hint={metadata}
+							actionLabel={opensChat ? "Open" : selectedId === id ? "Hide" : "Details"}
+							disabled={!!openingId}
+							onPress={() => {
+								if (opensChat && "childId" in row) openWorker(row);
+								else select(selectedId === id ? null : { id, session: session!, epoch: epoch!, ...("childId" in row ? { attemptIdentity: attemptIdentity(row) } : {}) });
+							}}
+						/> : button(
 							label,
 							() => {
 								if (opensChat && "childId" in row) openWorker(row);

@@ -13,7 +13,7 @@ const require = createRequire(resolve(compilerPath));
 const nodes = node => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)];
 // Nested native syntax Text tokens concatenate exactly as RN/DOM text nodes do.
 const compactText = node => typeof node === 'string' ? node : Array.isArray(node) ? node.map(compactText).join('') : compactText(node?.props?.children ?? []);
-const text = node => typeof node === 'string' ? node : Array.isArray(node) ? node.map(text).join(' ') : node?.props?.testID === 'work-code-line' ? compactText(node) : text(node?.props?.children ?? []);
+const text = node => typeof node === 'string' ? node : Array.isArray(node) ? node.map(text).join(' ') : node?.props?.testID === 'work-code-line' ? compactText(node) : node?.type === 'SettingsAction' ? text([node.props.label, node.props.hint, node.props.actionLabel, node.props.children]) : text(node?.props?.children ?? []);
 
 // A small host renderer: execute compiled components, keep hook identity by JSX
 // key/path, and run real effect setup/cleanup on mount/unmount. No Work logic is
@@ -229,6 +229,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     ];
     tree = render();
     const rows = tree => nodes(tree).filter(n => n.type === 'Pressable' && /^(Worker \d|Old worker|Helper|Urgent|Renamed native child|URGENT[^·]*) ·/.test(n.props?.accessibilityLabel ?? ''));
+    const completedRows = tree => nodes(tree).filter(n => n.type === 'SettingsAction' && /^(Worker \d|Old worker|Helper|Urgent|Renamed native child|URGENT)/.test(n.props?.label ?? ''));
     assert.equal(rows(tree).length, 5);
     {
       const originalRows = workAgents;
@@ -297,16 +298,25 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.match(text(tree), /Previous attempts/);
     assert.doesNotMatch(text(tree), /Attempt 1/, 'history resets collapsed when parent reopens');
     resumedAttempt.reaped = true;
+    resumedAttempt.status = 'completed';
     tree = render();
     nodes(tree).find(n => n.type === 'SettingsAction' && n.props.actionLabel === 'Completed').props.onPress(); tree = render();
-    const completedWithHistory = rows(tree).find(n => n.props.accessibilityLabel.startsWith('Worker 0 ·'));
-    assert.ok(completedWithHistory, 'latest reaped task appears in Completed');
+    const completedWithHistory = completedRows(tree).find(n => n.props.label === 'Worker 0');
+    assert.ok(completedWithHistory, 'latest reaped task appears as a native completed action row');
+    assert.equal(completedWithHistory.props.hint, 'Finished', 'completed execution is not a claim of delivered success');
+    assert.equal(completedWithHistory.props.actionLabel, 'Details');
     completedWithHistory.props.onPress(); tree = render();
     assert.match(text(tree), /Previous attempts/);
     assert.ok(nodes(tree).some(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Open child chat'), 'completed task with history expands and preserves chat action');
     nodes(tree).find(n => n.type === 'Pressable' && text(n).includes('Previous attempts (1)')).props.onPress(); tree = render();
     nodes(tree).find(n => n.type === 'Pressable' && text(n).includes('Attempt 1')).props.onPress(); tree = render();
     assert.ok(queries.some(q => q.queryKey[0] === 'worker-conversation' && q.queryKey[7] === 'child-0' && q.queryKey[8] === 1), 'completed task historical trace remains reachable');
+    const nextAttempt = { ...resumedAttempt, childId: 'third-child', attempt: 3, runtimeId: 'third-runtime', status: 'running', reaped: false };
+    workAgents.push(nextAttempt); tree = render();
+    assert.ok(!completedRows(tree).some(n => n.props.label === 'Worker 0'), 'latest active attempt removes its task from Completed');
+    assert.equal(nodes(tree).filter(n => n.props?.testID === 'work-agent-conversation').length, 0, 'completed Details selection cannot survive an exact attempt change');
+    assert.ok(!queries.some(q => q.queryKey[0] === 'worker-conversation'), 'superseded completed selection stops both current and historical polling');
+    workAgents.pop();
     select(tree, 'Agents');
     workAgents.pop();
     tree = render();
@@ -417,13 +427,13 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     statusError = false; tree = render();
     nodes(tree).find(n => n.type === 'SettingsAction' && n.props.actionLabel === 'Completed').props.onPress();
     tree = render();
-    assert.equal(rows(tree).length, 1);
+    assert.equal(completedRows(tree).length, 1);
     assert.match(text(tree), /Old worker/);
-    assert.match(rows(tree)[0].props.accessibilityLabel, /Completed/);
-    assert.ok(nodes(tree).some(n => n.props?.style?.borderWidth === 1 && n.props?.style?.borderRadius === 8), 'historical completed card restored');
+    assert.equal(completedRows(tree)[0].props.hint, 'Finished');
+    assert.equal(completedRows(tree)[0].props.style, undefined, 'completed rows use native SettingsAction geometry without a custom card');
     rpcResponse = async contract => contract.name === 'harness_status'
       ? { available: true, sessionId: 's', runtimeEpoch: 'e' } : { agentId: 'history-child' };
-    rows(tree)[0].props.onPress();
+    completedRows(tree)[0].props.onPress();
     await new Promise(resolve => setImmediate(resolve));
     tree = render();
     assert.doesNotMatch(text(tree), /Worker transcript evidence/, 'completed click retains historical direct-chat behavior');

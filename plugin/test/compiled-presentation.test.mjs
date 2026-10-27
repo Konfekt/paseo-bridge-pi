@@ -26,7 +26,7 @@ const components = (0, eval)(clientBundle)(load);
 const render = (Component, props, reset = true) => { if (reset) slots = []; cursor = 0; return Component(props); };
 const style = value => Object.assign({}, ...[value].flat(Infinity).filter(Boolean));
 const nodes = value => Array.isArray(value) ? value.flatMap(nodes) : !value || typeof value !== 'object' ? [] : typeof value.type === 'function' ? nodes(value.type(value.props)) : [value, ...nodes(value.props.children)];
-test('compiled Goals uses the same action-row chrome as Agents and Jobs without altering actions', async t => {
+test('compiled unsupported Goals shows read-only legacy state and history with reload guidance', async t => {
   const fixture = await mkdtemp(resolve(tmpdir(),'native-goal-row-'));
   t.after(() => rm(fixture,{recursive:true,force:true}));
   const source = fileURLToPath(new URL('../',import.meta.url));
@@ -53,49 +53,29 @@ test('compiled Goals uses the same action-row chrome as Agents and Jobs without 
   const connect=all.find(n=>n.type==='Pressable' && n.props.accessibilityLabel==='Connect current session');
   assert.ok(connect); connect.props.onPress();
   all=draw();
-  const objective=all.find(n=>n.type==='TextInput' && n.props.accessibilityLabel==='New goal');
-  assert.ok(objective); objective.props.onChangeText('Keep the existing goal action');
-  all=draw();
   const findButton=(items,label)=>items.find(n=>n.type==='Pressable' && n.props.accessibilityLabel===label);
-  const create=findButton(all,'Create');
-  assert.ok(create); assert.equal(create.props.disabled,false);
-  assert.equal(create.props.accessibilityRole,'button');
-  assert.equal(create.props.accessibilityState.disabled,false);
-  assert.deepEqual(style(create.props.style({pressed:false})),{borderWidth:1,borderColor:palettes[0].border,borderRadius:8,paddingHorizontal:12,paddingVertical:8,alignItems:'center',justifyContent:'center',opacity:1,backgroundColor:palettes[0].surface1,alignSelf:'flex-start',minHeight:44,maxWidth:'100%',flexShrink:1});
-  reply.snapshot.goal={id:'goal-1',status:'active',text:'Ship safely',automaticTurns:2,tokensUsed:120};
+  const assertReadOnly = items => {
+    for (const label of ['Create','Pause','Resume','Edit','Clear','Limits','Add subtask'])
+      assert.equal(findButton(items,label),undefined,`${label} must not mutate legacy parent goals`);
+    assert.equal(items.some(n=>n.type==='TextInput'),false,'legacy goals have no editing fields');
+    assert.ok(items.some(n=>n.type==='Text' && n.props.children==='Reload Pi to enable independent child goals. Legacy parent goals are read-only here.'));
+  };
+  assertReadOnly(all);
+  reply.snapshot.goal={id:'goal-1',status:'active',text:'Ship safely',automaticTurns:2,tokensUsed:120,tasks:[]};
   all=draw();
-  const goalRow=all.find(n=>n.type==='View' && n.props.style?.flexDirection==='row' && n.props.style?.flexWrap==='wrap' && n.props.style?.gap===12 && nodes(n).some(child=>child.type==='Pressable' && child.props.accessibilityLabel==='Pause'));
-  assert.ok(goalRow,'active Goal controls render in the expected wrapping row');
-  const activeActions=['Pause','Edit','Clear','Limits'].map(label=>findButton(nodes(goalRow),label));
-  assert.ok(activeActions.every(Boolean));
-  assert.deepEqual(activeActions.map(n=>n.props.accessibilityLabel),['Pause','Edit','Clear','Limits']);
-  assert.equal(goalRow.props.style.gap,12,'actions retain spacing when they wrap');
-  for (const action of activeActions) {
-    assert.equal(action.props.accessibilityRole,'button');
-    assert.equal(action.props.accessibilityState.disabled,false);
-    assert.equal(action.props.disabled,false);
-    assert.equal(style(action.props.style({pressed:false})).minHeight,44);
-    assert.equal(style(action.props.style({pressed:false})).maxWidth,'100%');
-    assert.equal(style(action.props.style({pressed:false})).flexShrink,1);
-  }
+  assertReadOnly(all);
+  assert.ok(all.some(n=>n.type==='Text' && n.props.children==='Ship safely'));
   reply.snapshot.goal.status='paused';
   reply.snapshot.completedGoals=[{id:'done-1',status:'completed',text:'Earlier goal',summary:'Done',endedAt:1,tasks:[]}];
   all=draw();
-  const secondaryRow=all.find(n=>n.type==='View' && n.props.style?.flexDirection==='row' && n.props.style?.gap===12 && nodes(n).some(child=>child.type==='Pressable' && child.props.accessibilityLabel==='Add subtask'));
-  assert.ok(secondaryRow,'subtask and completed controls share a row');
-  assert.deepEqual(nodes(secondaryRow).filter(child=>child.type==='Pressable').map(child=>child.props.accessibilityLabel),['Add subtask','Completed']);
-  assert.equal(all.filter(n=>n.type==='Pressable' && n.props.accessibilityLabel==='Completed').length,1,'history control is not duplicated');
-  findButton(all,'Completed').props.onPress();
+  assertReadOnly(all);
+  assert.equal(all.filter(n=>n.type==='Pressable' && n.props.accessibilityLabel==='Legacy history').length,1,'history control is not duplicated');
+  findButton(all,'Legacy history').props.onPress();
   all=draw();
-  assert.ok(all.some(n=>n.type==='Text' && n.props.children==='Earlier goal'),'completed history still expands');
-  findButton(all,'Add subtask').props.onPress();
-  all=draw();
-  const expandedRow=all.find(n=>n.type==='View' && n.props.style?.flexDirection==='row' && nodes(n).some(child=>child.type==='Pressable' && child.props.accessibilityLabel==='Cancel subtask'));
-  assert.deepEqual(nodes(expandedRow).filter(child=>child.type==='Pressable').map(child=>child.props.accessibilityLabel),['Cancel subtask','Hide completed']);
-  create.props.onPress(); await new Promise(resolve=>setImmediate(resolve));
-  const control=calls.find(c=>c.name==='workflows_control');
-  assert.ok(control); assert.equal(control.input.request.action,'goal.create_paused');
-  assert.equal(control.input.request.objective,'Keep the existing goal action');
+  assertReadOnly(all);
+  assert.ok(all.some(n=>n.type==='Text' && n.props.children==='Earlier goal'),'legacy history still expands');
+  assert.ok(findButton(all,'Hide legacy history'));
+  assert.equal(calls.some(c=>c.name==='workflows_control'),false,'read-only legacy display never sends mutations');
 });
 
 const palettes = [
@@ -145,6 +125,14 @@ test('compiled native button keeps danger, disabled and press feedback distinct'
   assert.equal(style(button.props.style({ pressed: true })).backgroundColor, colors.surface2);
   assert.equal(nodes(button).find(n => n.type === 'Text').props.style.color, colors.statusDanger);
   assert.equal(style(button.props.style({ pressed: false })).borderRadius, 8);
+});
+
+test('compiled primary action uses host accent tokens and dims only through opacity', () => {
+  const colors = {...palettes[0],accent:'#18774e',accentForeground:'#ffffff'};
+  const button = render(components.NativeButton,{colors,label:'Create',onPress(){},primary:true,disabled:true});
+  assert.equal(style(button.props.style({pressed:false})).backgroundColor,colors.accent);
+  assert.equal(style(button.props.style({pressed:false})).opacity,0.5);
+  assert.equal(nodes(button).find(n=>n.type==='Text').props.style.color,colors.accentForeground);
 });
 
 test('compiled output remains bounded and selectable and copies the exact payload', async () => {

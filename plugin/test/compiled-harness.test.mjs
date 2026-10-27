@@ -110,7 +110,7 @@ test('compiled read-only panels render lists/details, bind generations and only 
     statusResult = { data: identity }; states.length = 0;
     listResult.data.items = [{ ...job, name: null, status: 'completed', observationOnly: true }];
     tree = render('harness-jobs');
-    assert.ok(nodes(tree).some(node => node.props?.style?.borderRadius === 10), 'original completed Jobs card');
+    assert.ok(nodes(tree).some(node => node.props?.style?.borderRadius === 10), 'legacy all-jobs panel retains its original card; compact styling is scoped to Completed view');
     assert.match(text(tree), new RegExp(`${job.jobId} · .* · observation only`), 'original fallback name and observation label');
     states.length = 0;
     const task = { taskId: `subagent-task-${'b'.repeat(24)}`, childId: `subagent-child-${'c'.repeat(24)}`, groupId: `subagent-job-${'d'.repeat(24)}`, runtimeId: 'runtime', title: 'Review', status: 'completed', attempt: 1,

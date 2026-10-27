@@ -1,12 +1,22 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 const id = z.string().min(1).max(256);
+export const delegatedGoalEntrySchema = z.object({
+	id: z.string().uuid(), revision: z.number().int().positive(), text: z.string().min(1).max(4000),
+	status: z.enum(["paused", "active", "blocked", "usage_limited", "budget_limited", "complete", "cleared"]),
+	tasks: z.array(z.object({ id: z.string().max(128), text: z.string().max(503), status: z.enum(["pending", "in_progress", "completed", "blocked"]) }).strict()).max(50),
+	child: z.object({ taskId: z.string().max(128), childId: z.string().max(128), jobId: z.string().max(128), attempt: z.number().int().positive() }).strict().nullable(),
+	tokenBudget: z.number().int().positive().max(1_000_000).nullable(), tokensUsed: z.number().nonnegative(),
+	automaticTurns: z.number().int().nonnegative(), noProgressTurns: z.number().int().nonnegative(),
+	summary: z.string().max(6000).nullable(), waiting: z.string().max(1000).nullable(),
+}).strict();
 export const workflowSnapshotSchema = z
 	.object({
 		protocol: z.literal(1),
 		capabilities: z
-			.object({ createPausedGoal: z.boolean().optional() })
+			.object({ createPausedGoal: z.boolean().optional(), delegatedGoals: z.boolean().optional(), delegatedGoalExecution: z.boolean().optional() }).strict()
 			.optional(),
+		delegatedGoals: z.object({ version: z.literal(1), revision: z.number().int().nonnegative(), entries: z.array(delegatedGoalEntrySchema).max(1000) }).strict().optional(),
 		sessionId: id,
 		serviceEpoch: z.string().uuid(),
 		cwd: z.string().max(4096),
@@ -155,6 +165,7 @@ export const workflowRequestSchema = z.discriminatedUnion("operation", [
 			...base,
 			operation: z.literal("start"),
 			action: z.enum([
+				"goals.create", "goals.start", "goals.pause", "goals.resume", "goals.edit", "goals.clear", "goals.add_task",
 				"worktree.add",
 				"worktree.remove",
 				"worktree.prune",
@@ -168,9 +179,11 @@ export const workflowRequestSchema = z.discriminatedUnion("operation", [
 				"goal.add_task",
 			]),
 			expectedGoalId: id.nullable(),
+			expectedEntryRevision: z.number().int().positive().optional(),
+			expectedRegistryRevision: z.number().int().nonnegative().optional(),
 			text: z.string().max(503).optional(),
 			objective: z.string().max(4000).optional(),
-			tokenBudget: z.number().int().positive().max(1_000_000).optional(),
+			tokenBudget: z.number().int().positive().max(1_000_000).nullable().optional(),
 			path: z.string().max(4096).optional(),
 		})
 		.strict(),
@@ -190,7 +203,16 @@ export const workflowRequestSchema = z.discriminatedUnion("operation", [
 			operationId: z.string().uuid(),
 		})
 		.strict(),
-]);
+]).superRefine((request, context) => {
+	if (request.operation !== "start") return;
+	if (request.tokenBudget === null && request.action !== "goals.edit") context.addIssue({ code: "custom", path: ["tokenBudget"], message: "Only delegated goal edits accept null to remove a cap" });
+	if (!request.action.startsWith("goals.")) return;
+	if (request.action === "goals.create") {
+		if (request.expectedGoalId !== null || request.expectedEntryRevision !== undefined) context.addIssue({ code: "custom", path: ["expectedGoalId"], message: "Create requires null goal identity" });
+	} else if (request.expectedGoalId === null || request.expectedEntryRevision === undefined || request.expectedRegistryRevision !== undefined) {
+		context.addIssue({ code: "custom", path: ["expectedEntryRevision"], message: "Existing delegated goals require identity and entry revision" });
+	}
+});
 const target = { agentId: id, workspaceId: id };
 export const workflowsStatusRpc = defineRpc({
 	name: "workflows_status",

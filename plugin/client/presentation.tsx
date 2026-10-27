@@ -57,16 +57,16 @@ export function NativeRow({ colors, title, detail, detailTone, leading, trailing
   </Pressable>;
 }
 
-export function NativeButton({ colors, label, onPress, disabled = false, danger = false, style }: {
-  colors: PresentationColors; label: string; onPress(): void; disabled?: boolean; danger?: boolean; style?: ViewStyle;
+export function NativeButton({ colors, label, onPress, disabled = false, danger = false, primary = false, style }: {
+  colors: PresentationColors; label: string; onPress(): void; disabled?: boolean; danger?: boolean; primary?: boolean; style?: ViewStyle;
 }) {
   const [hovered, setHovered] = useState(false);
   return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
     onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
-    style={({ pressed }) => [{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8,
+    style={({ pressed }) => [{ borderWidth: 1, borderColor: primary ? colors.accent : colors.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8,
       alignItems: "center", justifyContent: "center", opacity: disabled ? 0.5 : 1,
-      backgroundColor: !disabled && (hovered || pressed) ? colors.surface2 : colors.surface1 }, style]}>
-    <Text style={{ ...nativeText, color: danger ? colors.statusDanger : colors.foreground }}>{label}</Text>
+      backgroundColor: primary ? colors.accent : !disabled && (hovered || pressed) ? colors.surface2 : colors.surface1 }, style]}>
+    <Text style={{ ...nativeText, color: danger ? colors.statusDanger : primary ? colors.accentForeground : colors.foreground }}>{label}</Text>
   </Pressable>;
 }
 
