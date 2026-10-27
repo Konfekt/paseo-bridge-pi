@@ -38,8 +38,8 @@ export function Metadata({ colors, children, style, selectable = false, alert = 
   return <Text selectable={selectable} accessibilityRole={alert ? "alert" : undefined} style={[{ ...secondaryText, color: colors.foregroundMuted }, style]}>{children}</Text>;
 }
 
-export function NativeRow({ colors, title, detail, leading, trailing, children, onPress, disabled = false, selected = false, expanded, style, accessibilityLabel }: {
-  colors: PresentationColors; title: string; detail?: string; leading?: ReactNode; trailing?: ReactNode; children?: ReactNode;
+export function NativeRow({ colors, title, detail, detailTone, leading, trailing, children, onPress, disabled = false, selected = false, expanded, style, accessibilityLabel }: {
+  colors: PresentationColors; title: string; detail?: string; detailTone?: "danger"; leading?: ReactNode; trailing?: ReactNode; children?: ReactNode;
   onPress(): void; disabled?: boolean; selected?: boolean; expanded?: boolean; style?: ViewStyle; accessibilityLabel?: string;
 }) {
   const [hovered, setHovered] = useState(false);
@@ -51,7 +51,7 @@ export function NativeRow({ colors, title, detail, leading, trailing, children, 
     <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minWidth: 0 }}>
       {leading}<View style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <Text style={{ ...nativeText, color: colors.foreground }}>{title}</Text>
-        {detail ? <Metadata colors={colors}>{detail}</Metadata> : null}
+        {detail ? <Metadata colors={colors} style={detailTone === "danger" ? { color: colors.statusDanger } : undefined}>{detail}</Metadata> : null}
       </View>{trailing}
     </View>{children}
   </Pressable>;

@@ -856,10 +856,11 @@ function HarnessPanel({
 			title={presentation?.title ?? label}
 			accessibilityLabel={label}
 			detail={presentation?.detail ?? status}
+			detailTone={status === "lost" || status === "failed" ? "danger" : undefined}
 			expanded={presentation?.expanded}
 			leading={status ? (['starting', 'launching', 'pending', 'running'].includes(status)
 				? <View accessibilityLabel="Running"><WorkStatusRing attention={false} foreground={fg} platform={layout.platform} /></View>
-				: <View accessibilityLabel="Idle" style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: theme.colors.statusSuccess }} />) : undefined}
+				: <View accessibilityLabel={status === "lost" ? "Lost" : status === "failed" ? "Failed" : "Idle"} style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: status === "lost" || status === "failed" ? danger : theme.colors.statusSuccess }} />) : undefined}
 			trailing={<Icon name={presentation?.opensChat ? "ArrowUpRight" : presentation?.expanded ? "ChevronUp" : "ChevronDown"} size={14} color={muted} />}
 			disabled={disabled}
 			onPress={onPress}
@@ -901,7 +902,6 @@ function HarnessPanel({
 		selectedId && ready ? (
 			<View style={{ gap: 8, padding: 10, paddingTop: 0 }}>
 				{selectedWorker ? <>
-					<Text accessibilityRole="header" style={{ color: fg, fontSize: 14, fontWeight: "600" }}>{workerTitle(selectedWorker)}</Text>
 					{selectedWorker.title !== workerTitle(selectedWorker) ? <Metadata colors={theme.colors}>Task: {selectedWorker.title}</Metadata> : null}
 					<WorkerConversation key={JSON.stringify([session, epoch, selectedWorker.childId, selectedWorker.attempt, selectedWorker.runtimeId])}
 						target={conversationTarget(selectedWorker)} epoch={epoch!} colors={theme.colors} platform={layout.platform} />

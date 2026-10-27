@@ -603,9 +603,18 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.doesNotMatch(rows(tree)[0].props.accessibilityLabel, /original instructions/);
     rows(tree)[0].props.onPress(); tree = render(titledHost);
     assert.match(text(tree), /Task:\s+URGENT original instructions remain in expanded metadata/);
+    for (const status of ['lost', 'failed']) {
+      workAgents = [{ ...workAgents[0], status }]; tree = render(titledHost);
+      const state = status[0].toUpperCase() + status.slice(1);
+      assert.ok(nodes(tree).some(node => node.type === 'View' && node.props.accessibilityLabel === state && node.props.style?.backgroundColor === '#f00'), `${state} uses the native danger indicator`);
+      assert.ok(nodes(tree).some(node => node.type === 'Text' && text(node) === state && [node.props.style].flat().some(style => style?.color === '#f00')), `${state} text uses native danger color`);
+    }
+    workAgents = [{ ...workAgents[0], status: 'completed' }]; tree = render(titledHost);
+    assert.ok(nodes(tree).some(node => node.type === 'View' && node.props.accessibilityLabel === 'Idle' && node.props.style?.backgroundColor === '#0f0'), 'healthy idle agents retain their success indicator');
     updateChild({ ...nativeChild, title: 'Renamed native child' }); tree = render(titledHost);
     assert.match(rows(tree)[0].props.accessibilityLabel, /^Renamed native child/);
-    assert.ok(nodes(tree).some(node => node.type === 'Text' && node.props.accessibilityRole === 'header' && text(node) === 'Renamed native child'), 'expanded header tracks the same authoritative rename');
+    assert.ok(!nodes(tree).some(node => node.type === 'Text' && node.props.accessibilityRole === 'header' && text(node) === 'Renamed native child'), 'expanded trace does not repeat the agent row title');
+    assert.equal(nodes(tree).filter(node => node.props?.testID === 'work-agent-conversation').length, 1, 'removing the redundant heading preserves the trace');
     updateChild({ ...nativeChild, workspaceId: 'unrelated-workspace', title: 'Unrelated private title' }); tree = render(titledHost);
     assert.doesNotMatch(rows(tree)[0].props.accessibilityLabel, /Unrelated private title/);
     assert.match(rows(tree)[0].props.accessibilityLabel, /^URGENT/);
