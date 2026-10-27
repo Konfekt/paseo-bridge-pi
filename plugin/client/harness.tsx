@@ -1012,7 +1012,7 @@ function HarnessPanel({
 				const id = "jobId" in row ? row.jobId : taskGroupKey(row);
 				const title = "jobId" in row ? row.name || "Background job" : workerTitle(row);
 				const state = row.status === "completed" && viewMode === "completed"
-					? "jobId" in row ? "Succeeded" : "Finished"
+					? "jobId" in row ? "Succeeded" : "Completed"
 					: kind === "subagents" && viewMode === "active" && row.status === "completed"
 						? "Idle" : row.status.replace(/[_-]/g, " ").replace(/^./, value => value.toUpperCase());
 				const metadata = "jobId" in row

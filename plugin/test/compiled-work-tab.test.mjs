@@ -10,6 +10,13 @@ assert.ok(compilerPath, 'Set PASEO_PLUGIN_COMPILER to the installed Paseo compil
 // Resolve schema/runtime dependencies from the real host compiler installation,
 // not undeclared bridge-local packages. Missing host dependencies must fail.
 const require = createRequire(resolve(compilerPath));
+const nativePresentation = await import(pathToFileURL(require.resolve('@getpaseo/server/pi-tool-presentation')));
+const nativeDisplay = await import(pathToFileURL(require.resolve('@getpaseo/protocol/tool-call-display')));
+const nativeToolLabel = (name, input, result) => {
+  const detail = nativePresentation.mapPiToolCallDetail(nativePresentation.parseToolArgs(name, input), nativePresentation.parseToolResult(result));
+  const display = nativeDisplay.buildToolCallDisplayModel({ name, detail, status: 'completed', error: null });
+  return `Tool ${display.displayName}${display.summary ? ` · ${display.summary}` : ''} · completed`;
+};
 const nodes = node => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)];
 // Nested native syntax Text tokens concatenate exactly as RN/DOM text nodes do.
 const compactText = node => typeof node === 'string' ? node : Array.isArray(node) ? node.map(compactText).join('') : compactText(node?.props?.children ?? []);
@@ -303,7 +310,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     nodes(tree).find(n => n.type === 'SettingsAction' && n.props.actionLabel === 'Completed').props.onPress(); tree = render();
     const completedWithHistory = completedRows(tree).find(n => n.props.label === 'Worker 0');
     assert.ok(completedWithHistory, 'latest reaped task appears as a native completed action row');
-    assert.equal(completedWithHistory.props.hint, 'Finished', 'completed execution is not a claim of delivered success');
+    assert.equal(completedWithHistory.props.hint, 'Completed', 'preserve the existing execution label rather than introducing Finished or claiming delivered success');
     assert.equal(completedWithHistory.props.actionLabel, 'Details');
     completedWithHistory.props.onPress(); tree = render();
     assert.match(text(tree), /Previous attempts/);
@@ -374,31 +381,41 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     nodes(tree).find(n => n.type === 'ScrollView' && n.props.style?.maxHeight === 320).props.onContentSizeChange();
     assert.equal(automaticScrolls, 0, 'expanding earlier tool details preserves the reading anchor instead of snapping to the live tail');
     timeline.props.ref.current = null;
-    assert.match(text(tree), /ARGUMENT_SECRET/);
+    assert.doesNotMatch(text(tree), /ARGUMENT_SECRET/, 'native Bash schema omits unsupported private argument fields even when expanded');
+    assert.match(text(tree), /git status --short/, 'supported native command remains visible when expanded');
     assert.match(text(tree), /LIVE_RESULT_SECRET/, 'newer live completion overlays the persisted call and reveals its result only on click');
     assert.doesNotMatch(text(tree), /"result": "RESULT_SECRET"/, 'stale persisted result is superseded by the latest correlated live result');
     assert.ok(nodes(tree).some(n => n.type === 'Icon' && n.props.name === 'ChevronDown'), 'expanded badge replaces its leading tool icon with the native disclosure');
     const previousMessages = messages;
     const jsonFile = '{"content":[1,2],"title":"literal file"}';
+    const typedJobArguments = { action: 'start', command: 'echo typed', name: 'Typed job' };
+    const typedJobResult = { content: [{ type: 'text', text: 'job-111111111111111111111111  Running  0s  Typed job\ncwd: /fixture\ncommand: echo typed\nStarted in a new tmux pane.' }], details: { job_id: 'job-111111111111111111111111', name: 'Typed job', status: 'running', action: 'start' } };
+    const literalJsonResult = '{"content":[{"type":"text","text":"must remain literal JSON"}]}';
     messages = [
       { id: 'shell-fixture', role: 'assistant', text: '', parts: [{ type: 'toolCall', id: 'shell-fixture-call', name: 'bash', arguments: { command: 'printf actual-shell-json' }, status: 'completed', result: JSON.stringify({ content: [{ type: 'text', text: '{"content":[1,2],"shell_stdout":true}' }], details: {}, structuredContent: { output: '{"content":[1,2],"shell_stdout":true}', exit_code: 0 } }) }] },
       { id: 'unknown-fixture', role: 'assistant', text: '', parts: [{ type: 'toolCall', id: 'unknown-fixture-call', name: 'custom_tool', arguments: { query: 'unknown-tool-query' }, status: 'completed', result: JSON.stringify({ type: 'tool_result', content: JSON.stringify({ content: [{ type: 'text', text: 'unknown tool readable output' }] }) }) }] },
       { id: 'read-fixture', role: 'assistant', text: '', parts: [{ type: 'toolCall', id: 'read-fixture-call', name: 'read', arguments: { path: '/tmp/actual.json', offset: 7, limit: 20 }, status: 'completed', result: JSON.stringify(JSON.stringify({ content: [{ type: 'text', text: jsonFile }], structuredContent: jsonFile })) }] },
+      { id: 'typed-job-fixture', role: 'assistant', text: '', parts: [{ type: 'toolCall', id: 'typed-job-call', name: 'background_job', arguments: typedJobArguments, status: 'completed', result: 'TYPED_JOB_RAW_FALLBACK', resultFormat: 'text', toolPresentation: { version: 1, toolName: 'background_job', result: typedJobResult } }] },
+      { id: 'literal-fixture', role: 'assistant', text: '', parts: [{ type: 'toolCall', id: 'literal-call', name: 'custom_tool', arguments: { action: 'literal' }, status: 'completed', result: literalJsonResult, resultFormat: 'text' }] },
       { id: 'write-fixture', role: 'assistant', text: '', parts: [{ type: 'toolCall', id: 'write-fixture-call', name: 'write', arguments: { path: '/tmp/written.ts', content: 'export const written = "exact content";\n' }, status: 'completed', result: 'Written successfully' }] },
       { id: 'edit-fixture', role: 'assistant', text: '', parts: [{ type: 'toolCall', id: 'edit-fixture-call', name: 'edit', arguments: { path: '/tmp/edited.ts', edits: [{ oldText: 'old exact fragment', newText: 'new exact fragment' }] }, status: 'completed', result: 'Edited successfully' }] },
     ];
     tree = render();
     assert.doesNotMatch(text(tree), /literal file|exact content|old exact fragment/, 'all representative details remain collapsed');
-    for (const label of ['Tool Shell · printf actual-shell-json · completed', 'Tool Custom tool · unknown-tool-query · completed', 'Tool Read · /tmp/actual.json · completed', 'Tool Write · /tmp/written.ts · completed', 'Tool Edit · /tmp/edited.ts · completed']) {
+    for (const label of ['Tool Shell · printf actual-shell-json · completed', 'Tool Custom tool · completed', 'Tool Read · /tmp/actual.json · completed', 'Tool Write · /tmp/written.ts · completed', 'Tool Edit · /tmp/edited.ts · completed', nativeToolLabel('background_job', typedJobArguments, typedJobResult), nativeToolLabel('custom_tool', { action: 'literal' }, { content: [{ type: 'text', text: literalJsonResult }] })]) {
       nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === label).props.onPress();
       tree = render();
     }
     assert.ok(text(tree).includes('{"content":[1,2],"shell_stdout":true}'), 'shell JSON stdout remains literal content');
-    assert.match(text(tree), /unknown tool readable output/, 'unknown tools use the same common transport normalization');
+    assert.match(text(tree), /unknown tool readable output/, 'legacy unknown transport retains readable output through the native fallback');
+    assert.match(text(tree), /Running · 0s/, 'validated typed job details use native lifecycle presentation');
+    assert.doesNotMatch(text(tree), /TYPED_JOB_RAW_FALLBACK|Started in a new tmux pane/, 'typed projection is not replaced by the older flattened transport text');
+    assert.ok(text(tree).includes(literalJsonResult), 'unknown literal JSON payload is terminal text, not reinterpreted as another transport');
     assert.ok(text(tree).includes(jsonFile), 'double-stringified MCP result shows exact JSON file text, not its transport envelope');
     assert.match(text(tree), /export const written = "exact content";/);
     assert.deepEqual(nodes(tree).filter(n => n.props?.testID === 'work-code-line-number').map(n => text(n)), ['7'], 'only Read content gets absolute positions, using its authoritative offset');
-    assert.ok(nodes(tree).filter(n => n.props?.testID === 'work-native-code-surface').length >= 5, 'all expanded tools share bounded native-style code surfaces');
+    assert.ok(nodes(tree).filter(n => n.props?.testID === 'work-native-code-surface').length >= 4, 'native shell/file details use bounded code surfaces');
+    assert.ok(nodes(tree).some(n => n.props?.testID === 'work-native-tool-section'), 'native unknown-tool fallback uses prose rather than a fabricated code surface');
     assert.match(text(tree), /− old exact fragment/);
     assert.match(text(tree), /\+ new exact fragment/);
     assert.doesNotMatch(text(tree), /structuredContent|\\\\"content\\\\"|@@/, 'no duplicated transport, escaped envelope, or fabricated diff positions');
@@ -429,7 +446,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     tree = render();
     assert.equal(completedRows(tree).length, 1);
     assert.match(text(tree), /Old worker/);
-    assert.equal(completedRows(tree)[0].props.hint, 'Finished');
+    assert.equal(completedRows(tree)[0].props.hint, 'Completed');
     assert.equal(completedRows(tree)[0].props.style, undefined, 'completed rows use native SettingsAction geometry without a custom card');
     rpcResponse = async contract => contract.name === 'harness_status'
       ? { available: true, sessionId: 's', runtimeEpoch: 'e' } : { agentId: 'history-child' };
