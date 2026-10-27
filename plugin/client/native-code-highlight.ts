@@ -1,12 +1,13 @@
-// Presentation adapter only. All grammar/token/cache/diff logic is the exact
-// pinned upstream implementation in ./vendor/paseo-highlight (see provenance).
-import { highlightToKeyedLines, highlightDiffLines, extensionFromPath, resolveSyntaxColors } from "./vendor/paseo-highlight/index.js";
+// Presentation adapter only. Highlighting and diff logic are owned by Paseo's
+// reusable package and bundled into this plugin by the host packaging layer.
+import { highlightToKeyedLines, highlightDiffLines, extensionFromPath, resolveSyntaxColors } from "@getpaseo/highlight";
+import type { HighlightDiffLine } from "@getpaseo/highlight";
 import type { NativeCodeRow } from "./native-code-model";
 export type SyntaxToken = { text: string; style: string | null };
 export function highlightNativeRows(rows: NativeCodeRow[], text: string, filePath: string | undefined, unifiedDiff = false): (NativeCodeRow & { tokens?: SyntaxToken[] })[] {
   if (!filePath) return rows;
   if (unifiedDiff) {
-    const lines = highlightDiffLines(rows.map(row => ({ type: row.text.startsWith("@@") || row.text.startsWith("---") || row.text.startsWith("+++") ? "hunk" : row.tone === "removed" ? "remove" : row.tone === "added" ? "add" : "context", content: row.text })), filePath);
+    const lines = highlightDiffLines(rows.map((row): HighlightDiffLine => ({ type: row.text.startsWith("@@") || row.text.startsWith("---") || row.text.startsWith("+++") ? "hunk" : row.tone === "removed" ? "remove" : row.tone === "added" ? "add" : "context", content: row.text })), filePath);
     return rows.map((row,index) => {
       const tokens = lines[index].tokens;
       const prefix = /^[ +\-]/.test(row.text) ? row.text[0] : "";
@@ -14,7 +15,7 @@ export function highlightNativeRows(rows: NativeCodeRow[], text: string, filePat
     });
   }
   const highlighted = highlightToKeyedLines(text, extensionFromPath(filePath));
-  return rows.map((row,index) => highlighted?.[index] && row.text !== "[truncated]" ? { ...row, tokens: highlighted[index].tokens.map((value: any) => value.token) } : row);
+  return rows.map((row,index) => highlighted?.[index] && row.text !== "[truncated]" ? { ...row, tokens: highlighted[index].tokens.map(value => value.token) } : row);
 }
 /** Public PluginTheme omits syntax colors/brand. Reuse native GitHub defaults
  * on its exposed light/dark surface; never invent a replacement token palette.

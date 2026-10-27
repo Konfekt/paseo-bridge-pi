@@ -36,7 +36,7 @@ export function contributeAccountControls(client: PluginClientContext) {
 }
 
 function registerAccountControls(client: PluginClientContext) {
-	const stopChat = contributeChatAccountControls(client);
+	// The companion accounts plugin owns the composer account pill.
 	let disposed = false;
 	let stop: (() => void) | undefined;
 	void client.paseo.config
@@ -60,7 +60,6 @@ function registerAccountControls(client: PluginClientContext) {
 		});
 	return () => {
 		disposed = true;
-		stopChat();
 		stop?.();
 	};
 }

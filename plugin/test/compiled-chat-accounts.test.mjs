@@ -223,7 +223,7 @@ test('disposing before subscription bootstrap prevents late registration; a fres
   } finally { remount(); }
 });
 
-test('full plugin contribution is leased, including late config and unrelated Work/BTW controls', async () => {
+test('full plugin contribution leaves the account pill to the companion and leases Work/BTW controls', async () => {
   const load = name => {
     if (name === '@getpaseo/plugin') return { defineRpc: x => x, defineSettings: x => x };
     if (['react', 'react/jsx-runtime', 'react-native', '@getpaseo/plugin/client', '@getpaseo/plugin/client/ui', '@getpaseo/plugin/client/react-native', '@tanstack/react-query'].includes(name)) return {};
@@ -246,7 +246,8 @@ test('full plugin contribution is leased, including late config and unrelated Wo
     assert.equal(configCalls, 1);
     const agent = { id: 'main', provider: 'pi', workspaceId: 'workspace', availableModes: [{ id: 'full-access' }, { id: 'dangerous-ask' }] };
     for (const { observer } of observers) observer.snapshot({ entries: [{ agent }] });
-    assert.deepEqual(pills.filter(p => ['work', 'pi-btw', 'pi-codex-account'].includes(p.id)).map(p => p.id).sort(), ['pi-btw', 'pi-codex-account', 'work']);
+    assert.deepEqual(pills.filter(p => ['work', 'pi-btw', 'pi-codex-account'].includes(p.id)).map(p => p.id).sort(), ['pi-btw', 'work']);
+    assert.equal(pills.some(p => p.id === 'pi-codex-account'), false, 'bridge must not compete with companion account control');
     assert.equal(panels.filter(p => p.id === 'work').length, 1);
     a(); a(); assert.ok(pills.some(p => !p.removed));
     b(); assert.ok(pills.every(p => p.removed)); assert.ok(panels.every(p => p.removed));
