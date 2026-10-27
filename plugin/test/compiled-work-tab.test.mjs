@@ -250,6 +250,25 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.equal(liveQuery.refetchInterval, 1200);
     assert.equal(liveQuery.refetchOnReconnect, true);
     assert.ok(!queries.some(q => q.queryKey[0] === 'harness-detail' && q.enabled), 'live log replaces final-report reads');
+    // A retained older attempt must not keep the primary selection alive after resume.
+    const originalAttempt = workAgents[0];
+    const resumedAttempt = { ...originalAttempt, childId: 'resumed-child', attempt: 2, runtimeId: 'resumed-runtime', status: 'running' };
+    workAgents.push(resumedAttempt);
+    tree = render();
+    assert.equal(nodes(tree).filter(n => n.props?.testID === 'work-agent-conversation').length, 0, 'superseded primary selection closes even while old attempt is retained');
+    assert.doesNotMatch(text(tree), /Owned grandchild job output|Worker transcript evidence/, 'stale primary selection cannot display cached taskId-only report or trace');
+    assert.ok(!queries.some(q => q.queryKey[0] === 'harness-detail' && q.enabled), 'superseded selection never enables fallback task report');
+    assert.equal(rows(tree).length, 5, 'resumed attempt does not add a peer row');
+    rows(tree).find(n => n.props.accessibilityLabel.startsWith('Worker 0 ·')).props.onPress(); tree = render();
+    assert.deepEqual(queries.find(q => q.queryKey[0] === 'worker-conversation').queryKey.slice(6, 10), ['task-0', 'resumed-child', 2, 'resumed-runtime'], 'explicit latest click binds resumed trace');
+    nodes(tree).find(n => n.type === 'Pressable' && text(n).includes('Previous attempts (1)')).props.onPress(); tree = render();
+    nodes(tree).find(n => n.type === 'Pressable' && text(n).includes('Attempt 1')).props.onPress(); tree = render();
+    assert.deepEqual(queries.filter(q => q.queryKey[0] === 'worker-conversation').map(q => q.queryKey.slice(6, 10)), [
+      ['task-0', 'resumed-child', 2, 'resumed-runtime'], ['task-0', 'child-0', 1, 'runtime-0'],
+    ], 'history remains separately bound to retained original attempt');
+    workAgents.pop();
+    tree = render();
+    rows(tree)[0].props.onPress(); tree = render();
     workAgents[0].status = 'running';
     messages = [...messages, { id: 'm2', role: 'tool', text: 'Live tool execution evidence' }];
     tree = render();

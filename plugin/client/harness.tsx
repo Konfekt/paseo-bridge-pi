@@ -2,6 +2,7 @@ import { observeAgentDirectory, retainContribution } from "./agent-directory";
 import { useQuery } from "@tanstack/react-query";
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { readJobs } from "./jobs-pages";
+import { groupSubagentAttempts, attemptIdentity } from "./subagent-attempts";
 import { Pressable, Text, View, type ScrollView as NativeScrollView } from "react-native";
 import { Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
 import {
@@ -422,7 +423,7 @@ function useWorkSummary({ agentId, workspaceId, host }: JobScope) {
 		foregroundIds,
 		agents: count(
 			ready && !agents.isError && agents.data?.state === "available"
-				? agents.data.items.filter(
+				? [...groupSubagentAttempts(agents.data.items).values()].map(attempts => attempts[0]).filter(
 						(row) =>
 							row.kind !== "foreground" && !foregroundIds.has(row.taskId),
 					)
@@ -757,6 +758,7 @@ function HarnessPanel({
 	const reportCall = useRpc(harnessSubagentReportRpc);
 	const [selected, select] = useState<{
 		id: string;
+		attemptIdentity?: string;
 		session: string;
 		epoch: string;
 	} | null>(null);
@@ -804,10 +806,12 @@ function HarnessPanel({
 	});
 	const isActiveRow = (row: { status: string; reaped?: boolean }) =>
 		kind === "subagents" ? isActiveAgent(row) : isActiveWorkStatus(row.status);
+	const attemptGroups = groupSubagentAttempts((list.data?.items ?? []).filter((row): row is Extract<typeof row, { childId: string }> => "childId" in row));
 	const selectedId =
 		selected &&
 		selected.session === session &&
 		selected.epoch === epoch &&
+		(kind !== "subagents" || (!!attemptGroups.get(selected.id)?.[0] && attemptIdentity(attemptGroups.get(selected.id)![0]) === selected.attemptIdentity)) &&
 		(viewMode === "all" ||
 			list.data?.items.some(
 				(row) =>
@@ -867,9 +871,10 @@ function HarnessPanel({
 			style={{ paddingVertical: 8, minHeight: 44 }}
 		/>
 	);
+	const primaryItems = kind === "subagents" ? [...attemptGroups.values()].map(attempts => attempts[0]) : list.data?.items ?? [];
 	const rows =
 		ready && !list.isError && list.data?.state === "available"
-			? list.data.items.filter(
+			? primaryItems.filter(
 					(row) =>
 						(kind !== "subagents" ||
 							!("kind" in row) ||
@@ -881,7 +886,7 @@ function HarnessPanel({
 			: [];
 	type WorkerRow = Extract<(typeof rows)[number], { childId: string }>;
 	const selectedWorker = kind === "subagents" && openConversation
-		? rows.find((row): row is WorkerRow => "childId" in row && row.taskId === selectedId) : undefined;
+		? rows.find((row): row is WorkerRow => "childId" in row && row.taskId === selectedId && attemptIdentity(row) === selected?.attemptIdentity) : undefined;
 	const workerTitle = (row: ChildTitleRow) => resolveChildTitle?.(row) ?? nativeChildTitle(row, () => undefined);
 	const conversationTarget = (row: WorkerRow): AgentConversationTarget => ({ hostId: host.id, agentId, workspaceId,
 		sessionId: session!, runtimeEpoch: epoch!, taskId: row.taskId, childId: row.childId, groupId: row.groupId, attempt: row.attempt, runtimeId: row.runtimeId, title: workerTitle(row) });
@@ -1037,7 +1042,7 @@ function HarnessPanel({
 							label,
 							() => {
 								if (opensChat && "childId" in row) openWorker(row);
-								else select(selectedId === id ? null : { id, session: session!, epoch: epoch! });
+								else select(selectedId === id ? null : { id, session: session!, epoch: epoch!, ...("childId" in row ? { attemptIdentity: attemptIdentity(row) } : {}) });
 							},
 							!!openingId,
 							viewMode !== "completed",
@@ -1045,6 +1050,7 @@ function HarnessPanel({
 							{ title, detail: metadata, opensChat, expanded: opensChat ? undefined : selectedId === id },
 						)}
 						{selectedId === id ? selectedDetail : null}
+						{"childId" in row && (attemptGroups.get(row.taskId)?.length ?? 0) > 1 ? <AttemptHistory key={JSON.stringify([session, epoch, row.taskId])} rows={attemptGroups.get(row.taskId)!.slice(1)} target={conversationTarget} colors={theme.colors} platform={layout.platform} /> : null}
 					</View>
 					</Fragment>
 				);
@@ -1058,4 +1064,17 @@ function HarnessPanel({
 	) : (
 		<ScrollView style={{ flex: 1 }}>{content}</ScrollView>
 	);
+}
+
+function AttemptHistory<T extends { taskId: string; childId: string; attempt: number; runtimeId: string | null; status: string }>({ rows, target, colors, platform }: {
+ rows: T[]; target: (row: T) => AgentConversationTarget; colors: PluginWorkspacePanelProps["theme"]["colors"]; platform: string;
+}) {
+ const [expanded, setExpanded] = useState(false);
+ const [selected, setSelected] = useState<string>();
+ const row = rows.find(item => attemptIdentity(item) === selected);
+ return <View style={{ paddingLeft: 16 }}>
+  <NativeRow colors={colors} title={`Previous attempts (${rows.length})`} expanded={expanded} onPress={() => setExpanded(!expanded)} trailing={<Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={14} color={colors.foregroundMuted} />} />
+  {expanded ? rows.map(item => <NativeRow key={attemptIdentity(item)} colors={colors} title={`Attempt ${item.attempt}`} detail={item.status.replace(/[_-]/g, " ").replace(/^./, value => value.toUpperCase())} detailTone={item.status === "lost" || item.status === "failed" ? "danger" : undefined} expanded={selected === attemptIdentity(item)} onPress={() => setSelected(selected === attemptIdentity(item) ? undefined : attemptIdentity(item))} />) : null}
+  {expanded && row ? <WorkerConversation key={attemptIdentity(row)} target={target(row)} epoch={target(row).runtimeEpoch} colors={colors} platform={platform} /> : null}
+ </View>;
 }
