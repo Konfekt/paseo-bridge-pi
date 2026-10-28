@@ -54,6 +54,15 @@ export const workflowSnapshotSchema = z
 						stale: z.boolean(),
 						detached: z.boolean(),
 						changedFiles: z.number().int().min(0).nullable().optional(),
+						// Native server comparison statistics, not a changed-file count.
+						diffStat: z.object({ additions: z.number().int().min(0), deletions: z.number().int().min(0) }).strict().nullable().optional(),
+						// A physically verified recorded owner, not exhaustive agent membership.
+						recordedOwner: z.object({
+							ownerSessionId: z.string().min(1).max(256),
+							taskId: z.string().regex(/^subagent-task-[a-f0-9]{24}$/),
+							childId: z.string().regex(/^subagent-child-[a-f0-9]{24}$/),
+							canonicalDisplayName: z.string().max(80).optional(),
+						}).strict().optional(),
 						ownerTaskId: z.string().max(128).optional(),
 						ownerTitle: z.string().max(500).optional(),
 						workerStatus: z.string().max(40).optional(),

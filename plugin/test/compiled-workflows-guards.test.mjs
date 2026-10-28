@@ -103,6 +103,30 @@ test("worktree removal rechecks open Paseo agents including symlinked subdirecto
 				},
 			},
 		};
+		// New producer contract is additive; both legacy and verified recorded-owner rows parse.
+		const legacyTree = { path: tree, branch: "pi/owner", head: null, main: false, current: false, locked: false, stale: false, detached: false, ownerTitle: "RAW TASK MUST NOT BECOME A CANONICAL NAME" };
+		state.worktrees = [legacyTree];
+		let status = await handlers.status({ agentId: "agent", workspaceId: "workspace" }, context);
+		assert.equal(status.snapshot.worktrees[0].recordedOwner, undefined);
+		const recordedOwner = { ownerSessionId: "session", taskId: `subagent-task-${"a".repeat(24)}`, childId: `subagent-child-${"b".repeat(24)}`, canonicalDisplayName: "Stock Pi Bridge" };
+		state.worktrees = [{ ...legacyTree, recordedOwner }];
+		status = await handlers.status({ agentId: "agent", workspaceId: "workspace" }, context);
+		assert.deepEqual(status.snapshot.worktrees[0].recordedOwner, recordedOwner);
+		state.worktrees = [{ ...legacyTree, recordedOwner: { ...recordedOwner, canonicalDisplayName: undefined } }];
+		status = await handlers.status({ agentId: "agent", workspaceId: "workspace" }, context);
+		assert.equal(status.snapshot.worktrees[0].recordedOwner.canonicalDisplayName, undefined, "legacy names are not recovered from raw ownerTitle");
+		// Current harness adds lifecycle metadata. This UI ignores only those
+		// known additive fields; it neither renders completion nor changes gates.
+		state.capabilities = { ownedWorktreeCompletion: true, delegatedGoals: true };
+		state.worktreeCompletions = [{ version: 1, taskId: recordedOwner.taskId, ownerSessionId: "session", decidedBySessionId: "session", reason: "Explicit producer completion", completedAt: new Date().toISOString(), branchOid: "a".repeat(40), phase: "marked", path: tree, branch: "pi/owner", retained: true }];
+		state.worktreeCompletionError = null;
+		status = await handlers.status({ agentId: "agent", workspaceId: "workspace" }, context);
+		assert.equal(status.snapshot.worktreeCompletions, undefined);
+		assert.deepEqual(status.snapshot.capabilities, { delegatedGoals: true });
+		state.unrecognizedFutureField = true;
+		await assert.rejects(handlers.status({ agentId: "agent", workspaceId: "workspace" }, context), /Unrecognized key/);
+		delete state.unrecognizedFutureField;
+		state.worktrees = [];
 		const input = {
 			agentId: "agent",
 			workspaceId: "workspace",
@@ -137,6 +161,29 @@ test("worktree removal rechecks open Paseo agents including symlinked subdirecto
 			/confirmation changed/,
 		);
 		assert.equal(mutations, 1);
+		// Existing-workspace opening resolves the exact real worktree path, not the parent repo.
+		let proposedPath = tree, workspaceIncomplete = false, creations = 0, onlyForeign = false;
+		let allocatedSource, listedFilter;
+		const openHandlers = createWorkflowsHandlers(async () => descriptor, async () => ({ ...state, busy: false, operationId: null, operationAction: null, dialog: null, protectedPaths: [], openPath: proposedPath }));
+		const openContext = { paseo: { ...context.paseo, workspaces: {
+			ref: () => ({ refresh: async () => ({ id: "workspace", projectId: "project" }) }),
+			list: async options => { listedFilter = options.filter; return { entries: workspaceIncomplete ? [] : [{ id: "foreign-child", projectId: "foreign-project", workspaceDirectory: tree }, { id: "parent-existing", projectId: "project", workspaceDirectory: dir }, ...(onlyForeign ? [] : [{ id: "child-existing", projectId: "project", workspaceDirectory: alias }])], pageInfo: { hasMore: workspaceIncomplete, nextCursor: null } }; },
+			create: async options => { creations++; allocatedSource = options.source; return { id: "allocated-exact-child" }; },
+		} } };
+		const openInput = { ...input, request: { operation: "start", action: "worktree.open", path: tree, sessionId: "session", serviceEpoch: descriptor.serviceEpoch, requestId: randomUUID() } };
+		assert.equal((await openHandlers.control(openInput, openContext)).openedWorkspaceId, "child-existing", "canonical alias must resolve to the child workspace, never the parent");
+		assert.equal(creations, 0, "existing target does not allocate another workspace");
+		assert.deepEqual(listedFilter, { projectId: "project" });
+		onlyForeign = true;
+		assert.equal((await openHandlers.control(openInput, openContext)).openedWorkspaceId, "allocated-exact-child", "a foreign-project same-cwd workspace is not reused");
+		assert.deepEqual(allocatedSource, { kind: "directory", path: tree, projectId: "project" });
+		assert.equal(creations, 1);
+		onlyForeign = false;
+		proposedPath = dir;
+		await assert.rejects(openHandlers.control(openInput, openContext), /Worktree path changed/);
+		proposedPath = tree; workspaceIncomplete = true;
+		await assert.rejects(openHandlers.control(openInput, openContext), /Workspace inventory is incomplete/);
+		assert.equal(creations, 1, "incomplete inventory does not allocate");
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

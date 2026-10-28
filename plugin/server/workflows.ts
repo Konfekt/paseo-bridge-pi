@@ -11,6 +11,8 @@ import {
 	type AccountControlsDescriptor,
 } from "./account-controls-transport";
 import { callBtw } from "./btw-transport";
+import { attachWorktreeDiffStats } from "./worktree-diff-stats";
+import { workflowUiPayload } from "./workflow-ui-payload";
 import {
 	workflowSnapshotSchema,
 	workflowsStatusRpc,
@@ -104,16 +106,17 @@ export function createWorkflowsHandlers(
 					runtimeEpoch: null,
 					snapshot: null,
 				};
-			const snapshot = archiveLegacyClearedGoal(
+			let snapshot = archiveLegacyClearedGoal(
 				workflowSnapshotSchema.parse(
-					await call(d, {
+					workflowUiPayload(await call(d, {
 						operation: "snapshot",
 						sessionId: d.sessionId,
 						serviceEpoch: d.serviceEpoch,
-					}),
+					})),
 				),
 				input.agentId,
 			);
+			if (snapshot.worktrees.length) snapshot = await attachWorktreeDiffStats(snapshot, input.workspaceId, context);
 			await recheck(input, context, d);
 			if (
 				snapshot.sessionId !== d.sessionId ||
@@ -142,11 +145,11 @@ export function createWorkflowsHandlers(
 				throw new Error("Workflow target changed; no request sent");
 			if (input.request.operation === "send" && input.request.value === true) {
 				const state = workflowSnapshotSchema.parse(
-					await call(d, {
+					workflowUiPayload(await call(d, {
 						operation: "snapshot",
 						sessionId: d.sessionId,
 						serviceEpoch: d.serviceEpoch,
-					}),
+					})),
 				);
 				if (
 					state.sessionId !== d.sessionId ||
@@ -192,7 +195,7 @@ export function createWorkflowsHandlers(
 					await recheck(input, context, d);
 				}
 			}
-			const result = responseSchema.parse(await call(d, input.request));
+			const result = responseSchema.parse(workflowUiPayload(await call(d, input.request)));
 			await recheck(input, context, d);
 			if (
 				result.sessionId !== d.sessionId ||
@@ -220,7 +223,7 @@ export function createWorkflowsHandlers(
 					if (page >= 100) throw new Error("Workspace inventory is incomplete");
 					const listed = await context.paseo.workspaces.list({ filter: { projectId: parent.projectId }, page: { limit: 200, cursor } });
 					for (const workspace of listed.entries) {
-						if (workspace.workspaceDirectory && await realpath(workspace.workspaceDirectory).catch(() => null) === target) { openedWorkspaceId = workspace.id; break; }
+						if (workspace.projectId === parent.projectId && workspace.workspaceDirectory && await realpath(workspace.workspaceDirectory).catch(() => null) === target) { openedWorkspaceId = workspace.id; break; }
 					}
 					if (openedWorkspaceId || listed.pageInfo?.hasMore === false) break;
 					if (!listed.pageInfo?.nextCursor || listed.pageInfo.nextCursor === cursor) throw new Error("Workspace inventory is incomplete");

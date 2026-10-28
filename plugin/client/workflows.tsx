@@ -4,11 +4,13 @@ import { Pressable, Text, View } from "react-native";
 import { ScrollView, TextInput } from "@getpaseo/plugin/client/react-native";
 import {
 	SettingsSelect,
-	SettingsAction,
 	Modal,
 } from "@getpaseo/plugin/client/ui";
 import { useRpc, type PluginAgentPanelProps } from "@getpaseo/plugin/client";
 import { Metadata, NativeButton } from "./presentation";
+import { WorktreeOwner } from "./worktree-owner";
+import { WorktreeWorkspaceAction } from "./worktree-workspace-action";
+import { worktreeLinkKeyboardProps } from "../shared/worktree-link";
 import { DelegatedGoals } from "./delegated-goals";
 import { LegacyGoals } from "./legacy-goals";
 import {
@@ -53,7 +55,7 @@ export function WorktreesPanel(props: PluginAgentPanelProps) {
 	return <WorkflowsView {...props} section="worktrees" />;
 }
 export function WorktreesSection(
-	props: Omit<PluginAgentPanelProps, "navigation"> & {
+	props: PluginAgentPanelProps & {
 		onOpenWorkspace?: (id: string) => void;
 	},
 ) {
@@ -70,6 +72,7 @@ function WorkflowsView({
 	agentId,
 	workspaceId,
 	theme,
+	layout,
 	navigation,
 	section,
 	embedded = false,
@@ -413,6 +416,7 @@ function WorkflowsView({
 						</>
 					) : (
 						<View style={{ gap: 4 }}>
+							<Text style={{ color: colors.foregroundMuted, fontSize: 12, paddingHorizontal: 8 }}>Open a worktree workspace, then select native Changes.</Text>
 							{snapshot.worktreeLoading ? (
 								<Text style={{ color: colors.foregroundMuted }}>
 									Loading worktrees…
@@ -424,15 +428,16 @@ function WorkflowsView({
 								</Text>
 							) : null}
 								{!snapshot.worktreeLoading ? (
-								<NativeButton
-									colors={colors}
-									label={saved.showAllWorktrees ? "Show ours" : "Show all"}
-									onPress={() => {
-										saved.showAllWorktrees = !saved.showAllWorktrees;
-										redraw();
-									}}
-									style={{ alignSelf: "flex-start", minHeight: 32 }}
-								/>
+								<View accessibilityLabel="Worktree scope" style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+									{[false, true].map((all) => (
+										<Pressable key={String(all)} accessibilityRole="button"
+											accessibilityState={{ selected: showAllWorktrees === all }}
+											onPress={() => { saved.showAllWorktrees = all; redraw(); }}
+											style={{ minHeight: 44, justifyContent: "center", paddingHorizontal: 12, borderRadius: 8, backgroundColor: showAllWorktrees === all ? colors.surface2 : "transparent" }}>
+											<Text style={{ color: colors.foreground }}>{all ? "All worktrees" : "This session"}</Text>
+										</Pressable>
+									))}
+								</View>
 							) : null}
 							{!snapshot.worktreeLoading &&
 							!snapshot.worktreeError &&
@@ -447,6 +452,7 @@ function WorkflowsView({
 								</Text>
 							) : null}
 							{visibleWorktrees.map((tree, index) => {
+								// Ownership and working-copy safety gates are intentionally unchanged.
 								const unsafe =
 										tree.stale ||
 										tree.locked ||
@@ -461,7 +467,8 @@ function WorkflowsView({
 										!snapshot.idle ||
 										goal?.status === "active" ||
 										unsafe,
-									selected = selectedTree === tree.path;
+									selected = selectedTree === tree.path,
+									workspaceUnavailable = locked || snapshot.busy || tree.stale || !(onOpenWorkspace || navigation?.openWorkspace);
 								return (
 									<View
 										key={tree.path}
@@ -486,14 +493,17 @@ function WorkflowsView({
 												{tree.repositoryLabel ?? tree.repositoryPath}
 											</Text>
 										) : null}
+										<View style={{ flexDirection: "row", alignItems: "center", minWidth: 0 }}>
 										<Pressable
 											accessibilityRole="button"
-											accessibilityState={{ selected }}
+											accessibilityState={{ expanded: selected }}
 											onPress={() =>
 												setSelectedTree(selected ? undefined : tree.path)
 											}
 											style={({ pressed }) => ({
 												minHeight: 44,
+												flex: 1,
+												minWidth: 0,
 												justifyContent: "center",
 												paddingHorizontal: 12,
 												borderRadius: 8,
@@ -504,37 +514,32 @@ function WorkflowsView({
 												numberOfLines={1}
 												style={{ color: colors.foreground, fontSize: 14, lineHeight: 20, fontWeight: "600" }}
 											>
-												{tree.main
-													? "Main checkout"
-													: (tree.ownerTitle ??
-														tree.branch ??
-														"Detached worktree")}
+												{selected ? "▾ " : "▸ "}{tree.branch ?? (tree.detached ? "Detached HEAD" : "Branch unavailable")}
 											</Text>
-											<Text
-												numberOfLines={2}
-												style={{ color: colors.foregroundMuted, fontSize: 12, lineHeight: 18 }}
-											>
-												{tree.ownerTitle || tree.main
-													? `${tree.branch ?? "Detached"} · `
-													: ""}
-												{tree.changedFiles == null
-													? "Status unavailable"
-													: tree.changedFiles
-														? `${tree.changedFiles} changed`
-														: "Clean"}
-												{tree.inUse ? " · worker attached" : ""}
-												{tree.current ? " · current" : ""}
-												{tree.locked ? " · locked" : ""}
-												{tree.stale ? " · stale" : ""}
-											</Text>
+										</Pressable>
+										<WorktreeWorkspaceAction path={tree.path} diffStat={tree.diffStat} disabled={workspaceUnavailable}
+											onPress={() => start("worktree.open", { path: tree.path })} colors={colors} />
+										</View>
+										<Pressable accessibilityRole="link" accessibilityLabel={`Open workspace ${tree.path}`}
+											{...worktreeLinkKeyboardProps(layout.platform, workspaceUnavailable, () => start("worktree.open", { path: tree.path }))}
+											disabled={workspaceUnavailable}
+											accessibilityState={{ disabled: workspaceUnavailable }}
+											onPress={() => start("worktree.open", { path: tree.path })}
+											style={{ paddingHorizontal: 28, minHeight: 44, justifyContent: "center", opacity: workspaceUnavailable ? 0.5 : 1 }}>
+											<Text numberOfLines={2} style={{ color: colors.foregroundMuted, fontSize: 12, lineHeight: 18 }}>{tree.path} ↗</Text>
 										</Pressable>
 										{selected ? (
 											<View style={{ padding: 8, gap: 4 }}>
-												<Text
-													selectable
-													style={{ color: colors.foregroundMuted }}
-												>
-													{tree.path}
+												{tree.recordedOwner && data?.sessionId && data.runtimeEpoch ? (
+													<WorktreeOwner key={JSON.stringify([tree.path, data.sessionId, data.runtimeEpoch, tree.recordedOwner])}
+														host={host} agentId={agentId} workspaceId={workspaceId} theme={theme} layout={layout}
+														owner={tree.recordedOwner} sessionId={data.sessionId} runtimeEpoch={data.runtimeEpoch}
+														onOpenAgent={navigation?.openAgent ? id => navigation.openAgent({ agentId: id, serverId: host.id }) : undefined} />
+												) : null}
+												<Text style={{ color: colors.foregroundMuted }}>
+													{tree.changedFiles == null ? "Working copy status unavailable" : tree.changedFiles ? "Uncommitted changes" : "Working copy clean"}
+													{tree.main ? " · main checkout" : ""}{tree.current ? " · current" : ""}
+													{tree.inUse ? " · assigned ownership" : ""}
 												</Text>
 												{tree.includedChanges ? (
 													<Text style={{ color: colors.foregroundMuted }}>
@@ -549,7 +554,7 @@ function WorkflowsView({
 												{guarded ? (
 													<Text style={{ color: colors.foregroundMuted }}>
 														{tree.inUse
-															? "Reap the worker before removal"
+															? "Assigned ownership blocks removal"
 															: tree.current
 																? "Current worktree cannot be removed"
 																: tree.locked
@@ -560,30 +565,13 @@ function WorkflowsView({
 																			? "Change status unavailable"
 																			: tree.changedFiles > 0
 																				? "Uncommitted changes must be preserved"
-																				: "Wait until Pi and Goal are idle"}
+																				: tree.main ? "Main checkout cannot be removed" : locked ? "Refresh the connection before removal" : "Wait until Pi and Goal are idle"}
 													</Text>
 												) : null}
 												<View style={{ gap: 8, minWidth: 0, width: "100%", maxWidth: 720 }}>
-													{onOpenWorkspace || navigation?.openWorkspace ? (
-														<SettingsAction
-															label="Open workspace"
-															hint="View this branch in its own workspace"
-															actionLabel="Open"
-															disabled={locked || snapshot.busy || tree.stale}
-															onPress={() =>
-																start("worktree.open", { path: tree.path })
-															}
-														/>
-													) : null}
-													<SettingsAction
-														label="Remove worktree"
-														hint="Keeps the branch; confirmation required"
-														actionLabel="Remove"
-														disabled={guarded}
-														onPress={() =>
-															start("worktree.remove", { path: tree.path })
-														}
-													/>
+													<NativeButton colors={colors} label="Remove…" disabled={guarded}
+														onPress={() => start("worktree.remove", { path: tree.path })}
+														style={{ alignSelf: "flex-start", minHeight: 44 }} />
 												</View>
 											</View>
 										) : null}
