@@ -32,9 +32,9 @@ test('compiled read-only panels render lists/details, bind generations and only 
       contract.input.parse(input); calls.push({ name: contract.name, input }); return {};
     } };
     if (name === '@getpaseo/plugin/client/react-native') return { ScrollView: 'ScrollView', Icon:'Icon', copyText:async () => {} };
-    if (name === 'react-native') return { Text: 'Text', View: 'View', Pressable: 'Pressable' };
+    if (name === 'react-native') return { Text: 'Text', View: 'View', Pressable: 'Pressable', Animated: { Value: class { interpolate() { return 0; } } } };
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'Fragment' };
-    if (name === 'react') return { Fragment:'Fragment', useEffect() {}, useRef:initial=>({current:initial}), useMemo:fn=>fn(), useCallback:fn=>fn, useState: initial => {
+    if (name === 'react') return { Fragment:'Fragment', useEffect() {}, useLayoutEffect() {}, useRef:initial=>({current:initial}), useMemo:fn=>fn(), useCallback:fn=>fn, useState: initial => {
       const slot = hookIndex++; if (!(slot in states)) states[slot] = initial;
       return [states[slot], value => { states[slot] = value; }];
     } };
@@ -86,9 +86,11 @@ test('compiled read-only panels render lists/details, bind generations and only 
     listResult.data.items = [job];
     let tree = render('harness-jobs');
     const row = nodes(tree).find(node => node.type === 'Pressable' && node.props.accessibilityLabel.startsWith('Build · running'));
-    assert.deepEqual(row.props.style, { padding: 10, opacity: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }, 'Jobs retains pre-f5ae85c row geometry');
-    assert.equal(nodes(row).filter(node => node.type === 'Text').length, 1, 'original single-line label, no metadata row');
-    assert.equal(nodes(row).filter(node => node.type === 'Icon').length, 0, 'no added disclosure icon');
+    assert.equal(row.props.accessibilityState.expanded, false, 'Jobs shares the accessible Agents disclosure');
+    assert.equal(row.props['aria-expanded'], false, 'web exposes the disclosure state');
+    assert.match(text(row), /Build.*Running/);
+    assert.ok(nodes(row).some(node => node.type === 'Icon' && node.props.name === 'ChevronDown'));
+    assert.equal(queries[2].enabled, false, 'status refresh must not retrieve collapsed output');
     assert.ok(nodes(tree).some(node => node.props?.style?.paddingHorizontal === 16 && node.props?.style?.paddingVertical === 16));
     row.props.onPress();
     detailResult = { data: { state: 'available', item: { jobId: job.jobId, text: 'Build output', stale: true, lastUpdated: null, truncated: true } } };
@@ -98,8 +100,9 @@ test('compiled read-only panels render lists/details, bind generations and only 
     const output = nodes(tree).find(node => node.type === 'Text' && node.props.children === 'Build output');
     assert.equal(output.props.selectable, true);
     assert.deepEqual(output.props.style, { color: '#fff', fontFamily: 'monospace', fontSize: 12, lineHeight: 18 });
-    assert.equal(nodes(tree).filter(node => node.type === 'ScrollView').length, 1, 'original output has no nested bounded scroller');
-    assert.ok(!nodes(tree).some(node => node.props?.accessibilityLabel === 'Copy'), 'no added OutputWell controls');
+    assert.equal(nodes(tree).filter(node => node.type === 'ScrollView').length, 2, 'output scrolls within a bounded well');
+    assert.ok(nodes(tree).some(node => node.type === 'ScrollView' && node.props.style.maxHeight === 320));
+    assert.ok(nodes(tree).some(node => node.props?.accessibilityLabel === 'Copy'), 'copy stays inside expanded output');
     await queries[2].queryFn();
     assert.equal(calls.at(-1).name, 'harness_jobs_output');
     assert.equal(calls.at(-1).input.expectedRuntimeEpoch, identity.runtimeEpoch);
@@ -111,7 +114,7 @@ test('compiled read-only panels render lists/details, bind generations and only 
     listResult.data.items = [{ ...job, name: null, status: 'completed', observationOnly: true }];
     tree = render('harness-jobs');
     assert.ok(nodes(tree).some(node => node.props?.style?.borderRadius === 10), 'legacy all-jobs panel retains its original card; compact styling is scoped to Completed view');
-    assert.match(text(tree), new RegExp(`${job.jobId} · .* · observation only`), 'original fallback name and observation label');
+    assert.match(text(tree), new RegExp(`${job.jobId}.*Completed · .* · Observation only`), 'real ID fallback and observation label remain visible');
     states.length = 0;
     const task = { taskId: `subagent-task-${'b'.repeat(24)}`, childId: `subagent-child-${'c'.repeat(24)}`, groupId: `subagent-job-${'d'.repeat(24)}`, runtimeId: 'runtime', title: 'Review', status: 'completed', attempt: 1,
       source: { agentId: 'nested-owner', workspaceId: 'nested-workspace', sessionId: 'nested-session', runtimeEpoch: identity.runtimeEpoch } };

@@ -31,7 +31,7 @@ test('compiled foreground section persists interaction answers/drafts and locks 
     { id: 'permission-1', workerEpoch: 'worker-1', createdAt: 'now', request: { kind: 'permission', title: 'Run command?', options: ['allow', 'deny'] } },
     { id: 'question-1', workerEpoch: 'worker-1', createdAt: 'now', request: { kind: 'questionnaire', questions: [{ id: 'choice', prompt: 'Which route?', options: [{ value: 'a', label: 'Route A' }, { value: 'b', label: 'Route B' }], allowOther: false }] } },
   ], nextCursor: 'history-cursor', truncated: true };
-  const jsx = (type, props) => typeof type === 'function' ? type(props) : { type, props };
+  const jsx = (type, props) => typeof type === 'function' && type.name !== 'WorkStatusRing' ? type(props) : { type: typeof type === 'function' ? type.name : type, props };
   const load = name => {
     if (name === '@getpaseo/plugin') return { defineRpc: contract => contract };
     if (name === '@getpaseo/plugin/client/ui') return {};
@@ -47,9 +47,10 @@ test('compiled foreground section persists interaction answers/drafts and locks 
       throw new Error(`unexpected RPC ${contract.name}`);
     } };
     if (name === '@getpaseo/plugin/client/react-native') return { TextInput: 'TextInput', ScrollView:'ScrollView', Icon:'Icon', copyText:async()=>{} };
-    if (name === 'react-native') return { Text: 'Text', View: 'View', Pressable: 'Pressable' };
+    if (name === 'react-native') return { Text: 'Text', View: 'View', Pressable: 'Pressable', Animated: { Value: class { interpolate() { return 0; } } }, AccessibilityInfo: { isReduceMotionEnabled: async () => true, addEventListener: () => ({ remove() {} }) } };
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'Fragment' };
     if (name === 'react') return {
+      useLayoutEffect() {},
       useEffect(effect, deps = []) {
         const slot = effectIndex++;
         const prior = effects[slot];
@@ -92,7 +93,7 @@ test('compiled foreground section persists interaction answers/drafts and locks 
   const node = (tree, type, label) => walk(tree).find(item => item.type === type && item.props.accessibilityLabel === label);
   try {
     let tree = render();
-    assert.match(text(tree), /Helper\s+waiting-permission/);
+    assert.match(text(tree), /Helper\s+Waiting permission/);
     assert.equal(calls.length, 0, 'opening a pending permission never submits a decision');
     press(tree, 'Helper');
     tree = render(); assert.match(text(tree), /Working/);
@@ -176,11 +177,11 @@ test('compiled foreground section persists interaction answers/drafts and locks 
     tree = render();
     const staleApproval = node(tree, 'Pressable', 'allow');
     assert.ok(staleApproval); assert.equal(staleApproval.props.disabled, true, 'expired worker approval must be disabled');
-    press(tree, 'Back');
+    press(tree, 'Hide Helper');
     status.tasks = [{ ...task, workerEpoch: '', status: 'lost' }];
     tree = render();
     assert.match(text(tree), /worker no longer available/);
-    assert.equal(walk(tree).some(item => item.type === 'Pressable' && item.props.accessibilityLabel.startsWith('Helper')), false);
+    assert.equal(node(tree, 'Pressable', 'Helper').props.disabled, true, 'unavailable workers retain a disabled compact header');
     assert.equal(calls.filter(call => call.name === 'foreground_tasks_control').length, 6, 'no background auto-approval or duplicate mutation occurred');
   } finally { cleanup(); resetMount(); }
 });

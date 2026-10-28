@@ -835,12 +835,7 @@ function HarnessPanel({
 		brief = false,
 		status?: string,
 		presentation?: { title: string; detail: string; expanded?: boolean; opensChat: boolean },
-	) => kind === "jobs" ? (
-		<Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled} onPress={onPress}
-			style={{ padding: 10, opacity: disabled ? 0.5 : 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
-			<Text numberOfLines={brief ? 1 : undefined} style={{ color: fg, flexShrink: 1 }}>{label}</Text>
-		</Pressable>
-	) : (
+	) => (
 		<NativeRow
 			colors={theme.colors}
 			title={presentation?.title ?? label}
@@ -850,7 +845,7 @@ function HarnessPanel({
 			expanded={presentation?.expanded}
 			leading={status ? (['starting', 'launching', 'pending', 'running'].includes(status)
 				? <View accessibilityLabel="Running"><WorkStatusRing attention={false} foreground={fg} platform={layout.platform} /></View>
-				: <View accessibilityLabel={status === "lost" ? "Lost" : status === "failed" ? "Failed" : "Idle"} style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: status === "lost" || status === "failed" ? danger : theme.colors.statusSuccess }} />) : undefined}
+				: <View accessibilityLabel={kind === "jobs" ? status : status === "lost" ? "Lost" : status === "failed" ? "Failed" : "Idle"} style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: status === "lost" || status === "failed" ? danger : kind === "jobs" && status !== "completed" ? muted : theme.colors.statusSuccess }} />) : undefined}
 			trailing={<Icon name={presentation?.opensChat ? "ArrowUpRight" : presentation?.expanded ? "ChevronUp" : "ChevronDown"} size={14} color={muted} />}
 			disabled={disabled}
 			onPress={onPress}
@@ -924,18 +919,13 @@ function HarnessPanel({
 						{item.truncated ? (
 							<Text style={{ color: muted }}>Output truncated</Text>
 						) : null}
-						{kind === "jobs" ? (
-							<View style={{ borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, backgroundColor: theme.colors.surface0, padding: 12 }}>
-								<Text selectable style={{ color: fg, fontFamily: layout.platform === "ios" ? "Menlo" : "monospace", fontSize: 12, lineHeight: 18 }}>
-									{item.text || "No output or answer recorded yet."}
-								</Text>
-							</View>
-						) : <OutputWell
+						<OutputWell
 							colors={theme.colors}
 							text={item.text || "No output or answer recorded yet."}
 							platform={layout.platform}
 							maxHeight={320}
-						/>}
+							monospace={kind === "jobs"}
+						/>
 					</>
 				) : null}
 				</>}
@@ -951,13 +941,13 @@ function HarnessPanel({
 		<View
 			style={{
 				paddingHorizontal:
-					embedded && (kind === "subagents" || viewMode === "completed")
+					embedded
 						? 4
 						: kind === "jobs" ? 16 : 12,
 				paddingVertical:
 					embedded && viewMode === "completed"
 						? 0
-						: embedded && kind === "subagents"
+						: embedded
 							? 4
 							: kind === "jobs" ? 16 : 12,
 				gap: viewMode === "completed" ? 8 : 6,
@@ -1001,7 +991,7 @@ function HarnessPanel({
 			) : null}
 			{[...rows].sort((a, b) => Number("fromSubagent" in a && a.fromSubagent === true) - Number("fromSubagent" in b && b.fromSubagent === true)).map((row, index, ordered) => {
 				const id = "jobId" in row ? row.jobId : taskGroupKey(row);
-				const title = "jobId" in row ? row.name || "Background job" : workerTitle(row);
+				const title = "jobId" in row ? row.name || row.jobId : workerTitle(row);
 				const state = row.status === "completed" && viewMode === "completed"
 					? "jobId" in row ? "Succeeded" : "Completed"
 					: kind === "subagents" && viewMode === "active" && row.status === "completed"
@@ -1052,7 +1042,7 @@ function HarnessPanel({
 							},
 							!!openingId,
 							viewMode !== "completed",
-							kind === "subagents" && (isActiveRow(row) || viewMode === "active") ? row.status : undefined,
+							kind === "jobs" || isActiveRow(row) || viewMode === "active" ? row.status : undefined,
 							{ title, detail: metadata, opensChat, expanded: opensChat ? undefined : selectedId === id },
 						)}
 						{selectedId === id ? selectedDetail : null}

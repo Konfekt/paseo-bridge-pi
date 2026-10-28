@@ -5,7 +5,7 @@ import {
 	type PluginButtonRegistration,
 	useRpc,
 } from "@getpaseo/plugin/client";
-import { TextInput } from "@getpaseo/plugin/client/react-native";
+import { Icon, TextInput } from "@getpaseo/plugin/client/react-native";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import {
@@ -21,6 +21,7 @@ import { isActiveWorkStatus } from "../shared/work-display";
 import { foregroundTranscriptMessages } from "../shared/transcript-tools";
 import { ForegroundTranscriptEntry } from "./foreground-transcript";
 import { Metadata, NativeButton, NativeRow, OutputWell } from "./presentation";
+import { WorkStatusRing } from "./work-status-ring";
 
 type Agent = {
 	id: string;
@@ -553,80 +554,8 @@ export function ForegroundTasksSection({
 				viewMode === "all" ||
 				isActiveWorkStatus(task.status) === (viewMode === "active"),
 		) ?? [];
-	return (
-		<View
-			style={{
-				width: "100%",
-				minWidth: 0,
-				maxWidth:
-					viewMode !== "completed" &&
-					(layout.compact || layout.platform !== "web")
-						? 420
-						: undefined,
-				gap: 8,
-				paddingHorizontal: 8,
-				paddingVertical: viewMode === "completed" ? 0 : 8,
-			}}
-		>
-			{viewMode !== "completed" ? (
-				<Text
-					accessibilityRole="header"
-					style={[style.foreground, { fontSize: 18, fontWeight: "600" }]}
-				>
-					Foreground
-				</Text>
-			) : null}
-			{status.isPending ? (
-				<Metadata colors={theme.colors}>Connecting to this Pi session…</Metadata>
-			) : null}
-			{status.isError ? (
-				<Text accessibilityRole="alert" style={style.danger}>
-					Job status unavailable. Retrying automatically.
-				</Text>
-			) : null}
-			{!status.isPending && !status.isError && !ready ? (
-				<Text style={style.muted}>
-					{status.data?.reason ?? "Job control unavailable."}
-				</Text>
-			) : null}
-			{ready && !selected ? (
-				<View style={{ gap: 8 }}>
-					{visibleTasks.length ? (
-						visibleTasks.map((task) => (
-							<View key={taskKey(task)}>
-								{task.workerEpoch ? (
-									<NativeRow colors={theme.colors} title={task.title} detail={[task.status, task.model, task.pendingInteractions ? `${task.pendingInteractions} awaiting you` : undefined].filter(Boolean).join(" · ")} trailing={<Text style={{ color: theme.colors.foregroundMuted, fontSize: 18 }}>›</Text>} onPress={() => selectTask(task)} style={{ borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8 }} />
-								) : (
-									<View
-										style={[
-											{
-												padding: 10,
-												borderWidth: 1,
-												borderRadius: 10,
-												backgroundColor: theme.colors.surface1,
-											},
-											style.border,
-										]}
-									>
-										<Text style={style.muted}>
-											{task.title} · {task.status} · worker no longer available
-										</Text>
-									</View>
-								)}
-							</View>
-						))
-					) : (
-						<Text style={style.muted}>No foreground jobs.</Text>
-					)}
-				</View>
-			) : null}
-			{selected ? (
-				<>
-					{button("Back", () => selectTask(undefined), busy)}
-					<Text style={style.muted}>
-						{selected.title} · {activeCurrentTask?.status ?? "checking"}
-						{activeCurrentTask?.model ? ` · ${activeCurrentTask.model}` : ""}
-					</Text>
+	const selectedDetails = selected ? (
+		<View style={{ gap: 8, padding: 10, paddingTop: 0 }}>
 					{view.isPending && !view.data ? (
 						<Text style={style.muted}>Loading conversation…</Text>
 					) : null}
@@ -805,8 +734,34 @@ export function ForegroundTasksSection({
 							) : null}
 						</View>
 					) : null}
-				</>
-			) : null}
+		</View>
+	) : null;
+	return (
+		<View style={{ width: "100%", minWidth: 0, gap: 8, paddingHorizontal: 4, paddingVertical: viewMode === "completed" ? 0 : 4 }}>
+			{viewMode !== "completed" ? <Text accessibilityRole="header" style={[style.foreground, { fontSize: 18 }]}>Foreground</Text> : null}
+			{status.isPending ? <Metadata colors={theme.colors}>Connecting to this Pi session…</Metadata> : null}
+			{status.isError ? <Text accessibilityRole="alert" style={style.danger}>Job status unavailable. Retrying automatically.</Text> : null}
+			{!status.isPending && !status.isError && !ready ? <Text style={style.muted}>{status.data?.reason ?? "Job control unavailable."}</Text> : null}
+			{ready ? visibleTasks.length ? visibleTasks.map(task => {
+				const expanded = !!selected && taskKey(selected) === taskKey(task);
+				return <View key={taskKey(task)}>
+					<NativeRow colors={theme.colors} title={task.title}
+						detail={[task.status.replace(/[_-]/g, " ").replace(/^./, value => value.toUpperCase()), task.model, task.pendingInteractions ? `${task.pendingInteractions} awaiting you` : undefined, !task.workerEpoch ? "worker no longer available" : undefined].filter(Boolean).join(" · ")}
+						detailTone={task.status === "failed" ? "danger" : undefined}
+						expanded={expanded} disabled={!task.workerEpoch || busy}
+						leading={isActiveWorkStatus(task.status)
+							? <WorkStatusRing attention={task.pendingInteractions > 0} foreground={theme.colors.foreground} platform={layout.platform} />
+							: <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: task.status === "failed" || task.status === "lost" ? theme.colors.statusDanger : task.status === "completed" ? theme.colors.statusSuccess : theme.colors.foregroundMuted }} />}
+						trailing={<Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={14} color={theme.colors.foregroundMuted} />}
+						style={{ paddingVertical: 8, minHeight: 44 }}
+						onPress={() => selectTask(expanded ? undefined : task)} />
+					{expanded ? selectedDetails : null}
+				</View>;
+			}) : <Text style={style.muted}>No foreground jobs.</Text> : null}
+			{selected && !visibleTasks.some(task => taskKey(task) === taskKey(selected)) ? <View>
+				<NativeRow colors={theme.colors} title={selected.title} accessibilityLabel={`Hide ${selected.title}`} detail="Worker no longer available" expanded onPress={() => selectTask(undefined)} />
+				{selectedDetails}
+			</View> : null}
 		</View>
 	);
 }

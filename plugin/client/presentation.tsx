@@ -44,6 +44,7 @@ export function NativeRow({ colors, title, detail, detailTone, leading, trailing
 }) {
   const [hovered, setHovered] = useState(false);
   return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? title}
+    aria-expanded={expanded}
     accessibilityState={{ disabled, selected, ...(expanded === undefined ? {} : { expanded }) }} disabled={disabled} onPress={onPress}
     onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
     style={({ pressed }) => [{ paddingHorizontal: 12, paddingVertical: 10, gap: 6, opacity: disabled && !selected ? 0.5 : 1,
