@@ -17,7 +17,13 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const fixtureProvider = `import { appendFileSync, writeFileSync, existsSync } from "node:fs";
 export default function(pi) {
   let syntheticCompactionAttempt = 0;
-  pi.on("session_start", event => appendFileSync(process.env.OFFLINE_LIFECYCLE_FILE, event.reason + "\\n"));
+  pi.on("session_start", event => {
+    appendFileSync(process.env.OFFLINE_LIFECYCLE_FILE, event.reason + "\\n");
+    writeFileSync(process.env.OFFLINE_LIFECYCLE_FILE + ".capabilities", JSON.stringify({
+      commandOutcomes: typeof pi.dispatchExtensionCommand === "function",
+      promptAdmission: typeof pi.submitUserMessage === "function",
+    }));
+  });
   pi.on("agent_start", () => appendFileSync(process.env.OFFLINE_LIFECYCLE_FILE, "AGENT_STARTED\\n"));
   pi.on("session_before_compact", event => {
     appendFileSync(process.env.OFFLINE_LIFECYCLE_FILE, "SYNTHETIC_COMPACTION:" + event.reason + "\\n");
@@ -54,6 +60,7 @@ export default function(pi) {
     ctx.sessionManager.appendMessage({ role: "user", content: huge, timestamp: Date.now() });
   }});
   pi.registerCommand("offline-fixture-command", { description: "offline command outcome", handler: async (args, ctx) => {
+    appendFileSync(process.env.OFFLINE_LIFECYCLE_FILE, "COMMAND_STARTED\\n");
     ctx.ui.notify("literal command notice: " + args, "warning");
     if (args === "fail") throw new Error("literal command failure\\n  detail");
     if (args === "reload" || args === "reload-dialog") {
@@ -200,15 +207,81 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       assert.equal(result.success, true, JSON.stringify(result));
       return result.data;
     };
+    const capabilities = JSON.parse(await readFile(path.join(temporary, "lifecycle.capabilities"), "utf8"));
+    t.diagnostic(`Runtime capabilities: ${JSON.stringify(capabilities)}; stock third-party command rejection is NOT functional command parity`);
+    const seedHistory = async (message: string) => {
+      // Fixture setup is terminal/native-owned on stock, not a claim that the
+      // bridge can execute an uncooperative third-party extension command.
+      const response = capabilities.commandOutcomes ? await bridge("prompt", { message }) : await native("prompt", { message });
+      assert.equal(response.success, true, JSON.stringify(response));
+    };
+    const assertUnsupportedCommand = async (type: string, message: string) => {
+      const noticesBefore = extensionNotices.length;
+      const response = await bridge(type, { message });
+      assert.equal(response.success, false, JSON.stringify(response));
+      assert.match(response.error, /cannot report extension command outcomes/);
+      assert.equal((await native("abort")).success, true, "barrier behind any accidental asynchronous delivery");
+      assert.ok(!(await readFile(path.join(temporary, "lifecycle"), "utf8")).includes("COMMAND_STARTED"), "rejected third-party handler must never execute");
+      assert.equal(extensionNotices.length, noticesBefore, "rejected third-party command must not emit notices");
+      await assert.rejects(readFile(path.join(temporary, "input-receipt.json.command")), { code: "ENOENT" });
+    };
     await t.test("native bridge routes state and commands", async () => {
       const state = await ok("get_state");
       assert.equal(state.model.provider, "bridge-offline");
       assert.equal(state.model.id, "first");
       assert.equal(state.sessionFile, session);
       assert.equal(state.isStreaming, false);
-      const { commands } = await ok("get_commands");
+      const { commands, bridgeCommandSupport } = await ok("get_commands");
+      assert.deepEqual(bridgeCommandSupport, {
+        owned: ["paseo-bridge", "remote-reload", "paseo_capture_entries"],
+        unsupported: ["paseo_tree", "reload"],
+        arbitraryExtensionCommands: capabilities.commandOutcomes,
+        disconnectReceipt: "accepted", reloadReceipt: "accepted",
+      });
       assert.ok(commands.some((c: any) => c.name === "offline-fixture-command"));
       assert.ok(commands.some((c: any) => c.name === "remote-reload"));
+    });
+    await t.test("bridge-owned management executes on stock and reports real failures", async () => {
+      const before = extensionNotices.length;
+      for (const type of ["prompt", "steer", "follow_up"]) {
+        const result = await ok(type, { message: "/paseo-bridge status" });
+        assert.equal(result.agentInvoked, false);
+      }
+      assert.ok(extensionNotices.slice(before).some(message => message.startsWith("Paseo bridge status\n")));
+      const unknown = await bridge("prompt", { message: "/paseo-bridge not-a-command" });
+      assert.equal(unknown.success, false);
+      assert.match(unknown.error, /Usage: \/paseo-bridge/);
+      const image = await bridge("prompt", { message: "/paseo-bridge status", images: [{ type: "image", data: "a", mimeType: "image/png" }] });
+      assert.equal(image.success, false);
+      assert.match(image.error, /do not accept image attachments/);
+      const connecting = extensionNotices.length;
+      await ok("prompt", { message: "/paseo-bridge connect" });
+      assert.ok(extensionNotices.slice(connecting).includes("Connecting session to Paseo..."));
+      await ok("prompt", { message: "/paseo-bridge auto off" });
+      const autoOff = extensionNotices.length;
+      await ok("prompt", { message: "/paseo-bridge status" });
+      assert.ok(extensionNotices.slice(autoOff).some(message => message.includes("auto-connect: off")));
+      await ok("prompt", { message: "/paseo-bridge auto on" });
+      const config = path.join(home, ".paseo", "config.json");
+      await mkdir(path.dirname(config), { recursive: true });
+      await writeFile(config, "invalid json");
+      const failure = await bridge("prompt", { message: "/paseo-bridge install" });
+      assert.equal(failure.success, false, "real config failures must not become successful error notifications");
+      assert.equal(await readFile(config, "utf8"), "invalid json");
+      const foreignConfig = JSON.stringify({ agents: { providers: { pi: { command: ["foreign-pi"] } } } });
+      await writeFile(config, foreignConfig);
+      for (const operation of ["install", "uninstall"]) {
+        const rejected = await bridge("prompt", { message: `/paseo-bridge ${operation}` });
+        assert.equal(rejected.success, false, `${operation} must report refusal, not completed success`);
+        assert.match(rejected.error, /already overrides|Leaving Paseo config untouched/);
+        assert.equal(await readFile(config, "utf8"), foreignConfig);
+      }
+      await writeFile(config, "{}");
+      await ok("prompt", { message: "/paseo-bridge install" });
+      assert.ok(JSON.parse(await readFile(config, "utf8")).agents.providers.pi.command);
+      await ok("prompt", { message: "/paseo-bridge uninstall" });
+      assert.equal(JSON.parse(await readFile(config, "utf8")).agents?.providers?.pi, undefined);
+      assert.equal((await ok("get_session_stats")).totalMessages, 0);
     });
     await t.test("native and bridge compaction semantics and explicit capabilities", async () => {
       const state = await ok("get_state");
@@ -263,7 +336,8 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
     await t.test("idle bridge prompt reaches actual Pi input as extension provenance without streaming behavior", async () => {
       assert.equal((await ok("get_state")).isStreaming, false);
       const accepted = await ok("prompt", { message: "ordinary offline bridge provenance fixture" });
-      assert.equal(accepted.agentInvoked, false, "Pi's input hook consumed the prompt without starting a model turn");
+      if (capabilities.promptAdmission) assert.equal(accepted.agentInvoked, false, "Pi's input hook consumed the prompt without starting a model turn");
+      else assert.equal(Object.hasOwn(accepted, "agentInvoked"), false, "stock delivery does not expose input-consumption disposition");
       const deadline = Date.now() + 4000;
       let receipt: any;
       for (;;) {
@@ -310,7 +384,11 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       assert.ok(!lifecycle.includes("PROVIDER_CALLED"));
       assert.ok(!lifecycle.includes("AGENT_STARTED"));
     });
-    await t.test("extension command outcomes and live notices work on every delivery channel", async () => {
+    await t.test("third-party commands: real outcomes where supported, explicit no-effects rejection on stock", async () => {
+      if (!capabilities.commandOutcomes) {
+        for (const type of ["prompt", "steer", "follow_up"]) await assertUnsupportedCommand(type, `/offline-fixture-command ${type}`);
+        return;
+      }
       const release = path.join(temporary, "input-receipt.json.command-release");
       const receipt = path.join(temporary, "input-receipt.json.command");
       for (const type of ["prompt", "steer", "follow_up"]) {
@@ -342,7 +420,13 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       assert.ok(!lifecycle.includes("PROVIDER_CALLED"));
       assert.ok(!lifecycle.includes("AGENT_STARTED"));
     });
-    await t.test("Stop cancels an awaited command RPC without claiming its underlying work stopped", async () => {
+    await t.test("Stop cancels observation where supported; stock rejected work never starts", async () => {
+      if (!capabilities.commandOutcomes) {
+        await assertUnsupportedCommand("prompt", "/offline-fixture-command cancel");
+        await ok("abort");
+        await assert.rejects(readFile(path.join(temporary, "input-receipt.json.command")), { code: "ENOENT" });
+        return;
+      }
       const release = path.join(temporary, "input-receipt.json.command-release");
       const receipt = path.join(temporary, "input-receipt.json.command");
       await rm(release, { force: true }); await rm(receipt, { force: true });
@@ -381,7 +465,11 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       for (const probe of cases) {
         const receiptPath = path.join(temporary, "input-receipt.json.dialog");
         await rm(receiptPath, { force: true });
-        const dispatched = ok("prompt", { message: `/offline-fixture-dialog ${probe.method}` });
+        // Test the explicit remote UI adapter independently of unsupported
+        // third-party slash dispatch. Native RPC invokes the fixture on stock.
+        const dispatched = capabilities.commandOutcomes
+          ? ok("prompt", { message: `/offline-fixture-dialog ${probe.method}` })
+          : native("prompt", { message: `/offline-fixture-dialog ${probe.method}` }).then(result => assert.equal(result.success, true, JSON.stringify(result)));
         const deadline = Date.now() + 4000;
         while (!dialogs.length) {
           if (Date.now() >= deadline) {
@@ -450,7 +538,15 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       assert.equal((await ok("get_session_stats")).totalMessages, 0);
       assert.ok(!(await readFile(path.join(temporary, "lifecycle"), "utf8")).includes("PROVIDER_CALLED"));
     });
-    await t.test("a command-triggered reload settles its old RPC without sending a stale success", async () => {
+    await t.test("third-party reload: old RPC settles where supported; stock rejects without reloading", async () => {
+      if (!capabilities.commandOutcomes) {
+        const lifecycle = await readFile(path.join(temporary, "lifecycle"), "utf8");
+        await assertUnsupportedCommand("prompt", "/offline-fixture-command reload-dialog");
+        assert.equal(await readFile(path.join(temporary, "lifecycle"), "utf8"), lifecycle);
+        assert.equal(dialogs.length, 0);
+        assert.ok((await ok("get_state")).sessionId);
+        return;
+      }
       const before = extensionNotices.filter(message => message.startsWith("Pi runtime reloaded.")).length;
       const response = await bridge("prompt", { message: "/offline-fixture-command reload-dialog" });
       assert.equal(response.success, false);
@@ -468,7 +564,7 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       assert.ok((await ok("get_state")).sessionId);
     });
     await t.test("history replay and capture follow Pi's canonical projection", async () => {
-      await ok("prompt", { message: "/offline-fixture-seed-history" });
+      await seedHistory("/offline-fixture-seed-history");
       const seededAt = Date.now() + 4000;
       while (Date.now() < seededAt) {
         try { await readFile(path.join(temporary, "lifecycle.history"), "utf8"); break; }
@@ -498,7 +594,7 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       assert.ok(!(await readFile(path.join(temporary, "lifecycle"), "utf8")).includes("PROVIDER_CALLED"));
     });
     await t.test("manual synthetic compaction reports its true result without a provider call", async () => {
-      await ok("prompt", { message: "/offline-fixture-seed-compaction" });
+      await seedHistory("/offline-fixture-seed-compaction");
       const compact = await ok("compact");
       assert.equal(compact.summary, "offline synthetic summary");
       assert.equal(compact.details.offline, true);
@@ -508,13 +604,21 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       assert.ok(compactionEvents.some(event => event.type === "compaction_start" && event.reason === "manual"));
       assert.ok(compactionEvents.some(event => event.type === "compaction_end" && event.reason === "manual" && event.result?.summary === "offline synthetic summary"));
 
-      await ok("prompt", { message: "/offline-fixture-seed-compaction" });
+      await seedHistory("/offline-fixture-seed-compaction");
       const cancelled = await bridge("compact", { customInstructions: "offline-cancel" });
       assert.equal(cancelled.success, false, JSON.stringify(cancelled));
       assert.ok(compactionEvents.some(event => event.type === "compaction_end" && event.reason === "manual" && event.aborted === true));
 
       assert.ok(compactionEvents.some(event => event.type === "compaction_end" && event.reason === "manual" && /Nothing to compact/i.test(event.errorMessage ?? "") && event.aborted === false));
       assert.ok(!(await readFile(path.join(temporary, "lifecycle"), "utf8")).includes("PROVIDER_CALLED"));
+    });
+    await t.test("bridge-owned disconnect acknowledges acceptance, then closes only bridge transport", async () => {
+      const closed = once(socket!, "close");
+      const result = await ok("prompt", { message: "/paseo-bridge disconnect" });
+      assert.deepEqual(result, { agentInvoked: false, disconnectAccepted: true });
+      await closed;
+      assert.equal(child.exitCode, null);
+      assert.equal((await native("get_state")).success, true);
     });
   } finally {
     socket?.destroy();

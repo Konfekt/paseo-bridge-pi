@@ -55,7 +55,7 @@ export async function dispatchPaseoPrompt(
       throw new Error("Extension commands do not accept image attachments. Send images as an ordinary prompt.");
     }
     if (typeof pi.dispatchExtensionCommand !== "function") {
-      throw new Error("This Pi runtime cannot report extension command outcomes. Use the terminal or restart into the matched Pi runtime.");
+      throw new Error("This Pi runtime cannot report extension command outcomes. This command has no explicit remote route; use the terminal.");
     }
     signal?.throwIfAborted();
     const parts = commandParts(message)!;

@@ -54,7 +54,50 @@ pkgs.runCommand "paseo-bridge-pi-native-rpc"
       exit 1
     fi
     # Do not count arbitrary startup/fixture failures as mutation evidence.
-    grep -E 'not ok [0-9]+ - native bridge routes session stats' "$out/mutant.tap"
-    grep -F 'Unknown command: get_session_stats' "$out/mutant.tap"
-    echo 'Production integration passed; dropped-dispatch mutant failed its named case.'
+    grep -E 'not ok [0-9]+ - native bridge routes session stats' "$out/mutant.tap" || { cat "$out/mutant.tap"; exit 1; }
+    grep -F 'Unknown command: get_session_stats' "$out/mutant.tap" || { cat "$out/mutant.tap"; exit 1; }
+    # Owned command support must be actual functionality, not merely a test
+    # accepting stock rejection. Remove both direct management entry points.
+    cp -r ${bridgePackage} owned-mutant-package
+    chmod -R u+w owned-mutant-package
+    node --input-type=module <<'JS'
+    import { readFileSync, writeFileSync } from 'node:fs';
+    const file = 'owned-mutant-package/extension/index.ts';
+    const source = readFileSync(file, 'utf8');
+    const original = 'if (await handleBridgeManagement(cmd, send)) return;';
+    if (source.split(original).length !== 3) throw new Error('Owned mutation targets changed');
+    writeFileSync(file, source.replaceAll(original, '/* mutant: owned management route dropped */'));
+    JS
+    export BRIDGE_NATIVE_EXTENSION="$PWD/owned-mutant-package/extension/index.ts"
+    if node --experimental-strip-types --test --test-reporter=tap \
+      --test-timeout=45000 test/*.integration.ts > "$out/owned-mutant.tap" 2>&1; then
+      cat "$out/owned-mutant.tap"
+      echo 'ERROR: dropped owned management routes survived behavioral tests' >&2
+      exit 1
+    fi
+    grep -E 'not ok [0-9]+ - bridge-owned management executes on stock and reports real failures' "$out/owned-mutant.tap" || { cat "$out/owned-mutant.tap"; exit 1; }
+    # Stock delivery must never masquerade as a completed third-party command.
+    cp -r ${bridgePackage} acceptance-mutant-package
+    chmod -R u+w acceptance-mutant-package
+    node --input-type=module <<'JS'
+    import { readFileSync, writeFileSync } from 'node:fs';
+    const file = 'acceptance-mutant-package/extension/prompt-dispatch.ts';
+    const source = readFileSync(file, 'utf8');
+    const original = 'throw new Error("This Pi runtime cannot report extension command outcomes. This command has no explicit remote route; use the terminal.");';
+    if (source.split(original).length !== 2) throw new Error('Acceptance mutation target changed');
+    writeFileSync(file, source.replace(original, 'pi.sendUserMessage(content); return { agentInvoked: false };'));
+    JS
+    export BRIDGE_NATIVE_EXTENSION="$PWD/acceptance-mutant-package/extension/index.ts"
+    if node --experimental-strip-types --test --test-reporter=tap \
+      --test-timeout=45000 test/*.integration.ts > "$out/acceptance-mutant.tap" 2>&1; then
+      # An outcome-capable peer does not enter the mutated stock-only branch.
+      if ! grep -F '"commandOutcomes":true' "$out/acceptance-mutant.tap" >/dev/null; then
+        cat "$out/acceptance-mutant.tap"
+        echo 'ERROR: false third-party completion survived stock behavioral tests' >&2
+        exit 1
+      fi
+    else
+      grep -E 'not ok [0-9]+ - third-party commands: real outcomes where supported, explicit no-effects rejection on stock' "$out/acceptance-mutant.tap" || { cat "$out/acceptance-mutant.tap"; exit 1; }
+    fi
+    echo 'Production integration passed; applicable dispatch, owned-route and false-completion mutants failed their named cases.'
   ''

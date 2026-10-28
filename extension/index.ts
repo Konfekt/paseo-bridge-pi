@@ -748,6 +748,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       send(success(cmd.id, "prompt"));
       return;
     }
+    if (await handleBridgeManagement(cmd, send)) return;
     const content = remoteUserContent(message, cmd.images);
     const streaming = latestCtx ? !latestCtx.isIdle() : false;
     if (!isExtensionCommand(pi, message)) {
@@ -759,6 +760,24 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     );
     const result = await dispatch();
     send(success(cmd.id, "prompt", result));
+  }
+
+  async function handleBridgeManagement(cmd: any, send: (frame: unknown) => void): Promise<boolean> {
+    const message = typeof cmd.message === "string" ? cmd.message : "";
+    if (message !== "/paseo-bridge" && !message.startsWith("/paseo-bridge ")) return false;
+    if (Array.isArray(cmd.images) && cmd.images.length) throw new Error("Extension commands do not accept image attachments. Send images as an ordinary prompt.");
+    if (!latestCtx) throw new Error("Pi session is not ready.");
+    const args = message.slice("/paseo-bridge".length).trimStart();
+    // Disconnect is acceptance-only: the transport cannot report its own
+    // completed teardown. Never present this receipt as command completion.
+    if (args.trim().split(/\s+/)[0] === "disconnect") {
+      send(success(cmd.id, cmd.type, { agentInvoked: false, disconnectAccepted: true }));
+      stopServer();
+      return true;
+    }
+    await runBridgeManagement(args, latestCtx, true, commandNotices(send));
+    send(success(cmd.id, cmd.type, { agentInvoked: false }));
+    return true;
   }
 
   async function handleCommand(cmd: any): Promise<void> {
@@ -799,6 +818,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
           if (/^\/(?:remote-reload|reload)(?:\s|$)/.test(cmd.message.trim())) {
             throw new Error("Reload must be sent as an ordinary prompt while Pi is idle.");
           }
+          if (await handleBridgeManagement(cmd, send)) return;
           if (!isExtensionCommand(pi, cmd.message)) {
             const canDispatch = await preflightUserPrompt(id, type, send);
             if (!canDispatch()) return;
@@ -875,7 +895,18 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
           send(success(id, type, buildSessionStats(latestCtx)));
           return;
         case "get_commands":
-          send(success(id, type, { commands: pi.getCommands() }));
+          send(success(id, type, {
+            commands: pi.getCommands(),
+            // Enumeration is not an execution guarantee. Stock Pi exposes
+            // third-party metadata without an observable command outcome API.
+            bridgeCommandSupport: {
+              owned: ["paseo-bridge", "remote-reload", CAPTURE_COMMAND],
+              unsupported: [TREE_COMMAND, "reload"],
+              arbitraryExtensionCommands: typeof (pi as any).dispatchExtensionCommand === "function",
+              disconnectReceipt: "accepted",
+              reloadReceipt: "accepted",
+            },
+          }));
           return;
         case "compact": {
           if (!latestCtx) throw new Error("No active session context");
@@ -1947,43 +1978,45 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     handler: reloadRuntime,
   });
 
-  pi.registerCommand("paseo-bridge", {
-    description: "Manage the Paseo bridge: install | uninstall | auto [on|off] | connect | disconnect | status",
-    handler: async (args, ctx) => {
+  async function runBridgeManagement(args: string, ctx: ExtensionContext, reportFailure = false,
+    notify: (message: string, type: "info" | "warning" | "error") => void = (message, type) => ctx.ui.notify(message, type),
+  ): Promise<void> {
       const parts = args.trim().split(/\s+/).filter(Boolean);
       const sub = parts[0] ?? "status";
       try {
         switch (sub) {
           case "install": {
             const result = installShimIntoPaseoConfig();
-            ctx.ui.notify(result.message, result.ok ? "info" : "error");
+            if (reportFailure && !result.ok) throw new Error(result.message);
+            notify(result.message, result.ok ? "info" : "error");
             return;
           }
           case "uninstall": {
             const result = uninstallShimFromPaseoConfig();
-            ctx.ui.notify(result.message, result.ok ? "info" : "error");
+            if (reportFailure && !result.ok) throw new Error(result.message);
+            notify(result.message, result.ok ? "info" : "error");
             return;
           }
           case "auto": {
             const value = parts[1]?.toLowerCase();
             if (value !== "on" && value !== "off") {
-              ctx.ui.notify(`Auto-connect is ${isAutoEnabled() ? "on" : "off"}. Use /paseo-bridge auto on|off to change.`, "info");
+              notify(`Auto-connect is ${isAutoEnabled() ? "on" : "off"}. Use /paseo-bridge auto on|off to change.`, "info");
               return;
             }
             writeBridgeSettings({ auto: value === "on" });
-            ctx.ui.notify(`Auto-connect ${value}: new TUI sessions will ${value === "on" ? "" : "not "}appear in Paseo automatically.`, "info");
+            notify(`Auto-connect ${value}: new TUI sessions will ${value === "on" ? "" : "not "}appear in Paseo automatically.`, "info");
             return;
           }
           case "connect":
-            ctx.ui.notify(connectSession(ctx), "info");
+            notify(connectSession(ctx), "info");
             return;
           case "disconnect":
             if (!transport) {
-              ctx.ui.notify("Bridge is not connected.", "info");
+              notify("Bridge is not connected.", "info");
               return;
             }
             stopServer();
-            ctx.ui.notify("Bridge disconnected. Use /paseo-bridge connect to reattach.", "info");
+            notify("Bridge disconnected. Use /paseo-bridge connect to reattach.", "info");
             return;
           case "status": {
             let shimInstalled = false;
@@ -2002,15 +2035,20 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
               `title generation: ${isTitleGenerationEnabled() ? "on" : "off"}`,
               `session: ${transport ? (currentAgentId ? `bridged as Paseo agent ${currentAgentId}` : "bridged (not yet imported)") : "not bridged"}`,
             ];
-            ctx.ui.notify(`Paseo bridge status\n${lines.join("\n")}`, "info");
+            notify(`Paseo bridge status\n${lines.join("\n")}`, "info");
             return;
           }
           default:
-            ctx.ui.notify("Usage: /paseo-bridge install | uninstall | auto [on|off] | connect | disconnect | status", "warning");
+            if (reportFailure) throw new Error("Usage: /paseo-bridge install | uninstall | auto [on|off] | connect | disconnect | status");
+            notify("Usage: /paseo-bridge install | uninstall | auto [on|off] | connect | disconnect | status", "warning");
         }
       } catch (err) {
-        ctx.ui.notify(`paseo-bridge: ${err instanceof Error ? err.message : String(err)}`, "error");
+        if (reportFailure) throw err;
+        notify(`paseo-bridge: ${err instanceof Error ? err.message : String(err)}`, "error");
       }
-    },
+  }
+  pi.registerCommand("paseo-bridge", {
+    description: "Manage the Paseo bridge: install | uninstall | auto [on|off] | connect | disconnect | status",
+    handler: (args, ctx) => runBridgeManagement(args, ctx),
   });
 }
