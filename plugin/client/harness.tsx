@@ -488,12 +488,6 @@ function WorkOverview(
 	};
 	return (
 		<View style={{ flex: 1, width: "100%", minWidth: 0, gap: 8 }}>
-			<Text
-				numberOfLines={1}
-				style={{ color: colors.foregroundMuted, fontSize: 12, lineHeight: 18, paddingHorizontal: 12, paddingTop: 12 }}
-			>
-				{props.sourceTitle}
-			</Text>
 			<View
 				accessibilityRole="tablist"
 				style={{ flexDirection: "row", gap: 4, paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: colors.border }}
@@ -698,7 +692,6 @@ function AgentsOverview(
 				openConversation={props.openConversation}
 				embedded
 			/> : null}
-			{!count && summary.hierarchyMessage ? <Metadata colors={props.theme.colors}>{summary.hierarchyMessage}</Metadata> : null}
 			{completed ? (!count ? <Text style={{ color: props.theme.colors.foregroundMuted, padding: 12 }}>{emptyLabel}</Text> : null) : (
 				<WorkAction label={count ? "" : emptyLabel} actionLabel="Completed" onPress={props.toggleCompleted} />
 			)}
@@ -954,7 +947,6 @@ function HarnessPanel({
 				{selectedWorker && (attemptGroups.get(taskGroupKey(selectedWorker))?.length ?? 0) > 1 ? <AttemptHistory key={JSON.stringify([session, epoch, attemptIdentity(selectedWorker)])} rows={attemptGroups.get(taskGroupKey(selectedWorker))!.slice(1)} target={conversationTarget} colors={theme.colors} platform={layout.platform} /> : null}
 			</View>
 		) : null;
-	const hierarchyMessage = list.data && "hierarchyMessage" in list.data ? list.data.hierarchyMessage : undefined;
 	const content = (
 		<View
 			style={{
@@ -998,7 +990,6 @@ function HarnessPanel({
 					This view is unavailable. Retrying automatically.
 				</Text>
 			) : null}
-			{ready && kind === "subagents" && !list.isError && hierarchyMessage ? <Metadata colors={theme.colors}>{hierarchyMessage}</Metadata> : null}
 			{ready && (list.data?.state !== "available" || (kind === "jobs" && list.data?.message)) ? (
 				<Text style={{ color: muted }}>{list.data?.message}</Text>
 			) : null}

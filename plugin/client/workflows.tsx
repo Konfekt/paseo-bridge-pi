@@ -418,7 +418,7 @@ function WorkflowsView({
 									Loading worktrees…
 								</Text>
 							) : null}
-							{snapshot.worktreeError ? (
+							{snapshot.worktreeError && snapshot.worktreeError !== "Worktree inventory timed out; open a repository directly for a narrower view." ? (
 								<Text selectable style={{ color: colors.statusWarning }}>
 									{snapshot.worktreeError}
 								</Text>

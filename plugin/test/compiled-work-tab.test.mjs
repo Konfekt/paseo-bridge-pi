@@ -192,7 +192,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     click(first, 'a'); click(first, 'a'); click(first, 'b');
     assert.deepEqual(first.opened, Array(3).fill({ id: 'work', options: { workspaceId: 'w', location: 'workspace' } }), 'native workspace identity never contains an agent id');
     let tree = render();
-    assert.match(text(tree), /Conversation B/);
+    assert.equal(queries.filter(query => query.queryKey[0] === 'harness-status').at(-1).queryKey[1], 'b');
     const tabNodes = nodes(tree).filter(node => node.props?.accessibilityRole === 'tab');
     assert.equal(tabNodes.length, 4, 'Work retains four native sections at narrow width');
     assert.ok(tabNodes.every(node => (typeof node.props.style === 'function' ? node.props.style({pressed:false}) : node.props.style)?.minHeight >= 44), 'tabs retain accessible touch targets at narrow widths');
@@ -223,7 +223,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.equal(scroll(tree).props.contentOffset.y, 321, 'status/query rerenders must not reset a mounted scroll position');
     click(first, 'a'); tree = render();
     assert.equal(selected(tree), 'Goals', 'new source does not inherit another source section');
-    assert.match(text(tree), /Conversation A/);
+    assert.equal(queries.filter(query => query.queryKey[0] === 'harness-status').at(-1).queryKey[1], 'a');
     select(tree, 'Agents'); tree = render();
     const agentsAction = nodes(tree).find(node => node.type === 'SettingsAction' && node.props.actionLabel === 'Completed');
     assert.ok(agentsAction, 'Agents uses the host SettingsAction via shared WorkAction');
@@ -245,8 +245,9 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
       const child = { ...originalRows[3], title: 'Worker 6', source, parentKey: treeAttemptKey(parent) };
       hierarchyMessage = 'Some descendant inventories are unavailable (stale evidence or read limits). Descendants of exited or unverifiable agents are unavailable; historical ancestry is not inferred.';
       workAgents = [child, parent]; tree = render();
-      assert.match(text(tree), /Some descendant inventories are unavailable/);
-      assert.match(text(tree), /historical ancestry is not inferred/);
+      assert.doesNotMatch(text(tree), /Some descendant inventories are unavailable/);
+      assert.doesNotMatch(text(tree), /historical ancestry is not inferred/);
+      assert.doesNotMatch(text(tree), /Conversation A/, 'Work does not repeat the conversation title above its tabs');
       const ancestor = nodes(tree).find(n => n.props?.accessibilityLabel === 'Agent hierarchy level 1');
       assert.equal(ancestor.props.style.borderWidth, undefined, 'idle ancestor in active tree uses existing active-row wrapper, not completed card');
       assert.ok(nodes(ancestor).some(n => n.props?.accessibilityLabel === 'Idle'), 'idle ancestor retains existing green idle indicator');
@@ -594,12 +595,12 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
         render(cold); await tick();
         const restoredTree = render(cold);
         if (scenario === 'valid') {
-          assert.match(text(restoredTree), /Conversation A/);
+          assert.equal(queries.filter(query => query.queryKey[0] === 'harness-status').at(-1).queryKey[1], 'a');
           settings.values = { sources: [{ ...persisted, agentId: 'b' }] };
           render(cold); await tick();
-          assert.match(text(render(cold)), /Conversation A/, 'another client cannot live-switch an active source');
+          render(cold); assert.equal(queries.filter(query => query.queryKey[0] === 'harness-status').at(-1).queryKey[1], 'a', 'another client cannot live-switch an active source');
           ui.unmount();
-          assert.match(text(render(cold)), /Conversation A/, 'UI-only close preserves local source');
+          render(cold); assert.equal(queries.filter(query => query.queryKey[0] === 'harness-status').at(-1).queryKey[1], 'a', 'UI-only close preserves local source');
           cold.observers.forEach(observer => observer.update({ type: 'agent_update', payload: { kind: 'remove', agentId: 'a' } }));
           assert.match(text(render(cold)), /Select Work/);
         } else {
@@ -620,7 +621,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     settings = readySettings; settings.values = { sources: [persisted] };
     rpcResponse = async () => ({ available: true, sessionId: 's', runtimeEpoch: 'e' });
     render(delayedSettings); await tick();
-    assert.match(text(render(delayedSettings)), /Conversation A/);
+    render(delayedSettings); assert.equal(queries.filter(query => query.queryKey[0] === 'harness-status').at(-1).queryKey[1], 'a');
     ui.unmount(); delayedSettings.cleanup();
 
     // Removal while validating identity must not restore a now-invalid source.
@@ -644,7 +645,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.match(text(render(reconnecting)), /Select Work/);
     rpcResponse = async () => ({ available: true, sessionId: 's', runtimeEpoch: 'new-epoch' });
     t.mock.timers.tick(5000); await tick();
-    assert.match(text(render(reconnecting)), /Conversation A/);
+    render(reconnecting); assert.equal(queries.filter(query => query.queryKey[0] === 'harness-status').at(-1).queryKey[1], 'a');
     ui.unmount(); reconnecting.cleanup();
     t.mock.timers.reset();
 
@@ -658,7 +659,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     releaseRestore({ available: true, sessionId: 's', runtimeEpoch: 'e' });
     await tick();
     rpcResponse = async () => ({ available: true, sessionId: 'b-session', runtimeEpoch: 'e' });
-    assert.match(text(render(racing)), /Conversation B/);
+    render(racing); assert.equal(queries.filter(query => query.queryKey[0] === 'harness-status').at(-1).queryKey[1], 'b');
     await tick();
     assert.equal(settings.values.sources[0].agentId, 'b');
     ui.unmount(); racing.cleanup();

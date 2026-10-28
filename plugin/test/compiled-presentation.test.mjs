@@ -31,7 +31,7 @@ test('compiled unsupported Goals shows read-only legacy state and history with r
   t.after(() => rm(fixture,{recursive:true,force:true}));
   const source = fileURLToPath(new URL('../',import.meta.url));
   for (const directory of ['client','shared']) await cp(resolve(source,directory),resolve(fixture,directory),{recursive:true});
-  await writeFile(resolve(fixture,'index.client.tsx'),'export { WorkflowsPanel } from "./client/workflows";');
+  await writeFile(resolve(fixture,'index.client.tsx'),'export { WorkflowsPanel, WorktreesPanel } from "./client/workflows";');
   const {clientBundle} = await compilePlugin({client:resolve(fixture,'index.client.tsx')});
   const reply = {available:true,sessionId:'fixture-session',runtimeEpoch:'fixture-epoch',snapshot:{serviceEpoch:'fixture-service',goal:null,idle:true,busy:false,capabilities:{createPausedGoal:true},completedGoals:[],limits:{},worktrees:[]}};
 
@@ -45,7 +45,7 @@ test('compiled unsupported Goals shows read-only legacy state and history with r
     if(name==='@tanstack/react-query') return {useQuery:options=>({data:reply,isPending:false,isError:false,isFetching:false,refetch:()=>options.queryFn()})};
     return load(name);
   };
-  const {WorkflowsPanel}=(0,eval)(clientBundle)(localLoad);
+  const {WorkflowsPanel,WorktreesPanel}=(0,eval)(clientBundle)(localLoad);
   const props={agentId:'agent',workspaceId:'workspace',host:{id:'host'},theme:{colors:palettes[0]}};
   slots=[];
   const draw=()=>{cursor=0;return nodes(WorkflowsPanel(props));};
@@ -76,6 +76,17 @@ test('compiled unsupported Goals shows read-only legacy state and history with r
   assert.ok(all.some(n=>n.type==='Text' && n.props.children==='Earlier goal'),'legacy history still expands');
   assert.ok(findButton(all,'Hide legacy history'));
   assert.equal(calls.some(c=>c.name==='workflows_control'),false,'read-only legacy display never sends mutations');
+  slots=[];
+  const drawTrees=()=>{cursor=0;return nodes(WorktreesPanel(props));};
+  let trees=drawTrees();
+  findButton(trees,'Connect current session')?.props.onPress();
+  reply.snapshot.worktreeError='Worktree inventory timed out; open a repository directly for a narrower view.';
+  trees=drawTrees();
+  assert.equal(trees.some(n=>n.type==='Text' && n.props.children===reply.snapshot.worktreeError),false,'requested timeout copy is hidden');
+  assert.equal(trees.some(n=>n.type==='Text' && /No .*worktrees|No Git repositories/.test(String(n.props.children))),false,'failed inventory is not rendered as complete empty inventory');
+  reply.snapshot.worktreeError='Permission denied reading repository';
+  trees=drawTrees();
+  assert.ok(trees.some(n=>n.type==='Text' && n.props.children===reply.snapshot.worktreeError),'other inventory errors remain visible');
 });
 
 const palettes = [
