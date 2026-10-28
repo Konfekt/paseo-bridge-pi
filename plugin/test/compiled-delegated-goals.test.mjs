@@ -13,7 +13,7 @@ const {compilePlugin}=await import(pathToFileURL(resolve(compilerPath)));
 const fixture=await mkdtemp(resolve(tmpdir(),'delegated-goals-ui-'));
 after(()=>rm(fixture,{recursive:true,force:true}));
 for(const directory of ['client','shared']) await cp(fileURLToPath(new URL(`../${directory}`,import.meta.url)),resolve(fixture,directory),{recursive:true});
-await writeFile(resolve(fixture,'index.client.tsx'),'export { DelegatedGoals } from "./client/delegated-goals";');
+await writeFile(resolve(fixture,'index.client.tsx'),'export { DelegatedGoals } from "./client/delegated-goals"; export { LegacyGoals } from "./client/legacy-goals";');
 const {clientBundle}=await compilePlugin({client:resolve(fixture,'index.client.tsx')});
 const colors={foreground:'#eee',foregroundMuted:'#999',surface1:'#222',surface2:'#333',border:'#444',accent:'#eee',accentForeground:'#111',statusWarning:'#fa0',statusDanger:'#f66'};
 function harness() {
@@ -27,10 +27,10 @@ function harness() {
   if(name==='react/jsx-runtime')return {jsx,jsxs:jsx};
   if(name==='react-native')return {View:'View',Text:'Text',Pressable:'Pressable'};
   if(name==='@getpaseo/plugin/client/react-native')return {TextInput:'TextInput',ScrollView:'ScrollView'};
-  if(name==='@getpaseo/plugin/client/ui')return {Icon:'Icon',SettingsAction:'SettingsAction',Modal:Object.assign(props=>jsx('Modal',props),{Content:'ModalContent'})};
+  if(name==='@getpaseo/plugin/client/ui')return {Icon:'Icon',SettingsSection:'SettingsSection',SettingsCard:'SettingsCard',SettingsAction:'SettingsAction',Modal:Object.assign(props=>jsx('Modal',props),{Content:'ModalContent'})};
   return require(name);
  };
- const {DelegatedGoals}=(0,eval)(clientBundle)(load);
+ const {DelegatedGoals,LegacyGoals}=(0,eval)(clientBundle)(load);
  function walk(node,path='root') {
   if(Array.isArray(node))return node.flatMap((item,index)=>walk(item,`${path}/${index}`));
   if(!node||typeof node!=='object')return [];
@@ -39,7 +39,7 @@ function harness() {
   }
   return [node,...walk(node.props.children,`${path}/children`)];
  }
- return {draw:props=>walk({type:DelegatedGoals,props}),remount:()=>states.clear()};
+ return {draw:props=>walk({type:DelegatedGoals,props}),parent:props=>walk({type:LegacyGoals,props}),remount:()=>states.clear()};
 }
 const entry=(id,status='paused')=>({id,revision:2,text:`Goal ${id}`,status,tasks:[],child:null,tokenBudget:null,tokensUsed:0,automaticTurns:0,noProgressTurns:0,summary:null,waiting:null});
 const button=(nodes,label)=>nodes.find(node=>node.type==='Pressable'&&node.props.accessibilityLabel===label);
@@ -167,4 +167,35 @@ test('exhausted budgets gate Resume in every stopped state without removing Paus
   button(nodes,'Resume').props.onPress();await tick();assert.equal(calls[0].action,'goals.resume');
   goal.status='active';goal.tokenBudget=100;goal.tokensUsed=101;nodes=h.draw(props);assert.equal(button(nodes,'Pause').props.disabled,false);
  }
+});
+
+for (const width of [390, 1100]) test(`assignment lists are independent of status at ${width}px`,()=>{
+ const h=harness();const paused=entry('linked-paused');paused.child={taskId:'real-child',childId:'child',jobId:'job',attempt:1};
+ const active=entry('unlinked-active','active');const saved=entry('saved');
+ const done=entry('done','complete');done.child=paused.child;
+ const cleared=entry('cleared','cleared');
+ const props={registry:{version:1,revision:1,entries:[paused,active,saved,done,cleared]},colors,identity:`assignment-${width}`,locked:false,busy:false,executionAvailable:true,model:null,limits:{},post:async()=>{throw Error('fixture must not mutate');}};
+ let nodes=h.draw(props);nodes.find(n=>n.props.onLayout).props.onLayout({nativeEvent:{layout:{width}}});nodes=h.draw(props);
+ const labels=nodes.filter(n=>n.type==='Pressable').map(n=>n.props.accessibilityLabel);
+ for(const id of ['linked-paused','unlinked-active','saved'])assert.equal(labels.filter(x=>x===`Goal ${id}`).length,1);
+ assert.ok(!labels.includes('Goal done'));assert.ok(!labels.includes('Goal cleared'));
+ const delegated=nodes.find(n=>n.type==='View'&&Array.isArray(n.props.children)&&n.props.children[0]?.props?.children==='Delegated');
+ assert.ok(delegated);assert.equal(delegated.props.children[1].length,1);assert.equal(delegated.props.children[1][0].props.title,'Goal linked-paused');
+ assert.ok(!nodes.some(n=>n.type==='Text'&&['Goals','Unassigned','Legacy parent goals'].includes(n.props.children)));
+ button(nodes,'Completed').props.onPress();nodes=h.draw(props);
+ for(const id of ['done','cleared'])assert.ok(button(nodes,`Goal ${id}`));
+ assert.ok(!button(nodes,'Goal linked-paused'));assert.ok(!nodes.some(n=>n.type==='Text'&&n.props.children==='Delegated'));
+ button(nodes,'Current goals').props.onPress();props.registry.entries=[saved];nodes=h.draw(props);
+ assert.ok(!nodes.some(n=>n.type==='Text'&&n.props.children==='Delegated'));
+ props.registry.entries=[];nodes=h.draw(props);assert.ok(nodes.some(n=>n.type==='Text'&&n.props.children==='No goals yet'));
+});
+
+test('Assigned parent goals remain read-only and retain completed history',()=>{
+ const h=harness();const goal={...entry('parent'),status:'paused'};
+ let nodes=h.parent({goal,completed:[{...entry('old'),status:'completed'}],colors});
+ assert.equal(nodes.find(n=>n.type==='SettingsSection').props.title,'Assigned');
+ assert.ok(!button(nodes,'Start'));assert.ok(!button(nodes,'Resume'));assert.ok(!button(nodes,'Edit'));
+ button(nodes,'Completed').props.onPress();nodes=h.parent({goal,completed:[{...entry('old'),status:'completed'}],colors});
+ assert.ok(nodes.some(n=>n.type==='Text'&&n.props.children==='Goal old'));
+ assert.deepEqual(h.parent({goal:null,completed:[],colors}),[]);
 });

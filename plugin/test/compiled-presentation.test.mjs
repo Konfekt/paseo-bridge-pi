@@ -58,7 +58,7 @@ test('compiled unsupported Goals shows read-only legacy state and history with r
     for (const label of ['Create','Pause','Resume','Edit','Clear','Limits','Add subtask'])
       assert.equal(findButton(items,label),undefined,`${label} must not mutate legacy parent goals`);
     assert.equal(items.some(n=>n.type==='TextInput'),false,'legacy goals have no editing fields');
-    assert.ok(items.some(n=>n.type==='Text' && n.props.children==='Reload Pi to enable independent child goals. Legacy parent goals are read-only here.'));
+    assert.ok(items.some(n=>n.type==='Text' && n.props.children==='Reload Pi to enable independent child goals. Assigned goals are read-only here.'));
   };
   assertReadOnly(all);
   reply.snapshot.goal={id:'goal-1',status:'active',text:'Ship safely',automaticTurns:2,tokensUsed:120,tasks:[]};
@@ -69,12 +69,12 @@ test('compiled unsupported Goals shows read-only legacy state and history with r
   reply.snapshot.completedGoals=[{id:'done-1',status:'completed',text:'Earlier goal',summary:'Done',endedAt:1,tasks:[]}];
   all=draw();
   assertReadOnly(all);
-  assert.equal(all.filter(n=>n.type==='Pressable' && n.props.accessibilityLabel==='Legacy history').length,1,'history control is not duplicated');
-  findButton(all,'Legacy history').props.onPress();
+  assert.equal(all.filter(n=>n.type==='Pressable' && n.props.accessibilityLabel==='Completed').length,1,'history control is not duplicated');
+  findButton(all,'Completed').props.onPress();
   all=draw();
   assertReadOnly(all);
   assert.ok(all.some(n=>n.type==='Text' && n.props.children==='Earlier goal'),'legacy history still expands');
-  assert.ok(findButton(all,'Hide legacy history'));
+  assert.ok(findButton(all,'Hide completed'));
   assert.equal(calls.some(c=>c.name==='workflows_control'),false,'read-only legacy display never sends mutations');
   slots=[];
   const drawTrees=()=>{cursor=0;return nodes(WorktreesPanel(props));};

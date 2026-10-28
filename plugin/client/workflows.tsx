@@ -407,7 +407,7 @@ function WorkflowsView({
 						</>
 					) : section === "goal" ? (
 						<>
-							<Metadata colors={colors}>Reload Pi to enable independent child goals. Legacy parent goals are read-only here.</Metadata>
+							<Metadata colors={colors}>Reload Pi to enable independent child goals. Assigned goals are read-only here.</Metadata>
 							<LegacyGoals goal={goal ?? null} completed={completedGoals} colors={colors} />
 
 						</>

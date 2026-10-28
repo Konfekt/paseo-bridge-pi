@@ -101,6 +101,12 @@ export function DelegatedGoals({ registry, colors, identity, locked, busy, execu
   const [taskText, setTaskText] = useViewState<string>(identity, "taskText", "");
   const wide = width >= 760;
   const entries = registry.entries.filter(goal => terminal(goal) === history);
+  // Assignment is independent of execution status. Only an authoritative child
+  // link makes an entry delegated; paused children must stay in that list.
+  const groups = history ? [{ title: null, entries }] : [
+    { title: null, entries: entries.filter(entry => !entry.child) },
+    { title: "Delegated", entries: entries.filter(entry => !!entry.child) },
+  ];
   const selection = selected === null && wide && !selectionReview ? entries[0]?.id ?? (history ? null : "new") : selected;
   const goal = registry.entries.find(entry => entry.id === selection);
   const disabled = locked || busy;
@@ -129,19 +135,23 @@ export function DelegatedGoals({ registry, colors, identity, locked, busy, execu
       {showList ? <View style={{ width: wide ? 320 : "100%", flexShrink: 0, padding: 16, gap: 16,
         ...(wide ? { borderRightWidth: 1, borderRightColor: colors.border } : {}) }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <Text style={{ color: colors.foreground, fontWeight: "500", fontSize: 14, flex: 1 }}>{history ? "Completed goals" : "Goals"}</Text>
+          <Text style={{ color: colors.foreground, fontWeight: "500", fontSize: 14, flex: 1 }}>{history ? "Completed goals" : ""}</Text>
           <NativeButton colors={colors} label="New goal" onPress={() => { setHistory(false); select("new"); }} disabled={locked} style={{ minHeight: 44 }} />
         </View>
         {selectionReview ? <Metadata colors={colors}>Goal saved. Select an entry to review.</Metadata> : null}
         <View style={{ gap: 4 }}>
-          {entries.length ? entries.map(entry => <NativeRow key={entry.id} colors={colors} title={entry.text}
+          {groups.map((group, index) => group.entries.length ? <View key={index} style={{ gap: 4 }}>
+            {group.title ? <Text style={{ color: colors.foreground, fontWeight: "500", fontSize: 14, paddingTop: 12 }}>{group.title}</Text> : null}
+            {group.entries.map(entry => <NativeRow key={entry.id} colors={colors} title={entry.text}
             detail={`${statusLabels[entry.status]}${entry.tasks.length ? ` · ${entry.tasks.filter(task => task.status === "completed").length}/${entry.tasks.length} tasks` : ""}`}
             selected={selection === entry.id} onPress={() => select(entry.id)}
             leading={<Icon name={entry.status === "complete" ? "CircleCheck" : entry.status === "active" ? "CirclePlay" : "CirclePause"} size={16} color={entry.status === "active" ? colors.foreground : colors.foregroundMuted} />}
-            style={{ borderRadius: 8, paddingVertical: 12 }} />) : <View style={{ paddingVertical: 24, gap: 8 }}>
+            style={{ borderRadius: 8, paddingVertical: 12 }} />)}
+          </View> : null)}
+          {!entries.length ? <View style={{ paddingVertical: 24, gap: 8 }}>
               <Metadata colors={colors}>{history ? "No completed goals" : "No goals yet"}</Metadata>
               {!history ? <Metadata colors={colors}>Each goal has its own child and checklist</Metadata> : null}
-            </View>}
+            </View> : null}
         </View>
         <NativeButton colors={colors} label={history ? "Current goals" : "Completed"} onPress={() => { setHistory(!history); select(null); }} style={{ alignSelf: "flex-start", backgroundColor: "transparent", minHeight: 44 }} />
       </View> : null}
