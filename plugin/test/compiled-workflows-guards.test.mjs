@@ -167,13 +167,13 @@ test("worktree removal rechecks open Paseo agents including symlinked subdirecto
 		const openHandlers = createWorkflowsHandlers(async () => descriptor, async () => ({ ...state, busy: false, operationId: null, operationAction: null, dialog: null, protectedPaths: [], openPath: proposedPath }));
 		const openContext = { paseo: { ...context.paseo, workspaces: {
 			ref: () => ({ refresh: async () => ({ id: "workspace", projectId: "project" }) }),
-			list: async options => { listedFilter = options.filter; return { entries: workspaceIncomplete ? [] : [{ id: "foreign-child", projectId: "foreign-project", workspaceDirectory: tree }, { id: "parent-existing", projectId: "project", workspaceDirectory: dir }, ...(onlyForeign ? [] : [{ id: "child-existing", projectId: "project", workspaceDirectory: alias }])], pageInfo: { hasMore: workspaceIncomplete, nextCursor: null } }; },
+			list: async options => { listedFilter = options.filter; return { entries: workspaceIncomplete ? [] : [{ id: "foreign-child", projectId: "foreign-project", workspaceDirectory: tree }, { id: "parent-existing", projectId: "project", workspaceDirectory: dir }, ...(onlyForeign || !options.filter.includeBackground ? [] : [{ id: "child-existing", projectId: "project", workspaceDirectory: alias, background: true }])], pageInfo: { hasMore: workspaceIncomplete, nextCursor: null } }; },
 			create: async options => { creations++; allocatedSource = options.source; return { id: "allocated-exact-child" }; },
 		} } };
 		const openInput = { ...input, request: { operation: "start", action: "worktree.open", path: tree, sessionId: "session", serviceEpoch: descriptor.serviceEpoch, requestId: randomUUID() } };
 		assert.equal((await openHandlers.control(openInput, openContext)).openedWorkspaceId, "child-existing", "canonical alias must resolve to the child workspace, never the parent");
 		assert.equal(creations, 0, "existing target does not allocate another workspace");
-		assert.deepEqual(listedFilter, { projectId: "project" });
+		assert.deepEqual(listedFilter, { projectId: "project", includeBackground: true }, "exact background worker workspace is reused without creating a duplicate");
 		onlyForeign = true;
 		assert.equal((await openHandlers.control(openInput, openContext)).openedWorkspaceId, "allocated-exact-child", "a foreign-project same-cwd workspace is not reused");
 		assert.deepEqual(allocatedSource, { kind: "directory", path: tree, projectId: "project" });

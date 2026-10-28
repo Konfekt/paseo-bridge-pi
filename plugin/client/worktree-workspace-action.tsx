@@ -14,13 +14,13 @@ export function WorktreeWorkspaceAction({ path, diffStat, disabled, onPress, col
 	onPress: () => void;
 	colors: PluginAgentPanelProps["theme"]["colors"];
 }) {
-	const reported = diffStat && (diffStat.additions > 0 || diffStat.deletions > 0);
+	const reported = diffStat != null;
 	return <Pressable accessibilityRole="button" accessibilityLabel={`Open worktree workspace ${path}; then select native Changes`}
-		accessibilityHint="Opens this worktree in the current project. Select native Changes in that workspace to view its diff."
+		accessibilityHint={`${reported ? `Native comparison: ${diffStat.additions} additions, ${diffStat.deletions} deletions.` : "Native line counts unavailable."} Opens this worktree in the current project. Select native Changes in that workspace to view its diff.`}
 		accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
 		style={{ minHeight: 44, justifyContent: "center", paddingHorizontal: 4, opacity: disabled ? 0.5 : 1 }}>
 		<View style={{ flexDirection: "row", alignItems: "center", gap: 4, minHeight: 32, paddingHorizontal: 12, paddingVertical: 4,
-			borderRadius: 16, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface1 }}>
+			borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface1 }}>
 			{reported ? <>
 				<Text style={{ fontSize: 14, color: colors.statusSuccess }}>+{compact.format(diffStat.additions).toLowerCase()}</Text>
 				<Text style={{ fontSize: 14, color: colors.statusDanger }}>−{compact.format(diffStat.deletions).toLowerCase()}</Text>

@@ -12,6 +12,7 @@ import {
 } from "./account-controls-transport";
 import { callBtw } from "./btw-transport";
 import { attachWorktreeDiffStats } from "./worktree-diff-stats";
+import { listWorktreeWorkspaces } from "./worktree-workspaces";
 import { workflowUiPayload } from "./workflow-ui-payload";
 import {
 	workflowSnapshotSchema,
@@ -221,7 +222,7 @@ export function createWorkflowsHandlers(
 				let cursor: string | undefined;
 				for (let page = 0; ; page++) {
 					if (page >= 100) throw new Error("Workspace inventory is incomplete");
-					const listed = await context.paseo.workspaces.list({ filter: { projectId: parent.projectId }, page: { limit: 200, cursor } });
+					const listed = await listWorktreeWorkspaces(context, parent.projectId, cursor);
 					for (const workspace of listed.entries) {
 						if (workspace.projectId === parent.projectId && workspace.workspaceDirectory && await realpath(workspace.workspaceDirectory).catch(() => null) === target) { openedWorkspaceId = workspace.id; break; }
 					}

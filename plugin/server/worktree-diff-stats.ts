@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import type { WorkflowSnapshot } from "../shared/workflows";
+import { listWorktreeWorkspaces } from "./worktree-workspaces.ts";
 
 /** Read native server statistics, without allocating workspaces or guessing counts.
  * A missing/partial inventory must not turn into an authoritative zero.
@@ -15,7 +16,7 @@ export async function attachWorktreeDiffStats(snapshot: WorkflowSnapshot, worksp
 		let cursor: string | undefined;
 		for (let page = 0; ; page++) {
 			if (page >= 25) return { ...snapshot, worktrees: rows };
-			const listed = await context.paseo.workspaces.list({ filter: { projectId: parent.projectId }, page: { limit: 200, cursor } });
+			const listed = await listWorktreeWorkspaces(context, parent.projectId, cursor);
 			for (const workspace of listed.entries) {
 				if (workspace.projectId !== parent.projectId || !workspace.workspaceDirectory) continue;
 				const path = await realpath(workspace.workspaceDirectory).catch(() => null);
