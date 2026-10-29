@@ -2,6 +2,7 @@ import { realpath } from "node:fs/promises";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import type { WorkflowSnapshot } from "../shared/workflows";
 import { listWorktreeWorkspaces } from "./worktree-workspaces.ts";
+import { inspectWorktreeStats, type CheckoutInspector } from "./worktree-checkout-stats.ts";
 
 /** Read native server statistics, without allocating workspaces or guessing counts.
  * A missing/partial inventory must not turn into an authoritative zero.
@@ -11,6 +12,10 @@ export async function attachWorktreeDiffStats(snapshot: WorkflowSnapshot, worksp
 	try {
 		const parent = await context.paseo.workspaces.ref(workspaceId).refresh();
 		if (!parent) return { ...snapshot, worktrees: rows };
+		const workspaces = context.paseo.workspaces as typeof context.paseo.workspaces & { inspectCheckout?: CheckoutInspector };
+		if (typeof workspaces.inspectCheckout === "function") {
+			return inspectWorktreeStats({ ...snapshot, worktrees: rows }, workspaceId, path => workspaces.inspectCheckout!(path));
+		}
 		const stats = new Map<string, { additions: number; deletions: number } | null>();
 		const ambiguous = new Set<string>();
 		let cursor: string | undefined;
