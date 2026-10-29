@@ -14,7 +14,6 @@ import { WorktreeWorkspaceAction } from "./worktree-workspace-action";
 import { worktreeLinkKeyboardProps } from "../shared/worktree-link";
 import { DelegatedGoals } from "./delegated-goals";
 import { GoalAgent } from "./goal-agent";
-import { LegacyGoals } from "./legacy-goals";
 import {
 	workflowsStatusRpc,
 	workflowsControlRpc,
@@ -404,20 +403,14 @@ function WorkflowsView({
 								: null}
 						</View>
 					) : null}
-					{section === "goal" && delegatedGoals ? (
+					{section === "goal" ? (
 						<>
-							<DelegatedGoals key={binding} registry={delegatedGoals} colors={colors} identity={binding ?? ""}
-								locked={locked || !!dialog || snapshot.capabilities?.delegatedGoals !== true} busy={snapshot.busy} executionAvailable={snapshot.capabilities?.delegatedGoalExecution === true} model="gpt-6.1-sol" limits={snapshot.limits} post={post}
+							<DelegatedGoals key={binding} registry={delegatedGoals ?? { version: 1, revision: 0, entries: [] }} assignedGoal={goal ?? null} completedAssigned={completedGoals} colors={colors} identity={binding ?? ""}
+								locked={locked || !!dialog || !delegatedGoals || snapshot.capabilities?.delegatedGoals !== true} busy={snapshot.busy} executionAvailable={snapshot.capabilities?.delegatedGoalExecution === true} model="gpt-6.1-sol" limits={snapshot.limits} post={post}
                 renderAgent={entry => entry.child && data?.sessionId && data.runtimeEpoch ? <GoalAgent key={JSON.stringify([binding, entry.child])}
                   child={entry.child} sessionId={data.sessionId} runtimeEpoch={data.runtimeEpoch} host={host} agentId={agentId} workspaceId={workspaceId} theme={theme}
                   onOpenAgent={navigation?.openAgent ? id => navigation.openAgent({ agentId: id, serverId: host.id }) : undefined} /> : null} />
-							<LegacyGoals goal={goal ?? null} completed={completedGoals} colors={colors} />
-						</>
-					) : section === "goal" ? (
-						<>
-							<Metadata colors={colors}>Reload Pi to enable independent child goals. Assigned goals are read-only here.</Metadata>
-							<LegacyGoals goal={goal ?? null} completed={completedGoals} colors={colors} />
-
+							{!delegatedGoals ? <Metadata colors={colors}>Reload Pi to enable creation of independent goals.</Metadata> : null}
 						</>
 					) : (
 						<View style={{ gap: 4, width: "100%", maxWidth: 740, alignSelf: "center" }}>

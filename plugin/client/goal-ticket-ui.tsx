@@ -58,11 +58,12 @@ export function StatusBadge({ colors, status }: { colors: Colors; status: Delega
     <Text style={{ color: tone.fg, fontSize: 11, lineHeight: 16 }}>{goalStatusLabels[status]}</Text>
   </View>;
 }
-export function taskCounts(tasks: DelegatedGoal["tasks"]) {
+type TicketTasks = Array<{ id?: string; text: string; status: DelegatedGoal["tasks"][number]["status"] }>;
+export function taskCounts(tasks: TicketTasks) {
   return { total: tasks.length, completed: tasks.filter(task => task.status === "completed").length, blocked: tasks.filter(task => task.status === "blocked").length };
 }
 export const taskTones = { completed: "#63b887", in_progress: "#779cde", blocked: "#c98279", pending: "#30333f" } as const;
-export function TaskBar({ colors, tasks }: { colors: Colors; tasks: DelegatedGoal["tasks"] }) {
+export function TaskBar({ colors, tasks }: { colors: Colors; tasks: TicketTasks }) {
   if (!tasks.length) return null;
   const { total, completed, blocked } = taskCounts(tasks);
   const label = `${completed} of ${total} tasks complete${blocked ? ` · ${blocked} blocked` : ""}`;
@@ -70,12 +71,12 @@ export function TaskBar({ colors, tasks }: { colors: Colors; tasks: DelegatedGoa
     <Text accessibilityLiveRegion="polite" accessibilityLabel={label} style={{ color: colors.foregroundMuted, fontSize: 13, lineHeight: 18, fontVariant: ["tabular-nums"] }}><Text style={{ color: colors.foreground, fontWeight: "600" }}>{completed} of {total}</Text> tasks complete{blocked ? <Text style={{ color: taskTones.blocked }}> · {blocked} blocked</Text> : null}</Text>
     <View accessibilityRole="progressbar" accessibilityLabel={label} accessibilityValue={{ min: 0, max: total, now: completed, text: label }} aria-valuemin={0} aria-valuemax={total} aria-valuenow={completed} aria-valuetext={label}
       style={{ height: 8, borderRadius: 4, overflow: "hidden", flexDirection: "row", gap: 2, backgroundColor: colors.surface2 }}>
-      {tasks.map(task => <View key={task.id} accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
+      {tasks.map((task, index) => <View key={task.id ?? index} accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
         style={{ flex: 1, backgroundColor: taskTones[task.status] }} />)}
     </View>
   </View>;
 }
-export function GoalTicketRow({ colors, goal, title, selected, onPress }: { colors: Colors; goal: DelegatedGoal; title: string; selected: boolean; onPress(): void }) {
+export function GoalTicketRow({ colors, goal, title, selected, onPress }: { colors: Colors; goal: { status: DelegatedGoal["status"]; tasks: TicketTasks }; title: string; selected: boolean; onPress(): void }) {
   return <PressableRow colors={colors} onSurface1={selected} transparentAtRest={!selected} accessibilityRole="button" accessibilityLabel={title} accessibilityState={{ selected }} onPress={onPress}
     style={{ flexDirection: "row", alignItems: "flex-start", gap: 10, paddingHorizontal: 10, paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.border, minHeight: 44 }}>
     <View style={{ width: 16, paddingTop: 2, alignItems: "center" }}><Icon name={goal.status === "complete" ? "Check" : goal.status === "active" ? "CirclePlay" : goal.status === "blocked" ? "Ban" : "CirclePause"} size={14} color={goal.status === "complete" ? colors.statusSuccess : goal.status === "active" ? goalWorkingColor : goal.status === "blocked" ? colors.statusDanger : colors.foregroundMuted} /></View>

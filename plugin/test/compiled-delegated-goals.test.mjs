@@ -13,7 +13,7 @@ const {compilePlugin}=await import(pathToFileURL(resolve(compilerPath)));
 const fixture=await mkdtemp(resolve(tmpdir(),'delegated-goals-ui-'));
 after(()=>rm(fixture,{recursive:true,force:true}));
 for(const directory of ['client','shared']) await cp(fileURLToPath(new URL(`../${directory}`,import.meta.url)),resolve(fixture,directory),{recursive:true});
-await writeFile(resolve(fixture,'index.client.tsx'),'export { DelegatedGoals } from "./client/delegated-goals"; export { LegacyGoals } from "./client/legacy-goals"; export { goalAgentRoute } from "./shared/goal-agent";');
+await writeFile(resolve(fixture,'index.client.tsx'),'export { DelegatedGoals } from "./client/delegated-goals"; export { goalAgentRoute } from "./shared/goal-agent";');
 await writeFile(resolve(fixture,'index.server.ts'),'import { goalStorySchema, workflowRequestSchema } from "./shared/workflows"; export default function schemas() { return { goalStorySchema, workflowRequestSchema }; }');
 const {clientBundle,serverBundle}=await compilePlugin({client:resolve(fixture,'index.client.tsx'),server:resolve(fixture,'index.server.ts')});
 const schemas=(0,eval)(serverBundle)(name=>name==='@getpaseo/plugin'?{defineRpc:value=>value}:require(name)).default();
@@ -32,7 +32,7 @@ function harness() {
   if(name==='@getpaseo/plugin/client/ui')return {Icon:'Icon',SettingsSection:'SettingsSection',SettingsCard:'SettingsCard',SettingsAction:'SettingsAction',Modal:Object.assign(props=>jsx('Modal',props),{Content:'ModalContent'})};
   return require(name);
  };
- const {DelegatedGoals,LegacyGoals,goalAgentRoute}=(0,eval)(clientBundle)(load);
+ const {DelegatedGoals,goalAgentRoute}=(0,eval)(clientBundle)(load);
  function walk(node,path='root') {
   if(Array.isArray(node))return node.flatMap((item,index)=>walk(item,`${path}/${index}`));
   if(!node||typeof node!=='object')return [];
@@ -41,7 +41,7 @@ function harness() {
   }
   return [node,...walk(node.props.children,`${path}/children`)];
  }
- return {draw:props=>walk({type:DelegatedGoals,props}),parent:props=>walk({type:LegacyGoals,props}),remount:()=>states.clear(),goalAgentRoute};
+ return {draw:props=>walk({type:DelegatedGoals,props}),remount:()=>states.clear(),goalAgentRoute};
 }
 const entry=(id,status='paused')=>({id,revision:2,text:`Goal ${id}`,status,tasks:[],child:null,tokenBudget:null,tokensUsed:0,automaticTurns:0,noProgressTurns:0,summary:null,waiting:null});
 const button=(nodes,label)=>nodes.find(node=>node.type==='Pressable'&&node.props.accessibilityLabel===label);
@@ -200,10 +200,10 @@ for (const width of [390, 1100]) test(`assignment lists are independent of statu
  assert.ok(!labels.includes('Goal done'));assert.ok(!labels.includes('Goal cleared'));
  const delegated=nodes.find(n=>n.type==='View'&&Array.isArray(n.props.children)&&n.props.children[0]?.props?.children==='Delegated');
  assert.ok(delegated);assert.equal(delegated.props.children[1].length,1);assert.equal(delegated.props.children[1][0].props.title,'Goal linked-paused');
- assert.ok(!nodes.some(n=>n.type==='Text'&&['Goals','Unassigned','Legacy parent goals'].includes(n.props.children)));
+ assert.ok(nodes.some(n=>n.type==='Text'&&n.props.children==='Unassigned'));assert.ok(!nodes.some(n=>n.type==='Text'&&['Goals','Legacy parent goals'].includes(n.props.children)));
  button(nodes,'Completed').props.onPress();nodes=h.draw(props);
  for(const id of ['done','cleared'])assert.ok(button(nodes,`Goal ${id}`));
- assert.ok(!button(nodes,'Goal linked-paused'));assert.ok(!nodes.some(n=>n.type==='Text'&&n.props.children==='Delegated'));
+ assert.ok(!button(nodes,'Goal linked-paused'));assert.ok(nodes.some(n=>n.type==='Text'&&n.props.children==='Delegated'));
  button(nodes,'Current goals').props.onPress();props.registry.entries=[saved];nodes=h.draw(props);
  assert.ok(!nodes.some(n=>n.type==='Text'&&n.props.children==='Delegated'));
  props.registry.entries=[];nodes=h.draw(props);assert.ok(nodes.some(n=>n.type==='Text'&&n.props.children==='No goals yet'));
@@ -266,12 +266,17 @@ test('assigned agent route requires complete inventory and exact dedicated child
  assert.equal(goalAgentRoute(child,root,[item,item],true),null);assert.equal(goalAgentRoute(child,root,[item],false),null);
 });
 
-test('Assigned parent goals remain read-only and retain completed history',()=>{
- const h=harness();const goal={...entry('parent'),status:'paused'};
- let nodes=h.parent({goal,completed:[{...entry('old'),status:'completed'}],colors});
- assert.equal(nodes.find(n=>n.type==='SettingsSection').props.title,'Assigned');
- assert.ok(!button(nodes,'Start'));assert.ok(!button(nodes,'Resume'));assert.ok(!button(nodes,'Edit'));
- button(nodes,'Completed').props.onPress();nodes=h.parent({goal,completed:[{...entry('old'),status:'completed'}],colors});
- assert.ok(nodes.some(n=>n.type==='Text'&&n.props.children==='Goal old'));
- assert.deepEqual(h.parent({goal:null,completed:[],colors}),[]);
+test('all three assignment groups share ticket UI; assigned goals and history stay read-only',()=>{
+ const h=harness(),calls=[];
+ const child={...entry('child'),child:{taskId:'task',childId:'child',jobId:'job',attempt:1}};
+ const props={registry:{version:1,revision:1,entries:[entry('draft'),child]},assignedGoal:{...entry('parent'),tasks:[{text:'Recorded task',status:'completed'}]},completedAssigned:[{id:'old',text:'Old assigned goal',status:'completed',summary:'Recorded summary',tasks:[]}],colors,identity:'all-assignment-groups',locked:false,busy:false,executionAvailable:true,model:null,limits:{automaticTurns:null,noProgressTurns:null},post:async f=>{calls.push(f);return false;}};
+ let nodes=h.draw(props);
+ for(const label of ['Unassigned','Assigned','Delegated'])assert.ok(nodes.some(n=>n.props.children===label));
+ button(nodes,'Goal parent').props.onPress();nodes=h.draw(props);
+ for(const label of ['Start','Resume','Edit','Pause','Clear','Add task'])assert.equal(button(nodes,label),undefined);
+ for(const label of ['Write-up','Timeline','Activity','Questions'])assert.ok(nodes.some(n=>n.props.accessibilityRole==='tab'&&n.props.accessibilityLabel===label));
+ assert.ok(nodes.some(n=>n.props.accessibilityRole==='progressbar'&&n.props.accessibilityValue.now===1));
+ button(nodes,'Back to goals').props.onPress();nodes=h.draw(props);button(nodes,'Completed').props.onPress();nodes=h.draw(props);
+ button(nodes,'Old assigned goal').props.onPress();nodes=h.draw(props);
+ assert.ok(nodes.some(n=>n.props.children==='Recorded summary'));assert.equal(button(nodes,'Edit'),undefined);assert.deepEqual(calls,[]);
 });

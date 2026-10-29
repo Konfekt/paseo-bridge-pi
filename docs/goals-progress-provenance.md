@@ -53,7 +53,12 @@ outstanding request and child, persist receipts and reject stale/replayed answer
 No permission approval DTO is accepted by this action. The UI retains rejected
 answer drafts; a changed entry requires explicit review before resubmission.
 
-The only assignment currently rendered is the registry's dedicated child.
+Unassigned, Assigned (parent session), and Delegated (dedicated child) remain
+separate groups in the same ticket list/detail UI, including completed history.
+Assigned records are a read-only presentation of the existing snapshot, not a
+migration into the child registry. Missing history, questions, and historical
+usage remain unavailable rather than being invented. Execution controls and
+verified child links remain exclusive to the registry's dedicated-child path.
 `goalAgentRoute` requires a complete, fresh inventory, exact task **and** child,
 matching parent session, job/group and attempt, current runtime and native
 agent/workspace hints. Navigation still calls the existing authenticated
