@@ -24,6 +24,18 @@ test("paused goal draft validates objective and optional budget without triggeri
   assert.equal(form.getState().canSubmit, false);
 });
 
+test("continuation limits validate independently and blank resets to inherited defaults", () => {
+  const form = openGoalForm({ objective: "Verify limits", continuationLimits: { automaticTurns: 7, noProgressTurns: 2 } });
+  assert.deepEqual(form.getState().continuationLimits, { automaticTurns: 7, noProgressTurns: 2 });
+  for (const set of [form.setAutomaticTurns, form.setNoProgressTurns]) {
+    for (const invalid of ["0", "-1", "1.5", "1e3", "Infinity", "9007199254740992"]) {
+      set(invalid); assert.equal(form.getState().canSubmit, false, invalid);
+    }
+    set(""); assert.equal(form.getState().canSubmit, true);
+  }
+  assert.deepEqual(form.getState().continuationLimits, { automaticTurns: null, noProgressTurns: null });
+});
+
 test("draft retains edits for subscribers and closes without contaminating another form", () => {
   const edit = openGoalForm({ objective: "Existing goal", tokenBudget: 3000 });
   const create = openGoalForm();

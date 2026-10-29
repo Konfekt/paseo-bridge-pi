@@ -54,9 +54,24 @@ test('compiled multi-goal creation is independent of parent idle and uses explic
  textbox(nodes,'Goal token budget').props.onChangeText('1.5');nodes=h.draw(props);assert.equal(button(nodes,'Create').props.disabled,true);
  textbox(nodes,'Goal token budget').props.onChangeText('');nodes=h.draw(props);
  button(nodes,'Create').props.onPress();await tick();
- assert.deepEqual(calls,[{operation:'start',action:'goals.create',expectedGoalId:null,objective:'Ship independent children'}]);
+ assert.deepEqual(calls,[{operation:'start',action:'goals.create',expectedGoalId:null,objective:'Ship independent children',continuationLimits:{automaticTurns:null,noProgressTurns:null}}]);
  props.locked=true;nodes=h.draw(props);assert.equal(button(nodes,'Create').props.disabled,true);
  props.locked=false;props.busy=true;nodes=h.draw(props);assert.equal(button(nodes,'Create').props.disabled,true);
+});
+
+test('compiled limit fields inherit configured defaults, validate and submit explicit overrides',async()=>{
+ const h=harness(),calls=[];
+ const props={registry:{version:1,revision:0,entries:[]},colors,identity:'limit-fields',locked:false,busy:false,executionAvailable:true,model:'fixture',limits:{automaticTurns:null,noProgressTurns:5},post:async fields=>{calls.push(fields);return false;}};
+ let nodes=h.draw(props);
+ assert.equal(textbox(nodes,'Goal automatic responses').props.placeholder,'Default: Unlimited');
+ assert.equal(textbox(nodes,'Goal no-progress responses').props.placeholder,'Default: 5');
+ textbox(nodes,'New goal').props.onChangeText('Test overrides');
+ textbox(nodes,'Goal automatic responses').props.onChangeText('8');
+ textbox(nodes,'Goal no-progress responses').props.onChangeText('0');
+ nodes=h.draw(props);assert.equal(button(nodes,'Create').props.disabled,true);
+ textbox(nodes,'Goal no-progress responses').props.onChangeText('2');nodes=h.draw(props);
+ button(nodes,'Create').props.onPress();await tick();
+ assert.deepEqual(calls[0].continuationLimits,{automaticTurns:8,noProgressTurns:2});
 });
 
 test('selection and draft survive compact host remount, with active-child clear guarded',async()=>{
