@@ -6,13 +6,15 @@ import { validateToolPresentationArguments, validateToolPresentation } from "./t
 const taskTarget = z.object({ taskId: z.string().min(1).max(256), childId: z.string().min(1).max(256), workerEpoch: z.string().min(1).max(256) }).strict();
 const option = z.object({ value: z.string().max(2000), label: z.string().max(2000), description: z.string().max(4000).optional() }).strict();
 const question = z.object({ id: z.string().min(1).max(256), label: z.string().max(500).optional(), prompt: z.string().max(8000), options: z.array(option).max(100), allowOther: z.boolean() }).strict();
+export const questionnaireInputSchema = z.object({ kind: z.literal("questionnaire"), questions: z.array(question).max(100) }).strict();
+export const questionnaireAnswerSchema = z.object({ kind: z.literal("questionnaire"), cancelled: z.boolean(), answers: z.array(z.object({ id: z.string().min(1).max(256), value: z.string().max(2000), wasCustom: z.boolean() }).strict()).max(100) }).strict();
 const interactionInput = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("permission"), title: z.string().max(1000), options: z.array(z.string().max(2000)).max(100), detail: z.string().max(12000).optional() }).strict(),
-  z.object({ kind: z.literal("questionnaire"), questions: z.array(question).max(100) }).strict(),
+  questionnaireInputSchema,
 ]);
 const interactionAnswer = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("permission"), cancelled: z.boolean(), value: z.string().max(2000).optional() }).strict(),
-  z.object({ kind: z.literal("questionnaire"), cancelled: z.boolean(), answers: z.array(z.object({ id: z.string().min(1).max(256), value: z.string().max(2000), wasCustom: z.boolean() }).strict()).max(100) }).strict(),
+  questionnaireAnswerSchema,
 ]);
 const task = z.object({
   taskId: z.string().min(1).max(256), childId: z.string().min(1).max(256), workerEpoch: z.string().max(256), groupId: z.string().min(1).max(256),

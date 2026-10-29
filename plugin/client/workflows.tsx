@@ -13,6 +13,7 @@ import { recordedAgentName } from "../shared/worktree-agent";
 import { WorktreeWorkspaceAction } from "./worktree-workspace-action";
 import { worktreeLinkKeyboardProps } from "../shared/worktree-link";
 import { DelegatedGoals } from "./delegated-goals";
+import { GoalAgent } from "./goal-agent";
 import { LegacyGoals } from "./legacy-goals";
 import {
 	workflowsStatusRpc,
@@ -48,7 +49,7 @@ export function WorkflowsPanel(props: PluginAgentPanelProps) {
 	);
 }
 export function WorkflowsSection(
-	props: Omit<PluginAgentPanelProps, "navigation">,
+	props: PluginAgentPanelProps,
 ) {
 	return <WorkflowsView {...props} section="goal" embedded />;
 }
@@ -406,7 +407,10 @@ function WorkflowsView({
 					{section === "goal" && delegatedGoals ? (
 						<>
 							<DelegatedGoals key={binding} registry={delegatedGoals} colors={colors} identity={binding ?? ""}
-								locked={locked || !!dialog || snapshot.capabilities?.delegatedGoals !== true} busy={snapshot.busy} executionAvailable={snapshot.capabilities?.delegatedGoalExecution === true} model="gpt-6.1-sol" limits={snapshot.limits} post={post} />
+								locked={locked || !!dialog || snapshot.capabilities?.delegatedGoals !== true} busy={snapshot.busy} executionAvailable={snapshot.capabilities?.delegatedGoalExecution === true} model="gpt-6.1-sol" limits={snapshot.limits} post={post}
+                renderAgent={entry => entry.child && data?.sessionId && data.runtimeEpoch ? <GoalAgent key={JSON.stringify([binding, entry.child])}
+                  child={entry.child} sessionId={data.sessionId} runtimeEpoch={data.runtimeEpoch} host={host} agentId={agentId} workspaceId={workspaceId} theme={theme}
+                  onOpenAgent={navigation?.openAgent ? id => navigation.openAgent({ agentId: id, serverId: host.id }) : undefined} /> : null} />
 							<LegacyGoals goal={goal ?? null} completed={completedGoals} colors={colors} />
 						</>
 					) : section === "goal" ? (

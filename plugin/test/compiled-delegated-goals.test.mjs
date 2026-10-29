@@ -13,8 +13,10 @@ const {compilePlugin}=await import(pathToFileURL(resolve(compilerPath)));
 const fixture=await mkdtemp(resolve(tmpdir(),'delegated-goals-ui-'));
 after(()=>rm(fixture,{recursive:true,force:true}));
 for(const directory of ['client','shared']) await cp(fileURLToPath(new URL(`../${directory}`,import.meta.url)),resolve(fixture,directory),{recursive:true});
-await writeFile(resolve(fixture,'index.client.tsx'),'export { DelegatedGoals } from "./client/delegated-goals"; export { LegacyGoals } from "./client/legacy-goals";');
-const {clientBundle}=await compilePlugin({client:resolve(fixture,'index.client.tsx')});
+await writeFile(resolve(fixture,'index.client.tsx'),'export { DelegatedGoals } from "./client/delegated-goals"; export { LegacyGoals } from "./client/legacy-goals"; export { goalAgentRoute } from "./shared/goal-agent";');
+await writeFile(resolve(fixture,'index.server.ts'),'import { goalStorySchema, workflowRequestSchema } from "./shared/workflows"; export default function schemas() { return { goalStorySchema, workflowRequestSchema }; }');
+const {clientBundle,serverBundle}=await compilePlugin({client:resolve(fixture,'index.client.tsx'),server:resolve(fixture,'index.server.ts')});
+const schemas=(0,eval)(serverBundle)(name=>name==='@getpaseo/plugin'?{defineRpc:value=>value}:require(name)).default();
 const colors={foreground:'#eee',foregroundMuted:'#999',surface1:'#222',surface2:'#333',border:'#444',accent:'#eee',accentForeground:'#111',statusWarning:'#fa0',statusDanger:'#f66'};
 function harness() {
  const states=new Map();let context;
@@ -30,7 +32,7 @@ function harness() {
   if(name==='@getpaseo/plugin/client/ui')return {Icon:'Icon',SettingsSection:'SettingsSection',SettingsCard:'SettingsCard',SettingsAction:'SettingsAction',Modal:Object.assign(props=>jsx('Modal',props),{Content:'ModalContent'})};
   return require(name);
  };
- const {DelegatedGoals,LegacyGoals}=(0,eval)(clientBundle)(load);
+ const {DelegatedGoals,LegacyGoals,goalAgentRoute}=(0,eval)(clientBundle)(load);
  function walk(node,path='root') {
   if(Array.isArray(node))return node.flatMap((item,index)=>walk(item,`${path}/${index}`));
   if(!node||typeof node!=='object')return [];
@@ -39,7 +41,7 @@ function harness() {
   }
   return [node,...walk(node.props.children,`${path}/children`)];
  }
- return {draw:props=>walk({type:DelegatedGoals,props}),parent:props=>walk({type:LegacyGoals,props}),remount:()=>states.clear()};
+ return {draw:props=>walk({type:DelegatedGoals,props}),parent:props=>walk({type:LegacyGoals,props}),remount:()=>states.clear(),goalAgentRoute};
 }
 const entry=(id,status='paused')=>({id,revision:2,text:`Goal ${id}`,status,tasks:[],child:null,tokenBudget:null,tokensUsed:0,automaticTurns:0,noProgressTurns:0,summary:null,waiting:null});
 const button=(nodes,label)=>nodes.find(node=>node.type==='Pressable'&&node.props.accessibilityLabel===label);
@@ -89,15 +91,17 @@ test('selection and draft survive compact host remount, with active-child clear 
 });
 
 test('edit submits the seeded revision rather than overwriting a newer registry entry',async()=>{
- const h=harness();const calls=[];const goal=entry('edit');
+ const h=harness();const calls=[];const goal=entry('edit');goal.continuationLimits={automaticTurns:8,noProgressTurns:2};
  const props={registry:{version:1,revision:1,entries:[goal]},colors,identity:'edit-session',locked:false,busy:false,executionAvailable:true,model:'gpt-6.1-sol',limits:{automaticTurns:3,noProgressTurns:2},post:async fields=>{calls.push(fields);return false;}};
  let nodes=h.draw(props);button(nodes,'Goal edit').props.onPress();nodes=h.draw(props);button(nodes,'Edit').props.onPress();nodes=h.draw(props);
+ assert.equal(textbox(nodes,'Goal automatic responses').props.value,'8');assert.equal(textbox(nodes,'Goal no-progress responses').props.value,'2');
+ textbox(nodes,'Goal automatic responses').props.onChangeText('');textbox(nodes,'Goal no-progress responses').props.onChangeText('');
  textbox(nodes,'Goal objective').props.onChangeText('My draft');
  nodes=h.draw(props);button(nodes,'Save changes').props.onPress();await tick();
  goal.revision=3;h.remount();nodes=h.draw(props);
  assert.equal(button(nodes,'Save changes').props.disabled,true,'changed revision requires review, even after remount');
  button(nodes,'Save changes').props.onPress();await tick();assert.equal(calls.length,1);
- assert.equal(calls[0].expectedEntryRevision,2);assert.equal(calls[0].objective,'My draft');assert.equal(calls[0].tokenBudget,null,'empty edit budget explicitly restores unlimited');
+ assert.equal(calls[0].expectedEntryRevision,2);assert.equal(calls[0].objective,'My draft');assert.equal(calls[0].tokenBudget,null,'empty edit budget explicitly restores unlimited');assert.deepEqual(calls[0].continuationLimits,{automaticTurns:null,noProgressTurns:null},'clearing existing overrides restores parent inheritance');
 });
 
 test('successful create selects its own new entry even when objectives are equal',async()=>{
@@ -203,6 +207,59 @@ for (const width of [390, 1100]) test(`assignment lists are independent of statu
  button(nodes,'Current goals').props.onPress();props.registry.entries=[saved];nodes=h.draw(props);
  assert.ok(!nodes.some(n=>n.type==='Text'&&n.props.children==='Delegated'));
  props.registry.entries=[];nodes=h.draw(props);assert.ok(nodes.some(n=>n.type==='Text'&&n.props.children==='No goals yet'));
+});
+
+test('copied ticket UI renders exactly four real tabs and equal ordered task segments without time guesses',()=>{
+ const h=harness(),g=entry('story','active');
+ g.tasks=['completed','in_progress','blocked','pending'].map((status,i)=>({id:`t${i}`,text:`Task ${i}`,status}));
+ g.story={version:1,timeline:[{id:'created',at:1700000000000,kind:'created',text:'Created from a durable record'}],activity:[{id:'note',at:1700000060000,text:'Explicit progress report'}],questions:[]};
+ const props={registry:{version:1,revision:1,entries:[g]},colors,identity:'story-counts',locked:false,busy:false,executionAvailable:true,model:null,limits:{},post:async()=>false};
+ let nodes=h.draw(props);button(nodes,g.text).props.onPress();nodes=h.draw(props);
+ const tabs=nodes.filter(n=>n.props.accessibilityRole==='tab');assert.deepEqual(tabs.map(n=>n.props.accessibilityLabel),['Write-up','Timeline','Activity','Questions']);
+ const bar=nodes.find(n=>n.props.accessibilityRole==='progressbar');assert.deepEqual(bar.props.accessibilityValue,{min:0,max:4,now:1,text:'1 of 4 tasks complete · 1 blocked'});
+ assert.deepEqual(bar.props.children.map(n=>n.props.style),['#3d73d5','#779cde','#c98279','#30333f'].map(backgroundColor=>({flex:1,backgroundColor})));
+ tabs[1].props.onPress();nodes=h.draw(props);assert.ok(nodes.some(n=>n.props.children==='Created from a durable record'));
+ h.remount();nodes=h.draw(props);assert.equal(nodes.find(n=>n.props.accessibilityRole==='tab'&&n.props.accessibilityLabel==='Timeline').props.accessibilityState.selected,true);
+ nodes.find(n=>n.props.accessibilityRole==='tab'&&n.props.accessibilityLabel==='Activity').props.onPress();nodes=h.draw(props);assert.ok(nodes.some(n=>n.props.children==='Explicit progress report'));
+ g.story=undefined;nodes=h.draw(props);assert.ok(nodes.some(n=>n.props.children==='No progress updates yet'));
+ nodes.find(n=>n.props.accessibilityRole==='tab'&&n.props.accessibilityLabel==='Questions').props.onPress();nodes=h.draw(props);assert.ok(nodes.some(n=>n.props.children==='No recorded questions'));
+ g.tasks=[];nodes=h.draw(props);assert.equal(nodes.find(n=>n.props.accessibilityRole==='progressbar'),undefined);
+});
+
+test('goal-bound questionnaire answers preserve exact identity and stale draft protection without permission approval',async()=>{
+ const h=harness(),calls=[],g=entry('questions','active');
+ const question={id:'q1',revision:3,at:1700000000000,workerEpoch:'worker-epoch',status:'pending',request:{kind:'questionnaire',questions:[{id:'map',prompt:'Choose a map',options:[{value:'mapbox',label:'Mapbox'}],allowOther:true}]}};
+ g.story={version:1,timeline:[],activity:[],questions:[question]};
+ const props={registry:{version:1,revision:1,entries:[g]},colors,identity:'question-draft',locked:false,busy:false,executionAvailable:true,model:null,limits:{},post:async fields=>{calls.push(fields);return false;}};
+ let nodes=h.draw(props);button(nodes,g.text).props.onPress();nodes=h.draw(props);nodes.find(n=>n.props.accessibilityRole==='tab'&&n.props.accessibilityLabel==='Questions').props.onPress();nodes=h.draw(props);
+ assert.equal(button(nodes,'Submit answers').props.disabled,true);
+ nodes.find(n=>n.props.accessibilityRole==='radio'&&n.props.accessibilityLabel==='Mapbox').props.onPress();nodes=h.draw(props);
+ button(nodes,'Submit answers').props.onPress();await tick();assert.deepEqual(calls[0],{operation:'start',action:'goals.answer',expectedGoalId:'questions',expectedEntryRevision:2,questionId:'q1',questionRevision:3,workerEpoch:'worker-epoch',answer:{kind:'questionnaire',cancelled:false,answers:[{id:'map',value:'mapbox',wasCustom:false}]}});
+ g.revision++;h.remount();nodes=h.draw(props);assert.equal(button(nodes,'Submit answers').props.disabled,true);button(nodes,'Submit answers').props.onPress();await tick();assert.equal(calls.length,1);
+ button(nodes,'Review latest question').props.onPress();nodes=h.draw(props);assert.equal(button(nodes,'Submit answers').props.disabled,true);
+ textbox(nodes,'Custom answer for Choose a map').props.onChangeText('Use city text');nodes=h.draw(props);button(nodes,'Submit answers').props.onPress();await tick();assert.equal(calls[1].expectedEntryRevision,3);assert.equal(calls[1].answer.answers[0].wasCustom,true);
+ question.status='answered';question.answer=calls[1].answer;question.answeredAt=1700000060000;nodes=h.draw(props);assert.equal(button(nodes,'Submit answers'),undefined);assert.ok(nodes.some(n=>n.props.children==='Use city text'));
+});
+
+test('story schema and answer RPC reject permission requests and incomplete routing identity',()=>{
+ const {goalStorySchema,workflowRequestSchema}=schemas;
+ const base={operation:'start',action:'goals.answer',sessionId:'session',serviceEpoch:'11111111-1111-4111-8111-111111111111',requestId:'22222222-2222-4222-8222-222222222222',expectedGoalId:'goal',expectedEntryRevision:2,questionId:'q1',questionRevision:1,workerEpoch:'worker',answer:{kind:'questionnaire',cancelled:true,answers:[]}};
+ assert.equal(workflowRequestSchema.safeParse(base).success,true);
+ for(const field of ['questionId','questionRevision','workerEpoch','answer','expectedEntryRevision']){const invalid={...base};delete invalid[field];assert.equal(workflowRequestSchema.safeParse(invalid).success,false,field);}
+ assert.equal(workflowRequestSchema.safeParse({...base,action:'goals.pause'}).success,false);
+ assert.equal(workflowRequestSchema.safeParse({...base,answer:{kind:'permission',cancelled:false,value:'Allow'}}).success,false);
+ assert.equal(goalStorySchema.safeParse({version:1,timeline:[],activity:[],questions:[]}).success,true);
+ assert.equal(goalStorySchema.safeParse({version:1,timeline:[],activity:[],questions:[{id:'q',revision:1,at:1,workerEpoch:'epoch',status:'pending',request:{kind:'permission',title:'Approve',options:['Allow']}}]}).success,false);
+});
+
+test('assigned agent route requires complete inventory and exact dedicated child, job and attempt',()=>{
+ const {goalAgentRoute}=harness();
+ const root={agentId:'parent',workspaceId:'workspace',sessionId:'session',runtimeEpoch:'epoch'};
+ const child={taskId:`subagent-task-${'a'.repeat(24)}`,childId:`subagent-child-${'b'.repeat(24)}`,jobId:`subagent-job-${'c'.repeat(24)}`,attempt:2};
+ const item={...child,groupId:child.jobId,runtimeId:'runtime',stale:false,paseoAgentId:'native-child',paseoWorkspaceId:'native-workspace'};
+ assert.ok(goalAgentRoute(child,root,[item],true));
+ for(const altered of [{...item,attempt:1},{...item,groupId:`subagent-job-${'d'.repeat(24)}`},{...item,childId:`subagent-child-${'d'.repeat(24)}`},{...item,stale:true},{...item,reaped:true},{...item,runtimeId:null},{...item,source:{...root,sessionId:'other'}}])assert.equal(goalAgentRoute(child,root,[altered],true),null);
+ assert.equal(goalAgentRoute(child,root,[item,item],true),null);assert.equal(goalAgentRoute(child,root,[item],false),null);
 });
 
 test('Assigned parent goals remain read-only and retain completed history',()=>{
