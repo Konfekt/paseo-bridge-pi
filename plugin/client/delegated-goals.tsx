@@ -45,14 +45,14 @@ function useViewState<T,>(identity: string, name: string, initial: T) {
     saved[name] = next; viewStates.set(identity, saved); setValue(next);
   }] as const;
 }
-const editRevision = (goal?: Ticket) => goal?.assigned ? goal.policyRevision : goal?.revision;
+const editRevision = (goal: Ticket | undefined, limitsOnly: boolean) => limitsOnly ? goal?.policyRevision : goal?.revision;
 function GoalForm({ colors, draftKey, goal, locked, limits, limitsOnly = false, onCancel, onSubmit }: {
   colors: PresentationColors; draftKey: string; goal?: Ticket; locked: boolean; limitsOnly?: boolean;
   limits: Props["limits"];
   onCancel?: () => void; onSubmit(objective: string, tokenBudget: number | undefined, openedRevision: number | undefined, continuationLimits: { automaticTurns: number | null; noProgressTurns: number | null }): Promise<boolean>;
 }) {
   const [openedRevision] = useState(() => {
-    if (!draftRevisions.has(draftKey)) draftRevisions.set(draftKey, editRevision(goal));
+    if (!draftRevisions.has(draftKey)) draftRevisions.set(draftKey, editRevision(goal, limitsOnly));
     return draftRevisions.get(draftKey);
   });
   const [form] = useState(() => {
@@ -61,7 +61,7 @@ function GoalForm({ colors, draftKey, goal, locked, limits, limitsOnly = false, 
     return model;
   });
   const state = useSyncExternalStore(form.subscribe, form.getState, form.getState);
-  const stale = !!goal && editRevision(goal) !== openedRevision;
+  const stale = !!goal && editRevision(goal, limitsOnly) !== openedRevision;
   const input = { borderWidth: 1, borderColor: colors.border, borderRadius: 8, backgroundColor: colors.surface2,
     color: colors.foreground, paddingHorizontal: 12, paddingVertical: 12, fontSize: 14, lineHeight: 20 } as const;
   function close(notify = true) { form.close(); drafts.delete(draftKey); draftRevisions.delete(draftKey); if (notify) onCancel?.(); }
@@ -146,7 +146,7 @@ export function DelegatedGoals({ registry, assignedGoal = null, completedAssigne
     if (name === "add_task" && (!goal || !taskDraft || duplicateTask || goal.status === "active" || terminal(goal))) return false;
     if (goal) setSelected(goal.id);
     return !!(await post({ operation: "start", action: `goals.${name}`, expectedGoalId: goal?.id ?? null,
-      expectedEntryRevision: goal?.revision, ...fields }));
+      ...(name === "limits" ? {} : { expectedEntryRevision: goal?.revision }), ...fields }));
   }
   const button = (label: string, onPress: () => void, isDisabled = disabled) => <NativeButton colors={colors} danger={label === "Clear goal"} primary={label === "Start" || label === "Resume"} label={label} onPress={onPress} disabled={isDisabled} style={{ minHeight: 44, alignSelf: "flex-start", ...(!["Start", "Resume", "Clear goal"].includes(label) ? { backgroundColor: "transparent" } : {}) }} />;
   return <View onLayout={event => setWidth(event.nativeEvent.layout.width)} style={{ minWidth: 0, minHeight: 480 }}>
@@ -221,7 +221,7 @@ export function DelegatedGoals({ registry, assignedGoal = null, completedAssigne
           <View style={{ paddingHorizontal: 12, paddingVertical: 8, gap: 2, backgroundColor: colors.surface0, borderRadius: 8 }}>
             <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
               <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: "600", flex: 1 }}>Limits</Text>
-              {!terminal(goal) ? button("Edit limits", () => { setSelected(goal.id); setEditingLimits(true); }, disabled || editingLimits || !limitsEditable || (goal.assigned && goal.policyRevision === undefined)) : null}
+              {!terminal(goal) ? button("Edit limits", () => { setSelected(goal.id); setEditingLimits(true); }, disabled || editingLimits || !limitsEditable || goal.policyRevision === undefined || (goal.assigned && !goal.activationId)) : null}
             </View>
             <Metadata colors={colors}>Automatic responses: {goal.automaticTurns ?? "Unavailable"} / {goal.assigned && goal.automaticTurns === undefined ? "Unavailable" : (goal.assigned ? goal.effectiveLimits?.automaticTurns : goal.continuationLimits?.automaticTurns) ?? limits.automaticTurns ?? "Unlimited"}</Metadata>
             <Metadata colors={colors}>Tokens: {goal.tokensUsed?.toLocaleString() ?? "Unavailable"} / {goal.tokenBudget === undefined ? "Unavailable" : goal.tokenBudget?.toLocaleString() ?? "Unlimited"}</Metadata>
@@ -231,8 +231,8 @@ export function DelegatedGoals({ registry, assignedGoal = null, completedAssigne
           {editingLimits && !terminal(goal) ? <GoalForm key={`${identity}/limits/${goal.id}`} draftKey={`${identity}/limits/${goal.id}`} colors={colors} goal={goal} locked={disabled} limits={limits} limitsOnly
             onCancel={() => setEditingLimits(false)} onSubmit={async (_objective, tokenBudget, openedRevision, continuationLimits) => {
               const ok = goal.assigned ? !!(await post({ operation: "start", action: "goal.limits", expectedGoalId: goal.sourceGoalId,
-                expectedPolicyRevision: openedRevision, tokenBudget: tokenBudget ?? null, continuationLimits }))
-                : await action("limits", { expectedEntryRevision: openedRevision, tokenBudget: tokenBudget ?? null, continuationLimits });
+                expectedActivationId: goal.activationId, expectedPolicyRevision: openedRevision, tokenBudget: tokenBudget ?? null, continuationLimits }))
+                : await action("limits", { expectedPolicyRevision: openedRevision, tokenBudget: tokenBudget ?? null, continuationLimits });
               if (ok) setEditingLimits(false); return ok;
             }} /> : null}
           <View style={{ gap: 12 }}>

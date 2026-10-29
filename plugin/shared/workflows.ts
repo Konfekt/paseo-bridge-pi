@@ -22,6 +22,7 @@ export const goalStorySchema = z.object({
 }).strict();
 export const delegatedGoalEntrySchema = z.object({
   story: goalStorySchema.optional(),
+  policyRevision: z.number().int().positive().optional(),
 	id: z.string().uuid(), revision: z.number().int().positive(), text: z.string().min(1).max(4000),
 	status: z.enum(["paused", "active", "blocked", "usage_limited", "budget_limited", "complete", "cleared"]),
 	tasks: z.array(z.object({ id: z.string().max(128), text: z.string().max(503), status: z.enum(["pending", "in_progress", "completed", "blocked"]) }).strict()).max(50),
@@ -101,6 +102,8 @@ export const workflowSnapshotSchema = z
 		goal: z
 			.object({
 				id,
+				activationId: id.optional(),
+				revision: z.number().int().nonnegative().optional(),
 				policyRevision: z.number().int().positive().optional(),
 				continuationLimits: continuationLimitsSchema.optional(),
 				effectiveLimits: continuationLimitsSchema.optional(),
@@ -215,6 +218,8 @@ export const workflowRequestSchema = z.discriminatedUnion("operation", [
 			expectedGoalId: id.nullable(),
 			expectedEntryRevision: z.number().int().positive().optional(),
 			expectedPolicyRevision: z.number().int().positive().optional(),
+			expectedActivationId: id.optional(),
+			expectedGoalRevision: z.number().int().nonnegative().optional(),
       questionId: z.string().min(1).max(128).optional(),
       questionRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
       workerEpoch: z.string().min(1).max(128).optional(),
@@ -253,8 +258,15 @@ export const workflowRequestSchema = z.discriminatedUnion("operation", [
 		if (request.expectedGoalId === null || request.tokenBudget === undefined || request.continuationLimits === undefined || request.objective !== undefined || request.text !== undefined)
 			context.addIssue({ code: "custom", message: "Limit edits require identity and explicit limits, without objective or checklist edits" });
 	}
-	if (request.action === "goal.limits" ? request.expectedPolicyRevision === undefined || request.expectedEntryRevision !== undefined || request.expectedRegistryRevision !== undefined : request.expectedPolicyRevision !== undefined)
-		context.addIssue({ code: "custom", path: ["expectedPolicyRevision"], message: "Assigned limit edits require an exact policy revision" });
+	if (["goal.limits", "goals.limits"].includes(request.action) ? request.expectedPolicyRevision === undefined || request.expectedEntryRevision !== undefined || request.expectedRegistryRevision !== undefined : request.expectedPolicyRevision !== undefined)
+		context.addIssue({ code: "custom", path: ["expectedPolicyRevision"], message: "Limit edits require an exact policy revision" });
+  if (request.action.startsWith("goal.") && request.expectedGoalId !== null) {
+    if (request.expectedActivationId === undefined || (request.action !== "goal.limits" && request.expectedGoalRevision === undefined))
+      context.addIssue({ code: "custom", message: "Assigned mutations require activation and applicable goal revision" });
+  } else if (request.expectedActivationId !== undefined || request.expectedGoalRevision !== undefined) {
+    context.addIssue({ code: "custom", message: "Activation fields belong to assigned goal mutations" });
+  }
+  if (request.action === "goals.limits") return;
 	if (!request.action.startsWith("goals.")) return;
 	if (request.action === "goals.create") {
 		if (request.expectedGoalId !== null || request.expectedEntryRevision !== undefined) context.addIssue({ code: "custom", path: ["expectedGoalId"], message: "Create requires null goal identity" });

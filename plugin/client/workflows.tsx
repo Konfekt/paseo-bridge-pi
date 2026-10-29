@@ -226,6 +226,7 @@ function WorkflowsView({
 			operation: "start",
 			action,
 			expectedGoalId: goal?.id ?? null,
+      ...(action.startsWith("goal.") && goal ? { expectedActivationId: goal.activationId, expectedGoalRevision: goal.revision } : {}),
 			...extra,
 		});
 	const button = (label: string, onPress: () => void, disabled = false, primary = false) =>

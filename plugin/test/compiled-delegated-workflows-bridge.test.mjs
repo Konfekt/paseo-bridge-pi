@@ -50,11 +50,11 @@ test('compiled delegated controls cross the real private bridge with session/run
   assert.equal(result.snapshot.goal,null);assert.equal(result.snapshot.idle,false);
   await assert.rejects(invoke('workflows_control',{...input,request:{...input.request,requestId:randomUUID(),action:'goals.edit',expectedGoalId:result.snapshot.delegatedGoals.entries[0].id,expectedEntryRevision:1,objective:'Do not apply this rejected edit'}}),/request failed/);
   assert.equal(snapshot.delegatedGoals.entries[0].text,input.request.objective,'core metadata rejection must not be presented as an applied mutation');
-  const limits={...input.request,requestId:randomUUID(),action:'goals.limits',objective:undefined,expectedGoalId:result.snapshot.delegatedGoals.entries[0].id,expectedEntryRevision:1,tokenBudget:null,continuationLimits:{automaticTurns:2,noProgressTurns:null}};
+  const limits={...input.request,requestId:randomUUID(),action:'goals.limits',objective:undefined,expectedGoalId:result.snapshot.delegatedGoals.entries[0].id,expectedPolicyRevision:1,tokenBudget:null,continuationLimits:{automaticTurns:2,noProgressTurns:null}};
   const updated=await invoke('workflows_control',{...input,request:limits});assert.equal(updated.snapshot.capabilities.goalLimitEditing,true);
-  assert.equal(received.at(-1).action,'goals.limits');assert.equal(received.at(-1).expectedEntryRevision,1);assert.equal(received.at(-1).tokenBudget,null);
+  assert.equal(received.at(-1).action,'goals.limits');assert.equal(received.at(-1).expectedPolicyRevision,1);assert.equal(received.at(-1).tokenBudget,null);
   snapshot.goal={id:'assigned-contract',text:'Keep assigned objective',status:'active',tasks:[],waiting:null,iteration:1,tokensUsed:100,tokenBudget:null,automaticTurns:8,noProgressTurns:3,safetyPauseCause:null,summary:null,policyRevision:7,continuationLimits:{automaticTurns:10},effectiveLimits:{automaticTurns:10,noProgressTurns:2}};
-  const assigned=await invoke('workflows_control',{...input,request:{...limits,requestId:randomUUID(),action:'goal.limits',expectedGoalId:'assigned-contract',expectedEntryRevision:undefined,expectedPolicyRevision:7}});
+  const assigned=await invoke('workflows_control',{...input,request:{...limits,requestId:randomUUID(),action:'goal.limits',expectedGoalId:'assigned-contract',expectedActivationId:'activation-1',expectedPolicyRevision:7}});
   assert.equal(assigned.snapshot.goal.policyRevision,7);assert.equal(received.at(-1).action,'goal.limits');assert.equal(received.at(-1).expectedPolicyRevision,7);
   const count=received.length;
   await assert.rejects(invoke('workflows_control',{...input,expectedRuntimeEpoch:randomUUID()}));
