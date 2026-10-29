@@ -21,11 +21,10 @@ import type { NativeToolStatus } from "./native-tool-presentation";
 import { AccessibilityInfo, Pressable, Text, View } from "react-native";
 import { useEffect, useState } from "react";
 import { Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
-import { getMarkdownTextMetrics, SPINNER_DOT_COUNT } from "@getpaseo/plugin/shared";
+import { getMarkdownTextMetrics, getNativeSpinnerOpacity, getNativeSpinnerStep, NATIVE_SPINNER_DOT_SIZE as DOT_SIZE, NATIVE_SPINNER_GAP as DOT_GAP, SPINNER_DOT_COUNT } from "./native-transcript-model";
 
 // Same pure text metrics as native markdown code; the bridge owns only layout.
 const TOOL_CODE_METRICS = getMarkdownTextMetrics(12);
-import { getNativeSpinnerOpacity, getNativeSpinnerStep, NATIVE_SPINNER_DOT_SIZE as DOT_SIZE, NATIVE_SPINNER_GAP as DOT_GAP } from "./native-transcript-model";
 
 export function NativeToolBadge({ name, status, summary, argumentsValue, details, result, toolPresentation, resultSource, toolCallId, colors, expanded, onToggle }: {
   name: string; status: NativeToolStatus; summary?: string; argumentsValue?: unknown; details?: string; result?: unknown; toolPresentation?: unknown; resultSource?: "live" | "history"; toolCallId?: string; colors: any; expanded: boolean; onToggle(): void;

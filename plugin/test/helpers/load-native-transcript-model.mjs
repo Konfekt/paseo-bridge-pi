@@ -15,9 +15,8 @@ export async function loadNativeTranscriptModel() {
     await writeFile(
       resolve(root, "index.client.ts"),
       `import * as model from "./client/native-transcript-model";
-import { getMarkdownCodeMetrics, getMarkdownTextMetrics } from "@getpaseo/plugin/shared";
 export default function contribute() {
-  return { ...model, getMarkdownCodeMetrics, getMarkdownTextMetrics };
+  return model;
 }`,
     );
 

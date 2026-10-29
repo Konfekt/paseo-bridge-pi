@@ -18,7 +18,7 @@ test('emitted Work renderer uses native mapper/display for every supported Pi fa
   await writeFile(resolve(root, 'index.client.tsx'), `export { NativeToolBadge, NativeRunningTurnFooter } from "./client/native-transcript";
 export {nativeToolModel,nativeToolSections,nativeToolPresentation} from "./client/native-tool-presentation";
 export {literalToolResult} from "./client/native-tool-details";
-import {SPINNER_DOT_COUNT,getMarkdownTextMetrics} from "@getpaseo/plugin/shared";
+import {SPINNER_DOT_COUNT,getMarkdownTextMetrics} from "./client/native-transcript-model";
 export function canonical(){return {count:SPINNER_DOT_COUNT,metrics:getMarkdownTextMetrics(12)}}`);
   const { compilePlugin } = await import(pathToFileURL(resolve(compiler)));
   const { clientBundle } = await compilePlugin({ client: resolve(root, 'index.client.tsx'), server: null });

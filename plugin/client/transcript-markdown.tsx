@@ -8,8 +8,7 @@
  * See ../licenses/PASEO-APACHE-2.0.txt.
  */
 import { createElement } from "react";
-import { getMarkdownCodeMetrics, getMarkdownHeadingMetrics, getMarkdownTextMetrics } from "@getpaseo/plugin/shared";
-import { toTranscriptCssMetrics } from "./native-transcript-model.ts";
+import { getMarkdownCodeMetrics, getMarkdownHeadingMetrics, getMarkdownTextMetrics, toTranscriptCssMetrics } from "./native-transcript-model.ts";
 import { Text, View } from "react-native";
 
 type InlinePart = string | { kind: "strong" | "em" | "del" | "code" | "link"; text: string };
