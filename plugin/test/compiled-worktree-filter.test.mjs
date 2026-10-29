@@ -88,7 +88,7 @@ test("compiled Worktrees: explicit scope, branch identity, independent path link
     assert.equal(commands.at(-1).request.path, "/repo/new-ours");
     snapshot.worktrees[1].diffStat = { additions: 128, deletions: 34 };
     nodes = await render();
-    const workspaceAction = nodes.find(n => n.type === "Pressable" && n.props.accessibilityLabel === "Open worktree workspace /repo/new-ours; then select native Changes");
+    const workspaceAction = nodes.find(n => n.type === "Pressable" && n.props.accessibilityLabel === "Open changes for /repo/new-ours; opens workspace, then select native Changes");
     assert.equal(textOf(workspaceAction), "+128−34");
     workspaceAction.props.onPress(); await new Promise(r => setImmediate(r)); nodes = await render();
     assert.equal(row(nodes).props.accessibilityState.expanded, true, "stats action is independent of expansion");
@@ -97,7 +97,10 @@ test("compiled Worktrees: explicit scope, branch identity, independent path link
     snapshot.worktrees[1].diffStat = { additions: 0, deletions: 0 }; nodes = await render();
     assert.equal(textOf(nodes.find(n => n.type === "Pressable" && n.props.accessibilityLabel === workspaceAction.props.accessibilityLabel)), "+0−0", "native-reported zero counts remain useful, not hidden");
     snapshot.worktrees[1].diffStat = null; nodes = await render();
-    assert.equal(textOf(nodes.find(n => n.type === "Pressable" && n.props.accessibilityLabel === workspaceAction.props.accessibilityLabel)), "Open ↗", "unavailable stats aren't invented from changedFiles");
+    const unavailableStatsAction = nodes.find(n => n.type === "Pressable" && n.props.accessibilityLabel === workspaceAction.props.accessibilityLabel);
+    assert.equal(textOf(unavailableStatsAction), "Open changes ↗", "unavailable stats aren't invented from changedFiles");
+    assert.match(unavailableStatsAction.props.accessibilityHint, /Opens this worktree in the current project\. Select native Changes in that workspace/);
+    assert.ok(!nodes.some(n => n.type === "Text" && /Native line counts unavailable|Line counts need native comparison data|Open a workspace, then select native Changes/.test(textOf(n))), "backend limitations and redundant two-step instructions are not inline copy");
     assert.equal(row(nodes).props.accessibilityState.expanded, true);
     assert.ok(!nodes.some(n => n.props?.label === "Open workspace"));
     assert.equal(nodes.filter(n => n.type === "Text" && textOf(n).includes("/repo/new-ours")).length, 1);

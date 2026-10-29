@@ -15,7 +15,7 @@ export function WorktreeWorkspaceAction({ path, diffStat, disabled, onPress, col
 	colors: PluginAgentPanelProps["theme"]["colors"];
 }) {
 	const reported = diffStat != null;
-	return <Pressable accessibilityRole="button" accessibilityLabel={`Open worktree workspace ${path}; then select native Changes`}
+	return <Pressable accessibilityRole="button" accessibilityLabel={`Open changes for ${path}; opens workspace, then select native Changes`}
 		accessibilityHint={`${reported ? `Native comparison: ${diffStat.additions} additions, ${diffStat.deletions} deletions.` : "Native line counts unavailable."} Opens this worktree in the current project. Select native Changes in that workspace to view its diff.`}
 		accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
 		style={{ minHeight: 44, justifyContent: "center", paddingHorizontal: 4, opacity: disabled ? 0.5 : 1 }}>
@@ -24,7 +24,7 @@ export function WorktreeWorkspaceAction({ path, diffStat, disabled, onPress, col
 			{reported ? <>
 				<Text style={{ fontSize: 14, color: colors.statusSuccess }}>+{compact.format(diffStat.additions).toLowerCase()}</Text>
 				<Text style={{ fontSize: 14, color: colors.statusDanger }}>−{compact.format(diffStat.deletions).toLowerCase()}</Text>
-			</> : <Text style={{ fontSize: 12, color: colors.foregroundMuted }}>Open ↗</Text>}
+			</> : <Text style={{ fontSize: 12, color: colors.foregroundMuted }}>Open changes ↗</Text>}
 		</View>
 	</Pressable>;
 }

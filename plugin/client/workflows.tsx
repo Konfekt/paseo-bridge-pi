@@ -446,7 +446,6 @@ function WorkflowsView({
 											: "No session-created worktrees"}
 								</Text>
 							) : null}
-							<Text style={{ color: colors.foregroundMuted, fontSize: 12, lineHeight: 18, paddingHorizontal: 8 }}>Open a workspace, then select native Changes.{visibleWorktrees.some(tree => tree.diffStat == null) ? " Line counts need native comparison data." : ""}</Text>
 							{visibleWorktrees.map((tree, index) => {
 								// Ownership and working-copy safety gates are intentionally unchanged.
 								const unsafe =
@@ -501,7 +500,7 @@ function WorkflowsView({
 										<Pressable
 											accessibilityRole="button"
 											accessibilityLabel={`${selected ? "▾" : "▸"} ${ownerName ?? branch}`}
-											accessibilityHint="Show checkout details, recorded owner and removal options"
+											accessibilityHint="Show checkout details, agent and removal options"
 											accessibilityState={{ expanded: selected }}
 											onPress={() =>
 												setSelectedTree(selected ? undefined : tree.path)
@@ -539,7 +538,6 @@ function WorkflowsView({
 													<Text selectable style={{ color: colors.foregroundMuted, fontSize: 12, lineHeight: 18 }}>{tree.path} ↗</Text>
 												</Pressable>
 												<Text selectable style={{ color: colors.foregroundMuted, fontSize: 12 }}>{branch}</Text>
-												{tree.diffStat == null ? <Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>Native line counts unavailable for this checkout. Open its workspace, then select Changes to inspect the comparison.</Text> : null}
 												{tree.recordedOwner && data?.sessionId && data.runtimeEpoch ? (
 													<WorktreeOwner key={JSON.stringify([tree.path, data.sessionId, data.runtimeEpoch, tree.recordedOwner])}
 														host={host} agentId={agentId} workspaceId={workspaceId} theme={theme} layout={layout}
