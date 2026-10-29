@@ -6,7 +6,10 @@ export type AssignedTicket = Pick<DelegatedGoal, "text" | "status" | "summary"> 
   assigned: true;
   id: string;
   tasks: NonNullable<NonNullable<Snapshot["goal"]>["tasks"]>;
-  child?: never; revision?: never; story?: never; continuationLimits?: never;
+  child?: never; revision?: never; story?: never;
+  sourceGoalId?: string; policyRevision?: number;
+  continuationLimits?: DelegatedGoal["continuationLimits"];
+  effectiveLimits?: DelegatedGoal["continuationLimits"];
   waiting?: string | null; tokensUsed?: number; tokenBudget?: number | null;
   automaticTurns?: number; noProgressTurns?: number;
 };
@@ -17,7 +20,7 @@ export function assignedTickets(goal: Snapshot["goal"], completed: NonNullable<S
     status: item.status === "completed" ? "complete" : "cleared", summary: item.summary, tasks: item.tasks,
   }));
   if (goal) records.unshift({
-    ...goal, assigned: true, id: `assigned:${goal.id}`, tasks: goal.tasks ?? [],
+    ...goal, assigned: true, sourceGoalId: goal.id, id: `assigned:${goal.id}`, tasks: goal.tasks ?? [],
   });
   return records;
 }

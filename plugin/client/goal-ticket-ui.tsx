@@ -49,13 +49,16 @@ export function PressableRow({ colors, onSurface1 = false, transparentAtRest = t
     return [style, { backgroundColor: !hovered && !pressed && transparentAtRest ? "transparent" : tint }];
   }}>{children}</Pressable>;
 }
-export function StatusBadge({ colors, status }: { colors: Colors; status: DelegatedGoal["status"] }) {
+export function recordedGoalStatus(goal: { status: DelegatedGoal["status"]; waiting?: string | null }) {
+  return goal.status === "active" && goal.waiting ? "Waiting" : goalStatusLabels[goal.status];
+}
+export function StatusBadge({ colors, status, waiting }: { colors: Colors; status: DelegatedGoal["status"]; waiting?: string | null }) {
   const tone = status === "active" ? { fg: "#ffffff", bg: goalWorkingColor, border: goalWorkingColor }
     : status === "complete" ? { fg: colors.statusSuccess, bg: "transparent", border: colors.statusSuccess }
     : status === "blocked" || status === "budget_limited" || status === "usage_limited" ? { fg: colors.statusDanger, bg: "transparent", border: colors.statusDanger }
     : { fg: colors.foregroundMuted, bg: "transparent", border: colors.border };
   return <View style={{ alignSelf: "flex-start", borderWidth: 1, borderColor: tone.border, backgroundColor: tone.bg, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1 }}>
-    <Text style={{ color: tone.fg, fontSize: 11, lineHeight: 16 }}>{goalStatusLabels[status]}</Text>
+    <Text style={{ color: tone.fg, fontSize: 11, lineHeight: 16 }}>{recordedGoalStatus({ status, waiting })}</Text>
   </View>;
 }
 type TicketTasks = Array<{ id?: string; text: string; status: DelegatedGoal["tasks"][number]["status"] }>;
@@ -76,13 +79,13 @@ export function TaskBar({ colors, tasks }: { colors: Colors; tasks: TicketTasks 
     </View>
   </View>;
 }
-export function GoalTicketRow({ colors, goal, title, selected, onPress }: { colors: Colors; goal: { status: DelegatedGoal["status"]; tasks: TicketTasks }; title: string; selected: boolean; onPress(): void }) {
+export function GoalTicketRow({ colors, goal, title, selected, onPress }: { colors: Colors; goal: { status: DelegatedGoal["status"]; waiting?: string | null; tasks: TicketTasks }; title: string; selected: boolean; onPress(): void }) {
   return <PressableRow colors={colors} onSurface1={selected} transparentAtRest={!selected} accessibilityRole="button" accessibilityLabel={title} accessibilityState={{ selected }} onPress={onPress}
     style={{ flexDirection: "row", alignItems: "flex-start", gap: 10, paddingHorizontal: 10, paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.border, minHeight: 44 }}>
     <View style={{ width: 16, paddingTop: 2, alignItems: "center" }}><Icon name={goal.status === "complete" ? "Check" : goal.status === "active" ? "CirclePlay" : goal.status === "blocked" ? "Ban" : "CirclePause"} size={14} color={goal.status === "complete" ? colors.statusSuccess : goal.status === "active" ? goalWorkingColor : goal.status === "blocked" ? colors.statusDanger : colors.foregroundMuted} /></View>
     <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
       <Text numberOfLines={3} style={{ color: colors.foreground, fontSize: 13, lineHeight: 18 }}>{title}</Text>
-      <Text style={{ color: colors.foregroundMuted, fontSize: 12, lineHeight: 17 }}>{goalStatusLabels[goal.status]}{goal.tasks.length ? ` · ${taskCounts(goal.tasks).completed}/${goal.tasks.length} tasks` : ""}</Text>
+      <Text style={{ color: colors.foregroundMuted, fontSize: 12, lineHeight: 17 }}>{recordedGoalStatus(goal)}{goal.tasks.length ? ` · ${taskCounts(goal.tasks).completed}/${goal.tasks.length} tasks` : ""}</Text>
     </View>
     <View style={{ paddingTop: 2 }}><Icon name="ChevronRight" size={14} color={colors.foregroundMuted} /></View>
   </PressableRow>;

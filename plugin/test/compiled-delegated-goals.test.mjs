@@ -280,3 +280,44 @@ test('all three assignment groups share ticket UI; assigned goals and history st
  button(nodes,'Old assigned goal').props.onPress();nodes=h.draw(props);
  assert.ok(nodes.some(n=>n.props.children==='Recorded summary'));assert.equal(button(nodes,'Edit'),undefined);assert.deepEqual(calls,[]);
 });
+
+for (const assigned of [false,true]) for (const status of ['active','paused']) test(`dedicated limits editor preserves scope for ${assigned?'assigned':'delegated'} ${status} goals`,async()=>{
+ const h=harness(),calls=[],g=entry(`limits-${assigned}-${status}`,status);
+ Object.assign(g,{tokenBudget:500,tokensUsed:100,automaticTurns:8,noProgressTurns:3,continuationLimits:{automaticTurns:10,noProgressTurns:5},policyRevision:7,tasks:[{id:'keep',text:'Keep checklist',status:'in_progress'}]});
+ const props={registry:{version:1,revision:1,entries:assigned?[]:[g]},assignedGoal:assigned?g:null,colors,identity:`live-limits-${assigned}-${status}`,locked:false,busy:false,executionAvailable:true,limitsEditable:true,model:null,limits:{automaticTurns:null,noProgressTurns:null},post:async fields=>{calls.push(fields);return false;}};
+ let nodes=h.draw(props);if(button(nodes,g.text))button(nodes,g.text).props.onPress();else button(nodes,'Back to goals')?.props.onPress();nodes=h.draw(props);
+ if(!button(nodes,'Edit limits')){button(nodes,g.text).props.onPress();nodes=h.draw(props);}
+ assert.equal(button(nodes,'Edit limits').props.disabled,false);
+ assert.equal(nodes.filter(n=>n.type==='Text'&&n.props.children===g.text).length,1,'single-line objective is not repeated in Write-up');
+ assert.ok(nodes.some(n=>n.props.children==='Keep checklist'));
+ button(nodes,'Edit limits').props.onPress();nodes=h.draw(props);
+ assert.equal(textbox(nodes,'Goal objective'),undefined,'limits-only editor cannot submit scope changes');
+ textbox(nodes,'Goal token budget').props.onChangeText('50');textbox(nodes,'Goal automatic responses').props.onChangeText('2');textbox(nodes,'Goal no-progress responses').props.onChangeText('');
+ nodes=h.draw(props);button(nodes,'Save changes').props.onPress();await tick();
+ assert.deepEqual(calls[0],{operation:'start',action:assigned?'goal.limits':'goals.limits',expectedGoalId:g.id,
+  ...(assigned?{expectedPolicyRevision:7}:{expectedEntryRevision:2}),tokenBudget:50,continuationLimits:{automaticTurns:2,noProgressTurns:null}});
+ assert.equal(g.tokensUsed,100);assert.equal(g.automaticTurns,8);assert.equal(g.noProgressTurns,3);assert.equal(g.tasks.length,1);
+ if(assigned)g.policyRevision++;else g.revision++;
+ nodes=h.draw(props);assert.equal(button(nodes,'Save changes').props.disabled,true);button(nodes,'Save changes').props.onPress();await tick();assert.equal(calls.length,1);
+});
+
+test('recorded waiting is distinct from working; no assignment explanation is rendered',()=>{
+ const h=harness(),g=entry('waiting','active');g.waiting='Waiting for an external answer';
+ const props={registry:{version:1,revision:1,entries:[g]},colors,identity:'recorded-waiting',locked:false,busy:false,executionAvailable:true,limitsEditable:true,model:null,limits:{},post:async()=>false};
+ let nodes=h.draw(props);button(nodes,g.text).props.onPress();nodes=h.draw(props);
+ assert.ok(nodes.some(n=>n.type==='Text'&&n.props.children==='Waiting'));
+ assert.ok(!nodes.some(n=>n.type==='Text'&&n.props.children==='Working'));
+ assert.ok(!nodes.some(n=>typeof n.props.children==='string'&&/independent dedicated|assignment|Assign this goal/i.test(n.props.children)));
+ g.waiting=null;nodes=h.draw(props);assert.ok(nodes.some(n=>n.type==='Text'&&n.props.children==='Working'));
+ props.limitsEditable=false;nodes=h.draw(props);assert.equal(button(nodes,'Edit limits').props.disabled,true);
+});
+
+test('limit RPC schemas require exact policy routing and explicit nullable limits',()=>{
+ const base={operation:'start',action:'goal.limits',sessionId:'session',serviceEpoch:'11111111-1111-4111-8111-111111111111',requestId:'22222222-2222-4222-8222-222222222222',expectedGoalId:'assigned',expectedPolicyRevision:1,tokenBudget:null,continuationLimits:{automaticTurns:null,noProgressTurns:null}};
+ assert.equal(schemas.workflowRequestSchema.safeParse(base).success,true);
+ for(const field of ['expectedPolicyRevision','tokenBudget','continuationLimits']){const invalid={...base};delete invalid[field];assert.equal(schemas.workflowRequestSchema.safeParse(invalid).success,false,field);}
+ assert.equal(schemas.workflowRequestSchema.safeParse({...base,objective:'forbidden'}).success,false);
+ assert.equal(schemas.workflowRequestSchema.safeParse({...base,action:'goals.limits'}).success,false);
+ const {expectedPolicyRevision,...delegated}=base;
+ assert.equal(schemas.workflowRequestSchema.safeParse({...delegated,action:'goals.limits',expectedEntryRevision:2}).success,true);
+});

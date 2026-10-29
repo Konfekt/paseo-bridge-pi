@@ -35,7 +35,7 @@ export const workflowSnapshotSchema = z
 	.object({
 		protocol: z.literal(1),
 		capabilities: z
-			.object({ createPausedGoal: z.boolean().optional(), delegatedGoals: z.boolean().optional(), delegatedGoalExecution: z.boolean().optional() }).strict()
+			.object({ createPausedGoal: z.boolean().optional(), delegatedGoals: z.boolean().optional(), delegatedGoalExecution: z.boolean().optional(), goalLimitEditing: z.boolean().optional() }).strict()
 			.optional(),
 		delegatedGoals: z.object({ version: z.literal(1), revision: z.number().int().nonnegative(), entries: z.array(delegatedGoalEntrySchema).max(1000) }).strict().optional(),
 		sessionId: id,
@@ -101,6 +101,9 @@ export const workflowSnapshotSchema = z
 		goal: z
 			.object({
 				id,
+				policyRevision: z.number().int().positive().optional(),
+				continuationLimits: continuationLimitsSchema.optional(),
+				effectiveLimits: continuationLimitsSchema.optional(),
 				text: z.string().max(4000),
 				tasks: z
 					.array(
@@ -195,7 +198,7 @@ export const workflowRequestSchema = z.discriminatedUnion("operation", [
 			...base,
 			operation: z.literal("start"),
 			action: z.enum([
-				"goals.create", "goals.start", "goals.pause", "goals.resume", "goals.edit", "goals.clear", "goals.add_task", "goals.answer",
+				"goals.create", "goals.start", "goals.pause", "goals.resume", "goals.edit", "goals.limits", "goals.clear", "goals.add_task", "goals.answer",
 				"worktree.add",
 				"worktree.remove",
 				"worktree.prune",
@@ -203,6 +206,7 @@ export const workflowRequestSchema = z.discriminatedUnion("operation", [
 				"goal.start",
 				"goal.create_paused",
 				"goal.edit",
+				"goal.limits",
 				"goal.pause",
 				"goal.resume",
 				"goal.clear",
@@ -210,6 +214,7 @@ export const workflowRequestSchema = z.discriminatedUnion("operation", [
 			]),
 			expectedGoalId: id.nullable(),
 			expectedEntryRevision: z.number().int().positive().optional(),
+			expectedPolicyRevision: z.number().int().positive().optional(),
       questionId: z.string().min(1).max(128).optional(),
       questionRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
       workerEpoch: z.string().min(1).max(128).optional(),
@@ -240,10 +245,16 @@ export const workflowRequestSchema = z.discriminatedUnion("operation", [
 		.strict(),
 ]).superRefine((request, context) => {
 	if (request.operation !== "start") return;
-	if (request.tokenBudget === null && request.action !== "goals.edit") context.addIssue({ code: "custom", path: ["tokenBudget"], message: "Only delegated goal edits accept null to remove a cap" });
+	if (request.tokenBudget === null && !["goals.edit", "goals.limits", "goal.limits"].includes(request.action)) context.addIssue({ code: "custom", path: ["tokenBudget"], message: "Only delegated goal edits accept null to remove a cap" });
   const questionFields = [request.questionId, request.questionRevision, request.workerEpoch, request.answer];
   if (request.action === "goals.answer" ? questionFields.some(value => value === undefined) : questionFields.some(value => value !== undefined))
     context.addIssue({ code: "custom", path: ["answer"], message: "Question answers require exact request identity and the goals.answer action" });
+	if (["goal.limits", "goals.limits"].includes(request.action)) {
+		if (request.expectedGoalId === null || request.tokenBudget === undefined || request.continuationLimits === undefined || request.objective !== undefined || request.text !== undefined)
+			context.addIssue({ code: "custom", message: "Limit edits require identity and explicit limits, without objective or checklist edits" });
+	}
+	if (request.action === "goal.limits" ? request.expectedPolicyRevision === undefined || request.expectedEntryRevision !== undefined || request.expectedRegistryRevision !== undefined : request.expectedPolicyRevision !== undefined)
+		context.addIssue({ code: "custom", path: ["expectedPolicyRevision"], message: "Assigned limit edits require an exact policy revision" });
 	if (!request.action.startsWith("goals.")) return;
 	if (request.action === "goals.create") {
 		if (request.expectedGoalId !== null || request.expectedEntryRevision !== undefined) context.addIssue({ code: "custom", path: ["expectedGoalId"], message: "Create requires null goal identity" });

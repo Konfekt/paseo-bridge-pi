@@ -20,13 +20,14 @@ const {serverBundle}=await compilePlugin({server:fileURLToPath(new URL('../index
 test('compiled delegated controls cross the real private bridge with session/runtime/workspace fences',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'delegated-bridge-'));
  const identity={agentId:'isolated-agent',sessionId:'isolated-session',serviceEpoch:randomUUID(),runtimeEpoch:randomUUID(),capability:'d'.repeat(64)};
- const snapshot={protocol:1,sessionId:identity.sessionId,serviceEpoch:identity.serviceEpoch,cwd:dir,model:'fixture/gpt-6.1-sol',idle:false,busy:false,notice:null,operationId:null,operationAction:null,protectedPaths:[],dialog:null,worktrees:[],worktreeError:null,worktreeLoading:false,goal:null,lastCompletion:null,completedGoals:[],limits:{automaticTurns:3,noProgressTurns:2},capabilities:{createPausedGoal:false,delegatedGoals:true,delegatedGoalExecution:true},delegatedGoals:{version:1,revision:0,entries:[]}};
+ const snapshot={protocol:1,sessionId:identity.sessionId,serviceEpoch:identity.serviceEpoch,cwd:dir,model:'fixture/gpt-6.1-sol',idle:false,busy:false,notice:null,operationId:null,operationAction:null,protectedPaths:[],dialog:null,worktrees:[],worktreeError:null,worktreeLoading:false,goal:null,lastCompletion:null,completedGoals:[],limits:{automaticTurns:3,noProgressTurns:2},capabilities:{createPausedGoal:false,delegatedGoals:true,delegatedGoalExecution:true,goalLimitEditing:true},delegatedGoals:{version:1,revision:0,entries:[]}};
  const received=[];
  const endpoint=createBtwEndpoint(join(dir,'bridge'),()=>({btwIdentity:()=>identity,btw:async request=>{
   received.push(request);
   if(request.sessionId!==identity.sessionId||request.serviceEpoch!==identity.serviceEpoch)throw Error('Stale fixture service identity');
   if(request.operation==='snapshot')return snapshot;
   if(request.action==='goals.edit')throw Error('Metadata edit rejected by the core service');
+  if(['goals.limits','goal.limits'].includes(request.action))return snapshot;
   assert.equal(request.action,'goals.create');assert.equal(request.expectedGoalId,null);
   snapshot.delegatedGoals.entries.push({id:randomUUID(),revision:1,text:request.objective,status:'paused',tasks:[],child:null,tokenBudget:null,tokensUsed:0,automaticTurns:0,noProgressTurns:0,summary:null,waiting:null});
   snapshot.delegatedGoals.revision++;
@@ -49,6 +50,12 @@ test('compiled delegated controls cross the real private bridge with session/run
   assert.equal(result.snapshot.goal,null);assert.equal(result.snapshot.idle,false);
   await assert.rejects(invoke('workflows_control',{...input,request:{...input.request,requestId:randomUUID(),action:'goals.edit',expectedGoalId:result.snapshot.delegatedGoals.entries[0].id,expectedEntryRevision:1,objective:'Do not apply this rejected edit'}}),/request failed/);
   assert.equal(snapshot.delegatedGoals.entries[0].text,input.request.objective,'core metadata rejection must not be presented as an applied mutation');
+  const limits={...input.request,requestId:randomUUID(),action:'goals.limits',objective:undefined,expectedGoalId:result.snapshot.delegatedGoals.entries[0].id,expectedEntryRevision:1,tokenBudget:null,continuationLimits:{automaticTurns:2,noProgressTurns:null}};
+  const updated=await invoke('workflows_control',{...input,request:limits});assert.equal(updated.snapshot.capabilities.goalLimitEditing,true);
+  assert.equal(received.at(-1).action,'goals.limits');assert.equal(received.at(-1).expectedEntryRevision,1);assert.equal(received.at(-1).tokenBudget,null);
+  snapshot.goal={id:'assigned-contract',text:'Keep assigned objective',status:'active',tasks:[],waiting:null,iteration:1,tokensUsed:100,tokenBudget:null,automaticTurns:8,noProgressTurns:3,safetyPauseCause:null,summary:null,policyRevision:7,continuationLimits:{automaticTurns:10},effectiveLimits:{automaticTurns:10,noProgressTurns:2}};
+  const assigned=await invoke('workflows_control',{...input,request:{...limits,requestId:randomUUID(),action:'goal.limits',expectedGoalId:'assigned-contract',expectedEntryRevision:undefined,expectedPolicyRevision:7}});
+  assert.equal(assigned.snapshot.goal.policyRevision,7);assert.equal(received.at(-1).action,'goal.limits');assert.equal(received.at(-1).expectedPolicyRevision,7);
   const count=received.length;
   await assert.rejects(invoke('workflows_control',{...input,expectedRuntimeEpoch:randomUUID()}));
   await assert.rejects(invoke('workflows_control',{...input,request:{...input.request,serviceEpoch:randomUUID()}}));
