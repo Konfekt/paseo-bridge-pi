@@ -37,7 +37,9 @@ selection, draft persistence and lifecycle protections remain bridge-owned.
 - `version: 1`, `timeline` and `activity`, at most 200 records each.
 - Durable record IDs (at most 128 characters), Unix-millisecond `at`, and explicit
   producer text (at most 4000 characters). Timeline has an enumerated lifecycle
-  or task kind and optional task ID.
+  or task kind, optional task ID and explicit task status for transition colors.
+  Completed indicators/segments use green, active work blue, blockers coral;
+  task history is never classified by parsing its prose.
 - Optional `questions`, at most 100. Each record has durable ID, revision,
   worker epoch, timestamp, status, the existing **questionnaire-only** request
   DTO, and optional recorded answer/answer time.

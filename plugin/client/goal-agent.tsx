@@ -6,8 +6,8 @@ import { Text, View } from "react-native";
 import { useAgent, useRpc, type PluginAgentPanelProps } from "@getpaseo/plugin/client";
 import { harnessStatusRpc, harnessSubagentsListRpc, harnessSubagentRouteRpc } from "../shared/harness-readonly";
 import { recordedAgentDisplayName, type WorktreeAgentEvidence } from "../shared/worktree-agent";
-import { goalAgentRoute } from "../shared/goal-agent";
-import { PressableRow } from "./goal-ticket-ui";
+import { goalAgentRoute, goalAgentEvidence } from "../shared/goal-agent";
+import { PressableRow, goalWorkingColor } from "./goal-ticket-ui";
 import type { DelegatedGoal } from "./delegated-goals";
 
 type Props = Pick<PluginAgentPanelProps, "host" | "agentId" | "workspaceId" | "theme"> & {
@@ -34,8 +34,8 @@ export function GoalAgent({ child, sessionId, runtimeEpoch, onOpenAgent, ...prop
         items.push(...result.items); cursor = result.nextCursor; if (!cursor) break;
       }
       const request = goalAgentRoute(child, root, items, !cursor);
-      const item = request && items.find(item => item.taskId === request.taskId && item.childId === request.childId && (item.source ?? root).sessionId === sessionId);
-      return request && item ? { request, item } : null;
+      const item = goalAgentEvidence(child, root, items, !cursor);
+      return item ? { request, item } : null;
     }, refetchInterval: 5000, staleTime: 0,
   });
   const evidence = !query.isError ? query.data : null;
@@ -56,13 +56,14 @@ export function GoalAgent({ child, sessionId, runtimeEpoch, onOpenAgent, ...prop
     } catch { if (mounted.current && current.current === requestKey) setError("Chat unavailable. Try again."); }
     finally { if (mounted.current) setPending(false); }
   }
-  const state = evidence?.item.status;
+  const observed = evidence?.item;
+  const state = observed?.reaped && !["completed", "failed", "cancelled", "lost", "reaped"].includes(observed.status) ? undefined : observed?.status;
   const label = state ? ({ running: "Running", completed: "Completed", failed: "Failed", lost: "Lost", cancelled: "Stopped" }[state] ?? state) : "Status unknown";
   const rowStyle = { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 3, paddingHorizontal: 6, marginHorizontal: -6, borderRadius: 4, minHeight: 44 } as const;
   const content = <>
-      <View accessibilityLabel={label} style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: state === "running" ? colors.accent : state === "failed" || state === "lost" ? colors.statusDanger : colors.foregroundMuted }} />
-      <Text numberOfLines={2} style={{ flexShrink: 1, color: colors.foregroundMuted, fontSize: 12, lineHeight: 17 }}>{name ?? names.get(identity) ?? "Agent"}</Text>
-      <Text style={{ color: colors.foregroundMuted, fontSize: 11 }}>{state ? label : ""}</Text>
+      <View accessibilityLabel={label} style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: state === "running" ? goalWorkingColor : state === "completed" ? colors.statusSuccess : state === "failed" || state === "lost" ? colors.statusDanger : colors.foregroundMuted }} />
+      <Text numberOfLines={2} style={{ flexShrink: 1, color: colors.foreground, fontSize: 13, lineHeight: 19 }}>{name ?? names.get(identity) ?? "Goal agent"}</Text>
+      <Text style={{ color: state === "completed" ? colors.statusSuccess : colors.foregroundMuted, fontSize: 12 }}>{state ? label : ""}</Text>
       <View style={{ flex: 1 }} />
       {request && onOpenAgent ? <Text style={{ color: colors.foregroundMuted, fontSize: 12, lineHeight: 17, fontWeight: "500" }}>{pending ? "Opening…" : "Open chat"}</Text> : null}
     </>;

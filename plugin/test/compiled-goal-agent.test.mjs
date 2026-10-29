@@ -34,16 +34,18 @@ test('Goals assigned-agent row retains known canonical identity, omits unavailab
   return require(name);
  };
  const {GoalAgent}=(0,eval)(clientBundle)(load);
- const props={child,sessionId:'session',runtimeEpoch:'epoch',host:{id:'host'},agentId:'parent',workspaceId:'workspace',theme:{colors:{}},onOpenAgent:id=>opened.push(id)};
+ const props={child,sessionId:'session',runtimeEpoch:'epoch',host:{id:'host'},agentId:'parent',workspaceId:'workspace',theme:{colors:{statusSuccess:'#63b887'}},onOpenAgent:id=>opened.push(id)};
  const nodes=n=>!n||typeof n!=='object'?[]:[n,...[n.props?.children].flat(Infinity).flatMap(nodes)];
  const draw=(extra={})=>{cursor=0;refCursor=0;return nodes(GoalAgent({...props,...extra}));};
  const button=all=>all.find(n=>n.type==='Pressable');const settle=()=>new Promise(resolve=>setImmediate(resolve));
  async function setup(extra={}){slots=[];refs.length=0;bound={available:true,sessionId:'session',runtimeEpoch:'epoch'};inventory={state:'available',sessionId:'session',stale:false,hierarchyPartial:false,items:[item],...extra};query={isError:false,isFetching:false};draw();query.data=await options.queryFn();}
  await setup();let all=draw();assert.ok(all.some(n=>n.props.children==='Map Review'));button(all).props.onPress();await settle();
  assert.deepEqual(opened,['verified-child']);assert.deepEqual(calls[0],{agentId:'parent',workspaceId:'workspace',expectedSessionId:'session',expectedRuntimeEpoch:'epoch',taskId:child.taskId,childId:child.childId,groupId:child.jobId,runtimeId:'runtime',attempt:2});
- for(const extra of [{items:[]},{hierarchyPartial:true},{stale:true},{items:[{...item,attempt:1}]},{items:[{...item,reaped:true}]},{items:[{...item,stale:true}]},{items:[{...item,paseoAgentId:undefined}]},{items:[item,item]}]){
+ for(const extra of [{items:[]},{hierarchyPartial:true},{stale:true},{items:[{...item,attempt:1}]},{items:[{...item,reaped:true}]},{items:[{...item,stale:true}]},{items:[item,item]}]){
   await setup(extra);all=draw();assert.equal(button(all),undefined);assert.ok(all.some(n=>n.props.children==='Map Review'),'previously known name is retained without running status');assert.ok(!all.some(n=>n.props.children==='Running'||n.props.accessibilityLabel==='Open chat'));
  }
+ await setup({items:[{...item,paseoAgentId:undefined}]});all=draw();assert.equal(button(all),undefined);assert.ok(all.some(n=>n.props.children==='Running'),'verified execution status does not require an available chat');
+ await setup({items:[{...item,status:'completed',reaped:true,runtimeId:null,paseoAgentId:undefined,paseoWorkspaceId:undefined}]});all=draw();assert.equal(button(all),undefined);assert.ok(all.some(n=>n.props.accessibilityLabel==='Completed'&&n.props.style.backgroundColor==='#63b887'),'completed assigned agents remain green without a live chat');
  await setup();query.isError=true;assert.equal(button(draw()),undefined);
  await setup();bound.runtimeEpoch='replacement';query.data=await options.queryFn();assert.equal(button(draw()),undefined);
  await setup();rejectRoute=true;button(draw()).props.onPress();await settle();assert.ok(draw().some(n=>n.props.accessibilityRole==='alert'));assert.deepEqual(opened,['verified-child']);

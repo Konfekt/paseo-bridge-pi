@@ -11,6 +11,7 @@ export const goalStatusLabels: Record<DelegatedGoal["status"], string> = {
   paused: "Paused", active: "Working", blocked: "Blocked", usage_limited: "Usage limit reached",
   budget_limited: "Budget reached", complete: "Completed", cleared: "Cleared",
 };
+export const goalWorkingColor = "#3d73d5";
 export type StoryTab = "write-up" | "timeline" | "activity" | "questions";
 export interface TabEntry<Id extends string> { id: Id; label: string; icon?: string | null; count?: number }
 
@@ -30,8 +31,8 @@ function Tab<Id extends string>({ colors, narrow, entry, selected, onPress }: { 
   return <Pressable accessibilityRole="tab" accessibilityLabel={entry.label} accessibilityState={{ selected }} aria-selected={selected} onPress={onPress}
     onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
     style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: narrow ? 4 : 6, paddingTop: 8, paddingBottom: 6, minHeight: 44, marginBottom: -1,
-      borderBottomWidth: 2, borderBottomColor: selected ? colors.accent : pressed || hovered ? colors.border : "transparent" })}>
-    {!narrow && entry.icon ? <Icon name={entry.icon} size={14} color={selected ? colors.accent : colors.foregroundMuted} /> : null}
+      borderBottomWidth: 2, borderBottomColor: selected ? goalWorkingColor : pressed || hovered ? colors.border : "transparent" })}>
+    {!narrow && entry.icon ? <Icon name={entry.icon} size={14} color={selected ? goalWorkingColor : colors.foregroundMuted} /> : null}
     <Text style={{ color: selected || hovered ? colors.foreground : colors.foregroundMuted, fontSize: 13, lineHeight: 18, fontWeight: "600" }}>{entry.label}</Text>
     {!narrow && entry.count !== undefined ? <View style={{ minWidth: 16, paddingHorizontal: 4, borderRadius: 4, alignItems: "center", backgroundColor: colors.surface2 }}>
       <Text style={{ color: selected ? colors.foreground : colors.foregroundMuted, fontSize: 10, lineHeight: 14, fontWeight: "600", fontVariant: ["tabular-nums"] }}>{entry.count}</Text>
@@ -49,7 +50,7 @@ export function PressableRow({ colors, onSurface1 = false, transparentAtRest = t
   }}>{children}</Pressable>;
 }
 export function StatusBadge({ colors, status }: { colors: Colors; status: DelegatedGoal["status"] }) {
-  const tone = status === "active" ? { fg: colors.accentForeground, bg: colors.accent, border: colors.accent }
+  const tone = status === "active" ? { fg: "#ffffff", bg: goalWorkingColor, border: goalWorkingColor }
     : status === "complete" ? { fg: colors.statusSuccess, bg: "transparent", border: colors.statusSuccess }
     : status === "blocked" || status === "budget_limited" || status === "usage_limited" ? { fg: colors.statusDanger, bg: "transparent", border: colors.statusDanger }
     : { fg: colors.foregroundMuted, bg: "transparent", border: colors.border };
@@ -60,15 +61,15 @@ export function StatusBadge({ colors, status }: { colors: Colors; status: Delega
 export function taskCounts(tasks: DelegatedGoal["tasks"]) {
   return { total: tasks.length, completed: tasks.filter(task => task.status === "completed").length, blocked: tasks.filter(task => task.status === "blocked").length };
 }
-export const taskTones = { completed: "#3d73d5", in_progress: "#779cde", blocked: "#c98279", pending: "#30333f" } as const;
+export const taskTones = { completed: "#63b887", in_progress: "#779cde", blocked: "#c98279", pending: "#30333f" } as const;
 export function TaskBar({ colors, tasks }: { colors: Colors; tasks: DelegatedGoal["tasks"] }) {
   if (!tasks.length) return null;
   const { total, completed, blocked } = taskCounts(tasks);
   const label = `${completed} of ${total} tasks complete${blocked ? ` · ${blocked} blocked` : ""}`;
   return <View style={{ gap: 8 }}>
-    <Text accessibilityLiveRegion="polite" style={{ color: colors.foregroundMuted, fontSize: 12, lineHeight: 18, fontVariant: ["tabular-nums"] }}>{label}</Text>
+    <Text accessibilityLiveRegion="polite" accessibilityLabel={label} style={{ color: colors.foregroundMuted, fontSize: 13, lineHeight: 18, fontVariant: ["tabular-nums"] }}><Text style={{ color: colors.foreground, fontWeight: "600" }}>{completed} of {total}</Text> tasks complete{blocked ? <Text style={{ color: taskTones.blocked }}> · {blocked} blocked</Text> : null}</Text>
     <View accessibilityRole="progressbar" accessibilityLabel={label} accessibilityValue={{ min: 0, max: total, now: completed, text: label }} aria-valuemin={0} aria-valuemax={total} aria-valuenow={completed} aria-valuetext={label}
-      style={{ height: 4, borderRadius: 2, overflow: "hidden", flexDirection: "row", gap: 2, backgroundColor: colors.surface2 }}>
+      style={{ height: 8, borderRadius: 4, overflow: "hidden", flexDirection: "row", gap: 2, backgroundColor: colors.surface2 }}>
       {tasks.map(task => <View key={task.id} accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
         style={{ flex: 1, backgroundColor: taskTones[task.status] }} />)}
     </View>
@@ -77,7 +78,7 @@ export function TaskBar({ colors, tasks }: { colors: Colors; tasks: DelegatedGoa
 export function GoalTicketRow({ colors, goal, title, selected, onPress }: { colors: Colors; goal: DelegatedGoal; title: string; selected: boolean; onPress(): void }) {
   return <PressableRow colors={colors} onSurface1={selected} transparentAtRest={!selected} accessibilityRole="button" accessibilityLabel={title} accessibilityState={{ selected }} onPress={onPress}
     style={{ flexDirection: "row", alignItems: "flex-start", gap: 10, paddingHorizontal: 10, paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.border, minHeight: 44 }}>
-    <View style={{ width: 16, paddingTop: 2, alignItems: "center" }}><Icon name={goal.status === "complete" ? "Check" : goal.status === "active" ? "CirclePlay" : goal.status === "blocked" ? "Ban" : "CirclePause"} size={14} color={goal.status === "blocked" ? colors.statusDanger : colors.foregroundMuted} /></View>
+    <View style={{ width: 16, paddingTop: 2, alignItems: "center" }}><Icon name={goal.status === "complete" ? "Check" : goal.status === "active" ? "CirclePlay" : goal.status === "blocked" ? "Ban" : "CirclePause"} size={14} color={goal.status === "complete" ? colors.statusSuccess : goal.status === "active" ? goalWorkingColor : goal.status === "blocked" ? colors.statusDanger : colors.foregroundMuted} /></View>
     <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
       <Text numberOfLines={3} style={{ color: colors.foreground, fontSize: 13, lineHeight: 18 }}>{title}</Text>
       <Text style={{ color: colors.foregroundMuted, fontSize: 12, lineHeight: 17 }}>{goalStatusLabels[goal.status]}{goal.tasks.length ? ` · ${taskCounts(goal.tasks).completed}/${goal.tasks.length} tasks` : ""}</Text>
@@ -87,10 +88,10 @@ export function GoalTicketRow({ colors, goal, title, selected, onPress }: { colo
 }
 
 // TicketStoryView's log rows, without elapsed-time guesses, inferred links or animation.
-export function StoryLog({ colors, entries, timeline = false }: { colors: Colors; entries: Array<{ id: string; at: number; text: string; kind?: string }>; timeline?: boolean }) {
+export function StoryLog({ colors, entries, timeline = false }: { colors: Colors; entries: Array<{ id: string; at: number; text: string; kind?: string; taskStatus?: string }>; timeline?: boolean }) {
   if (!entries.length) return <Text style={{ color: colors.foregroundMuted, fontSize: 13, lineHeight: 19 }}>{timeline ? "No recorded timeline yet" : "No progress updates yet"}</Text>;
   return <View>{entries.map(entry => <View key={entry.id} style={{ flexDirection: "row", alignItems: "flex-start", gap: timeline ? 6 : 12, paddingVertical: 6 }}>
-    {timeline ? <View style={{ width: 14, alignItems: "center", paddingTop: 3 }}><Icon name={entry.kind === "created" ? "CirclePlus" : entry.kind === "completed" ? "CircleCheck" : entry.kind === "blocked" ? "Ban" : "CircleDot"} size={12} color={entry.kind === "blocked" ? colors.statusDanger : colors.foregroundMuted} /></View> : null}
+    {timeline ? <View style={{ width: 14, alignItems: "center", paddingTop: 3 }}><Icon name={entry.kind === "created" ? "CirclePlus" : entry.kind === "completed" || entry.taskStatus === "completed" ? "CircleCheck" : entry.kind === "blocked" || entry.taskStatus === "blocked" ? "Ban" : "CircleDot"} size={12} color={entry.kind === "completed" || entry.taskStatus === "completed" ? colors.statusSuccess : entry.kind === "blocked" || entry.taskStatus === "blocked" ? colors.statusDanger : entry.kind === "started" || entry.kind === "resumed" || entry.taskStatus === "in_progress" ? goalWorkingColor : colors.foregroundMuted} /></View> : null}
     <Text selectable style={{ flex: 1, minWidth: 0, color: colors.foreground, fontSize: 13, lineHeight: 19 }}>{entry.text}</Text>
     <Text accessibilityLabel={new Date(entry.at).toLocaleString()} style={{ color: colors.foregroundMuted, fontSize: 12, lineHeight: 19, fontVariant: ["tabular-nums"] }}>{new Date(entry.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</Text>
   </View>)}</View>;

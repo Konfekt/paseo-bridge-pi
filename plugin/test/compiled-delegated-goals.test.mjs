@@ -17,7 +17,7 @@ await writeFile(resolve(fixture,'index.client.tsx'),'export { DelegatedGoals } f
 await writeFile(resolve(fixture,'index.server.ts'),'import { goalStorySchema, workflowRequestSchema } from "./shared/workflows"; export default function schemas() { return { goalStorySchema, workflowRequestSchema }; }');
 const {clientBundle,serverBundle}=await compilePlugin({client:resolve(fixture,'index.client.tsx'),server:resolve(fixture,'index.server.ts')});
 const schemas=(0,eval)(serverBundle)(name=>name==='@getpaseo/plugin'?{defineRpc:value=>value}:require(name)).default();
-const colors={foreground:'#eee',foregroundMuted:'#999',surface1:'#222',surface2:'#333',border:'#444',accent:'#eee',accentForeground:'#111',statusWarning:'#fa0',statusDanger:'#f66'};
+const colors={foreground:'#eee',foregroundMuted:'#999',surface1:'#222',surface2:'#333',border:'#444',accent:'#eee',accentForeground:'#111',statusWarning:'#fa0',statusDanger:'#f66',statusSuccess:'#63b887'};
 function harness() {
  const states=new Map();let context;
  const jsx=(type,props)=>({type,props:props??{}});
@@ -212,13 +212,17 @@ for (const width of [390, 1100]) test(`assignment lists are independent of statu
 test('copied ticket UI renders exactly four real tabs and equal ordered task segments without time guesses',()=>{
  const h=harness(),g=entry('story','active');
  g.tasks=['completed','in_progress','blocked','pending'].map((status,i)=>({id:`t${i}`,text:`Task ${i}`,status}));
- g.story={version:1,timeline:[{id:'created',at:1700000000000,kind:'created',text:'Created from a durable record'}],activity:[{id:'note',at:1700000060000,text:'Explicit progress report'}],questions:[]};
+ g.story={version:1,timeline:[{id:'created',at:1700000000000,kind:'created',text:'Created from a durable record'},{id:'task-done',at:1700000001000,kind:'task',taskId:'t0',taskStatus:'completed',text:'Task completed'}],activity:[{id:'note',at:1700000060000,text:'Explicit progress report'}],questions:[]};
  const props={registry:{version:1,revision:1,entries:[g]},colors,identity:'story-counts',locked:false,busy:false,executionAvailable:true,model:null,limits:{},post:async()=>false};
  let nodes=h.draw(props);button(nodes,g.text).props.onPress();nodes=h.draw(props);
  const tabs=nodes.filter(n=>n.props.accessibilityRole==='tab');assert.deepEqual(tabs.map(n=>n.props.accessibilityLabel),['Write-up','Timeline','Activity','Questions']);
  const bar=nodes.find(n=>n.props.accessibilityRole==='progressbar');assert.deepEqual(bar.props.accessibilityValue,{min:0,max:4,now:1,text:'1 of 4 tasks complete · 1 blocked'});
- assert.deepEqual(bar.props.children.map(n=>n.props.style),['#3d73d5','#779cde','#c98279','#30333f'].map(backgroundColor=>({flex:1,backgroundColor})));
+ assert.deepEqual(bar.props.children.map(n=>n.props.style),['#63b887','#779cde','#c98279','#30333f'].map(backgroundColor=>({flex:1,backgroundColor})));
+ assert.ok(nodes.some(n=>n.type==='Icon'&&n.props.name==='Check'&&n.props.color===colors.statusSuccess),'completed checklist checks are green');
+ assert.ok(nodes.some(n=>n.type==='Icon'&&n.props.name==='Ban'&&n.props.color===colors.statusDanger),'blocked checklist uses danger rather than warning');
+ assert.ok(nodes.some(n=>n.props.children==='Task 0'&&n.props.style.color===colors.foreground),'completed titles remain readable');
  tabs[1].props.onPress();nodes=h.draw(props);assert.ok(nodes.some(n=>n.props.children==='Created from a durable record'));
+ assert.ok(nodes.some(n=>n.type==='Icon'&&n.props.name==='CircleCheck'&&n.props.color===colors.statusSuccess),'recorded task completion is green without parsing prose');
  h.remount();nodes=h.draw(props);assert.equal(nodes.find(n=>n.props.accessibilityRole==='tab'&&n.props.accessibilityLabel==='Timeline').props.accessibilityState.selected,true);
  nodes.find(n=>n.props.accessibilityRole==='tab'&&n.props.accessibilityLabel==='Activity').props.onPress();nodes=h.draw(props);assert.ok(nodes.some(n=>n.props.children==='Explicit progress report'));
  g.story=undefined;nodes=h.draw(props);assert.ok(nodes.some(n=>n.props.children==='No progress updates yet'));

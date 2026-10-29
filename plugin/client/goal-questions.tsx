@@ -9,7 +9,7 @@ import type { z } from "zod";
 import type { goalQuestionSchema } from "../shared/workflows";
 import type { questionnaireAnswerSchema } from "../shared/foreground-tasks";
 import { Metadata, NativeButton, type PresentationColors } from "./presentation";
-import { PressableRow } from "./goal-ticket-ui";
+import { PressableRow, goalWorkingColor } from "./goal-ticket-ui";
 export type GoalQuestion = z.infer<typeof goalQuestionSchema>;
 export type GoalAnswer = z.infer<typeof questionnaireAnswerSchema>;
 type Draft = { revision: number; values: Record<string, string> };
@@ -60,8 +60,8 @@ function QuestionCard({ colors, question, identity, revision, disabled, onAnswer
           const chosen = pending ? draft.values[item.id] === option.value : answer?.value === option.value;
           return <PressableRow key={option.value} colors={colors} accessibilityRole="radio" accessibilityLabel={option.label} accessibilityState={{ checked: chosen, disabled: !pending || locked }} aria-checked={chosen} disabled={!pending || locked}
             onPress={() => save({ ...draft, values: { ...draft.values, [item.id]: option.value } })}
-            style={{ flexDirection: "row", alignItems: "flex-start", gap: 8, padding: 10, minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: chosen ? pending ? colors.accent : colors.statusSuccess : colors.border }}>
-            <Text style={{ color: chosen ? colors.accent : colors.foregroundMuted, fontSize: 13 }}>{chosen ? "●" : "○"}</Text>
+            style={{ flexDirection: "row", alignItems: "flex-start", gap: 8, padding: 10, minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: chosen ? pending ? goalWorkingColor : colors.statusSuccess : colors.border }}>
+            <Text style={{ color: chosen ? pending ? goalWorkingColor : colors.statusSuccess : colors.foregroundMuted, fontSize: 13 }}>{chosen ? "●" : "○"}</Text>
             <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
               <Text style={{ color: colors.foreground, fontSize: 13, lineHeight: 18 }}>{option.label}{!pending && chosen ? " · Your answer" : ""}</Text>
               {option.description ? <Text style={{ color: colors.foregroundMuted, fontSize: 12, lineHeight: 17 }}>{option.description}</Text> : null}
@@ -78,7 +78,7 @@ function QuestionCard({ colors, question, identity, revision, disabled, onAnswer
     {stale ? <View style={{ gap: 8 }}><Metadata colors={colors} alert>This goal changed. Review the latest question before answering.</Metadata>
       <NativeButton colors={colors} label="Review latest question" onPress={() => save({ revision, values: {} })} disabled={disabled || sending} /></View> : null}
     {pending ? <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-      <NativeButton colors={colors} primary label="Submit answers" disabled={locked || !valid} onPress={() => void submit(false)} style={{ minHeight: 44 }} />
+      <NativeButton colors={{ ...colors, accent: goalWorkingColor, accentForeground: "#ffffff" }} primary label="Submit answers" disabled={locked || !valid} onPress={() => void submit(false)} style={{ minHeight: 44 }} />
       <NativeButton colors={colors} label="Cancel questions" disabled={locked} onPress={() => void submit(true)} style={{ minHeight: 44 }} />
     </View> : <Text style={{ color: colors.foregroundMuted, fontSize: 12, lineHeight: 17 }}>{question.status === "cancelled" ? "Cancelled" : "Answered"}{question.answeredAt !== undefined ? ` · ${new Date(question.answeredAt).toLocaleString()}` : ""}</Text>}
   </View>;

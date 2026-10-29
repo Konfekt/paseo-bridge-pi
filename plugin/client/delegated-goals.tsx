@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore, type ReactNode } from "react";
-import { GoalTicketRow, StatusBadge, TaskBar, TabStrip, StoryLog, type StoryTab } from "./goal-ticket-ui";
+import { GoalTicketRow, StatusBadge, TaskBar, TabStrip, StoryLog, goalWorkingColor, type StoryTab } from "./goal-ticket-ui";
 import { Text, View } from "react-native";
 import { TextInput } from "@getpaseo/plugin/client/react-native";
 import { Icon, Modal } from "@getpaseo/plugin/client/ui";
@@ -140,7 +140,7 @@ export function DelegatedGoals({ registry, colors, identity, locked, busy, execu
     return !!(await post({ operation: "start", action: `goals.${name}`, expectedGoalId: goal?.id ?? null,
       expectedEntryRevision: goal?.revision, ...fields }));
   }
-  const button = (label: string, onPress: () => void, isDisabled = disabled) => <NativeButton colors={colors} danger={label === "Clear goal"} primary={label === "Start" || label === "Resume"} label={label} onPress={onPress} disabled={isDisabled} style={{ minHeight: 44, alignSelf: "flex-start" }} />;
+  const button = (label: string, onPress: () => void, isDisabled = disabled) => <NativeButton colors={colors} danger={label === "Clear goal"} primary={label === "Start" || label === "Resume"} label={label} onPress={onPress} disabled={isDisabled} style={{ minHeight: 44, alignSelf: "flex-start", ...(!["Start", "Resume", "Clear goal"].includes(label) ? { backgroundColor: "transparent" } : {}) }} />;
   return <View onLayout={event => setWidth(event.nativeEvent.layout.width)} style={{ minWidth: 0, minHeight: 480 }}>
     <View style={{ flexDirection: wide ? "row" : "column", minWidth: 0, alignItems: "stretch" }}>
       {showList ? <View style={{ width: wide ? 320 : "100%", flexShrink: 0, padding: 16, gap: 16,
@@ -195,13 +195,13 @@ export function DelegatedGoals({ registry, colors, identity, locked, busy, execu
             <TaskBar colors={colors} tasks={goal.tasks} />
             {goal.waiting ? <Text accessibilityLiveRegion="polite" style={{ color: colors.foregroundMuted, fontSize: 13, lineHeight: 19 }}>{goal.waiting}</Text> : null}
             {renderAgent?.(goal)}
-          </View>
           {!terminal(goal) ? <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
             {goal.status === "active" ? button("Pause", () => { void action("pause"); }, disabled) : button(goal.child ? "Resume" : "Start", () => { void action(goal.child ? "resume" : "start"); }, disabled || !executionAvailable || budgetExhausted)}
             {button("Edit", () => { setSelected(goal.id); setEditing(true); }, disabled || goal.status === "active")}
             {button(limitsOpen ? "Hide limits" : "Limits", () => { setSelected(goal.id); setLimitsOpen(!limitsOpen); }, false)}
             {button("Clear", () => { setSelected(goal.id); setClearRevision(goal.revision); setClearConfirm(true); }, disabled || goal.status === "active")}
           </View> : null}
+          </View>
           {!executionAvailable && !terminal(goal) ? <Metadata colors={colors}>Start and Resume are unavailable in this session</Metadata> : budgetExhausted && goal.status !== "active" && !terminal(goal) ? <Metadata colors={colors}>Raise or remove the token budget before resuming</Metadata> : null}
           {clearConfirm ? <Modal title="Clear goal?" open onOpenChange={setClearConfirm}><Modal.Content><View style={{ gap: 16 }}>
             <Text selectable style={{ color: colors.foreground, fontSize: 14, lineHeight: 20 }}>{goal.text}</Text>
@@ -238,10 +238,10 @@ export function DelegatedGoals({ registry, colors, identity, locked, busy, execu
               <Text style={{ color: colors.foreground, fontSize: 14, fontWeight: "500", flex: 1 }}>Checklist</Text>
               <Metadata colors={colors}>{goal.tasks.filter(task => task.status === "completed").length} / {goal.tasks.length}</Metadata>
             </View>
-            {goal.tasks.length ? (expanded[goal.id] ? goal.tasks : goal.tasks.slice(0, 5)).map((task, index) => <View key={task.id ?? index} style={{ flexDirection: "row", gap: 12, alignItems: "flex-start", paddingVertical: 4 }}>
-              <Icon name={task.status === "completed" ? "CircleCheck" : task.status === "blocked" ? "CircleAlert" : task.status === "in_progress" ? "CirclePlay" : "Circle"} size={16} color={task.status === "blocked" ? colors.statusWarning : colors.foregroundMuted} />
-              <View style={{ flex: 1, minWidth: 0 }}><Text selectable style={{ color: task.status === "completed" ? colors.foregroundMuted : colors.foreground, fontSize: 13, lineHeight: 19 }}>{task.text}</Text>
-                <Text style={{ color: colors.foregroundMuted, fontSize: 11, lineHeight: 16 }}>{({ pending: "Pending", in_progress: "In progress", blocked: "Blocked", completed: "Completed" })[task.status]}</Text></View>
+            {goal.tasks.length ? (expanded[goal.id] ? goal.tasks : goal.tasks.slice(0, 5)).map((task, index) => <View key={task.id ?? index} accessible accessibilityLabel={`${task.text}: ${task.status.replaceAll("_", " ")}`} style={{ flexDirection: "row", gap: 10, alignItems: "flex-start", paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.border }}>
+              <View style={{ paddingTop: 2 }}><Icon name={task.status === "completed" ? "Check" : task.status === "blocked" ? "Ban" : task.status === "in_progress" ? "CirclePlay" : "Circle"} size={14} color={task.status === "completed" ? colors.statusSuccess : task.status === "blocked" ? colors.statusDanger : task.status === "in_progress" ? goalWorkingColor : colors.foregroundMuted} /></View>
+              <View style={{ flex: 1, minWidth: 0 }}><Text selectable style={{ color: colors.foreground, fontSize: 13, lineHeight: 19 }}>{task.text}</Text></View>
+              {task.status === "blocked" ? <Text style={{ color: colors.statusDanger, fontSize: 12, lineHeight: 19 }}>Blocked</Text> : null}
             </View>) : <Metadata colors={colors}>{goal.status === "active" ? "No tasks reported yet" : "No tasks yet"}</Metadata>}
             {goal.tasks.length > 5 ? button(expanded[goal.id] ? "Show fewer tasks" : `Show all ${goal.tasks.length} tasks`, () => setExpanded({ ...expanded, [goal.id]: !expanded[goal.id] }), false) : null}
             {!terminal(goal) && goal.status !== "active" ? button(addingTask ? "Cancel task" : "Add task", () => { setSelected(goal.id); setAddingTask(!addingTask); setTaskText(""); }, disabled) : null}

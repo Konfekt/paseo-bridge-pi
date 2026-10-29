@@ -16,7 +16,7 @@ export const goalStorySchema = z.object({
   version: z.literal(1),
   timeline: z.array(z.object({ id: z.string().min(1).max(128), at: z.number().int().nonnegative().max(8640000000000000),
     kind: z.enum(["created", "started", "paused", "resumed", "blocked", "completed", "cleared", "edited", "task"]),
-    text: z.string().min(1).max(4000), taskId: z.string().min(1).max(128).optional() }).strict()).max(200),
+    text: z.string().min(1).max(4000), taskId: z.string().min(1).max(128).optional(), taskStatus: z.enum(["pending", "in_progress", "completed", "blocked"]).optional() }).strict()).max(200),
   activity: z.array(z.object({ id: z.string().min(1).max(128), at: z.number().int().nonnegative().max(8640000000000000), text: z.string().min(1).max(4000) }).strict()).max(200),
   questions: z.array(goalQuestionSchema).max(100).optional(),
 }).strict();
