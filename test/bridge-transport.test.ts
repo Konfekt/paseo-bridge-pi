@@ -6,8 +6,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BridgeTransport, retainBridgeForReload, takeBridgeAfterReload, discardRetainedBridge } from "../extension/bridge-transport.ts";
-import { permissionGateOperatorSocketPath } from "../extension/permission-gate-operator.js";
-import { foregroundTasksSocketPath } from "../extension/foreground-task-operator.js";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "pi-bridge-reload-"));
@@ -50,17 +48,17 @@ test("same-session reload retains the socket and routes subsequent commands only
   try {
     f.client.write('{"id":1,"type":"get_state"}\n');
     assert.equal((await f.response(1)).owner, "old");
-    const previousOperatorEpoch = f.transport.operatorEpoch;
-    retainBridgeForReload(f.transport, "existing-agent", true);
+    const previousConnectionEpoch = f.transport.connectionEpoch;
+    assert.equal(typeof previousConnectionEpoch, "string");
+    retainBridgeForReload(f.transport, "existing-agent");
     f.client.write('{"id":2,"type":"prompt","message":"do not dispatch during reload"}\n');
     assert.equal((await f.response(2)).success, false);
     assert.equal(f.oldCalls(), 1);
     const retained = takeBridgeAfterReload("same-session");
     assert.equal(retained?.transport, f.transport);
     assert.equal(retained?.agentId, "existing-agent");
-    assert.equal(retained?.titleAttempted, true);
     f.transport.bind({ command: async cmd => { f.transport.send({ id: cmd.id, owner: "new", text: cmd.message }); }, attached() {}, detached() {}, error: error => f.errors.push(error) });
-    assert.notEqual(f.transport.operatorEpoch, previousOperatorEpoch, "reload rotates operator runtime epoch");
+    assert.notEqual(f.transport.connectionEpoch, previousConnectionEpoch, "reload invalidates replies admitted by the old context");
     const frame = Buffer.from('{"id":3,"type":"prompt","message":"🌍"}\n');
     const offset = frame.indexOf(Buffer.from("🌍"));
     f.client.write(frame.subarray(0, offset + 1));
@@ -77,7 +75,7 @@ test("a controller can reconnect to the same endpoint if it disconnects during r
   const f = await fixture();
   let replacement: net.Socket | undefined;
   try {
-    retainBridgeForReload(f.transport, "existing-agent", true);
+    retainBridgeForReload(f.transport, "existing-agent");
     f.client.destroy();
     const deadline = Date.now() + 2000;
     while (f.transport.connected) {
@@ -100,7 +98,7 @@ test("session replacement closes a retained bridge instead of adopting the wrong
   const f = await fixture();
   try {
     const closed = once(f.client, "close");
-    retainBridgeForReload(f.transport, null, false);
+    retainBridgeForReload(f.transport, null);
     assert.equal(takeBridgeAfterReload("different-session"), undefined);
     await closed;
     assert.equal(f.transport.connected, false);
@@ -111,7 +109,7 @@ test("a failed or removed extension cannot retain a suspended socket forever", a
   const f = await fixture();
   try {
     const closed = once(f.client, "close");
-    retainBridgeForReload(f.transport, null, false, 20);
+    retainBridgeForReload(f.transport, null, 20);
     await closed;
     assert.equal(takeBridgeAfterReload("same-session"), undefined);
   } finally { await f.close(); }
@@ -130,281 +128,41 @@ test("a second controller is rejected without disrupting the retained controller
   } finally { await f.close(); }
 });
 
-test("read-only native fork snapshot works while Paseo controller remains attached", async () => {
+test("oversized controller frames disconnect without dispatching a command", async () => {
   const f = await fixture();
+  f.client.on("error", () => {});
   try {
-    const manifest = { sessionFile: "same-session", leafId: "active-not-last", messages: [{ role: "assistant", content: [{ type: "toolCall", id: "pending" }] }] };
-    let detached = 0;
-    f.transport.bind({ command: async cmd => f.transport.send({ id: cmd.id, owner: "controller" }), forkSnapshot: () => manifest,
-      attached() {}, detached() { detached++; }, error: error => f.errors.push(error) });
-    const observer = net.connect(`${f.socketPath}.fork`);
-    let payload = "";
-    observer.on("data", chunk => { payload += chunk.toString(); });
-    await once(observer, "end");
-    assert.deepEqual(JSON.parse(payload).data, manifest);
-    assert.equal(detached, 0);
-    assert.equal(f.transport.connected, true);
-    f.client.write('{"id":99,"type":"get_state"}\n');
-    assert.equal((await f.response(99)).owner, "controller");
-    assert.deepEqual(f.errors, []);
+    const closed = new Promise<boolean>(resolve => f.client.once("close", () => resolve(true)));
+    f.client.write("x".repeat(16 * 1024 * 1024 + 1));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      assert.equal(await Promise.race([closed, new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 2000); })]), true, "oversized frame must close promptly");
+    } finally { clearTimeout(timer); }
+    assert.equal(f.oldCalls(), 0);
+    assert.match(String(f.errors[0]), /frame.*limit/i);
   } finally { await f.close(); }
 });
 
-test("retained pre-operator transport gains working controls without interrupting its controller", async () => {
+test("oversized outgoing frames close the controller instead of retaining an unbounded write", async () => {
   const f = await fixture();
+  f.client.on("error", () => {});
   try {
-    // /reload replaces the prototype, not the constructor. Existing transports
-    // from before operator support do not have this new instance field.
-    delete (f.transport as any).operatorSockets;
-    retainBridgeForReload(f.transport, "agent-1", false);
-    assert.equal(takeBridgeAfterReload(f.transport.sessionFile)?.transport, f.transport);
-    const capability = "a".repeat(64);
-    let epoch = "";
-    let enabled = true;
-    let activeRun = true;
-    let commandCalls = 0;
-    f.transport.bind({
-      command: async cmd => { commandCalls++; f.transport.send({ id: cmd.id, owner: "controller" }); },
-      permissionGateOperator: () => ({
-        descriptor: { version: 1, socketPath: permissionGateOperatorSocketPath(f.socketPath), capability,
-          agentId: "agent-1", sessionId: "session-1", runtimeEpoch: epoch },
-        authority: () => ({
-          status: sessionId => ({ sessionId, enabled }),
-          applyMode: (sessionId, next) => {
-            assert.equal(activeRun, true, "operator works while an agent run is active");
-            enabled = next;
-            return { sessionId, enabled };
-          },
-        }),
-      }),
-      attached() {}, detached() {}, error: error => f.errors.push(error),
-    });
-    epoch = f.transport.operatorEpoch;
-    const operator = net.connect(permissionGateOperatorSocketPath(f.socketPath));
-    await once(operator, "connect");
-    const responsePromise = once(operator, "data");
-    operator.write(`${JSON.stringify({ v: 1, type: "permission_gate_mode", id: "test-1", capability,
-      agentId: "agent-1", sessionId: "session-1", runtimeEpoch: epoch, action: "set", enabled: false })}\n`);
-    const [data] = await responsePromise;
-    assert.deepEqual(JSON.parse(data.toString()), {
-      v: 1, type: "permission_gate_mode", id: "test-1", success: true,
-      data: { agentId: "agent-1", sessionId: "session-1", runtimeEpoch: epoch, enabled: false },
-    });
-    assert.equal(enabled, false);
-    assert.equal(commandCalls, 0, "operator action did not dispatch a bridge command");
-    assert.equal(f.transport.connected, true);
-    f.client.write('{"id":102,"type":"get_state"}\n');
-    assert.equal((await f.response(102)).owner, "controller");
-    assert.equal(commandCalls, 1, "control spy observes only the separately submitted main RPC");
-    activeRun = false;
-    assert.deepEqual(f.errors, []);
+    const closed = new Promise<void>(resolve => f.client.once("close", () => resolve()));
+    f.transport.send({ text: "x".repeat(16 * 1024 * 1024) });
+    assert.equal(f.transport.connected, false);
+    await closed;
+    assert.match(String(f.errors[0]), /frame.*limit/i);
   } finally { await f.close(); }
 });
 
-test("operator rejects stale requests across suspend, rebind, and controller disconnect", async () => {
+test("a stalled controller cannot retain more than the bounded output queue", async () => {
   const f = await fixture();
-  const capability = "c".repeat(64);
-  let enabled = true;
-  let commandCalls = 0;
-  const bind = () => {
-    f.transport.bind({
-      command: async cmd => { commandCalls++; f.transport.send({ id: cmd.id }); },
-      permissionGateOperator: () => {
-        if (!f.transport.connected) return undefined;
-        const epoch = f.transport.operatorEpoch;
-        return {
-          descriptor: { version: 1 as const, socketPath: permissionGateOperatorSocketPath(f.socketPath), capability,
-            agentId: "agent-1", sessionId: "session-1", runtimeEpoch: epoch },
-          authority: () => ({
-            status: (sessionId: string) => ({ sessionId, enabled }),
-            applyMode: (sessionId: string, next: boolean) => ({ sessionId, enabled: (enabled = next) }),
-          }),
-        };
-      },
-      attached() {},
-      detached() { f.transport.rotateOperatorEpoch(); },
-      error: error => f.errors.push(error),
-    });
-  };
+  f.client.on("error", () => {});
   try {
-    bind();
-    const initialEpoch = f.transport.operatorEpoch;
-    const staleRequest = { v: 1, type: "permission_gate_mode", id: "old", capability, agentId: "agent-1",
-      sessionId: "session-1", runtimeEpoch: initialEpoch, action: "status" };
-    retainBridgeForReload(f.transport, "agent-1", false);
-    const suspended = net.connect(permissionGateOperatorSocketPath(f.socketPath));
-    await once(suspended, "connect");
-    const suspendedReply = once(suspended, "data");
-    suspended.write(`${JSON.stringify(staleRequest)}\n`);
-    assert.equal(JSON.parse((await suspendedReply)[0].toString()).success, false);
-
-    assert.ok(takeBridgeAfterReload("same-session"));
-    bind();
-    assert.notEqual(f.transport.operatorEpoch, initialEpoch);
-    const afterReload = net.connect(permissionGateOperatorSocketPath(f.socketPath));
-    await once(afterReload, "connect");
-    const staleReply = once(afterReload, "data");
-    afterReload.end(`${JSON.stringify(staleRequest)}\n`);
-    assert.equal(JSON.parse((await staleReply)[0].toString()).success, false);
-
-    f.client.destroy();
-    await waitForTransportDisconnect(f.transport);
-    const disconnected = net.connect(permissionGateOperatorSocketPath(f.socketPath));
-    await once(disconnected, "connect");
-    const unavailableReply = once(disconnected, "data");
-    disconnected.end(`${JSON.stringify({ ...staleRequest, runtimeEpoch: f.transport.operatorEpoch })}\n`);
-    const unavailable = JSON.parse((await unavailableReply)[0].toString());
-    assert.equal(unavailable.success, false);
-    assert.match(unavailable.error, /unavailable/i);
-    assert.equal(commandCalls, 0);
-  } finally { await f.close(); }
-});
-
-async function waitForTransportDisconnect(transport: BridgeTransport): Promise<void> {
-  const deadline = Date.now() + 2000;
-  while (transport.connected && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
-  assert.equal(transport.connected, false, "controller disconnect should be observed");
-}
-
-test("malformed and oversized operator frames close promptly without affecting the main controller", async () => {
-  const f = await fixture();
-  try {
-    const malformed = net.connect(permissionGateOperatorSocketPath(f.socketPath));
-    await once(malformed, "connect");
-    const malformedReply = once(malformed, "data");
-    malformed.end("not-json\n");
-    const malformedResponse = JSON.parse((await malformedReply)[0].toString());
-    assert.equal(malformedResponse.success, false);
-
-    const oversized = net.connect(permissionGateOperatorSocketPath(f.socketPath));
-    await once(oversized, "connect");
-    const oversizedClosed = once(oversized, "close");
-    oversized.write(`${"x".repeat(4098)}\n`);
-    await oversizedClosed;
-
-    f.client.write('{"id":103,"type":"get_state"}\n');
-    assert.equal((await f.response(103)).owner, "old");
-    assert.equal(f.transport.connected, true);
-  } finally { await f.close(); }
-});
-
-test("foreground-task private endpoint authenticates parent identity and routes only the typed service request", async () => {
-  const f = await fixture();
-  try {
-    const service = { sessionId: "session-1", epoch: "core-epoch", async execute(request: any) { return { operation: request.operation, sessionId: request.sessionId, epoch: request.epoch }; } };
-    let calls = 0;
-    const identity = () => ({ agentId: "agent-1", sessionId: "session-1", runtimeEpoch: f.transport.operatorEpoch,
-      capability: f.transport.foregroundTasksCapability, service });
-    f.transport.bind({ command: async cmd => f.transport.send({ id: cmd.id, success: true }), foregroundTasksIdentity: identity,
-      foregroundTasks: async request => { calls++; return service.execute(request); }, attached() {}, detached() {}, error: error => f.errors.push(error) });
-    const base = { v: 1, type: "foreground_tasks", id: "request.1", capability: f.transport.foregroundTasksCapability,
-      agentId: "agent-1", sessionId: "session-1", runtimeEpoch: f.transport.operatorEpoch,
-      request: { operation: "list", sessionId: "session-1", epoch: "core-epoch" } };
-    async function exchange(value: unknown) {
-      const socket = net.connect(foregroundTasksSocketPath(f.socketPath));
-      await once(socket, "connect");
-      let payload = "";
-      socket.on("data", chunk => { payload += chunk.toString(); });
-      socket.end(`${JSON.stringify(value)}\n`);
-      await once(socket, "end");
-      return JSON.parse(payload);
-    }
-    assert.deepEqual(await exchange(base), { v: 1, type: "foreground_tasks", id: "request.1", success: true,
-      agentId: "agent-1", sessionId: "session-1", runtimeEpoch: f.transport.operatorEpoch,
-      data: { operation: "list", sessionId: "session-1", epoch: "core-epoch" } });
-    assert.equal((await exchange({ ...base, agentId: "other-agent" })).success, false);
-    assert.equal((await exchange({ ...base, request: { ...base.request, epoch: "stale-core-epoch" } })).success, false);
-    assert.equal((await exchange({ ...base, request: { ...base.request, operation: "arbitrary" } })).success, false);
-    assert.equal((await exchange({ ...base, request: { ...base.request, unexpected: true } })).success, false);
-    assert.equal(calls, 1);
-    assert.equal(f.transport.connected, true);
-    f.client.write('{"id":108,"type":"get_state"}\n');
-    assert.ok((await f.response(108)).success !== undefined, "main controller remained independent");
-    assert.deepEqual(f.errors, []);
-  } finally { await f.close(); }
-});
-
-test("foreground-task endpoint rejects an epoch or service replaced while execute is pending", async () => {
-  const f = await fixture();
-  try {
-    let currentService: any = { sessionId: "session-1", epoch: "epoch-1", execute: async () => ({} ) };
-    let start!: () => void, finish!: (value: unknown) => void;
-    const waiting = new Promise<void>(resolve => { start = resolve; });
-    const result = new Promise<unknown>(resolve => { finish = resolve; });
-    const identity = () => ({ agentId: "agent-1", sessionId: "session-1", runtimeEpoch: f.transport.operatorEpoch,
-      capability: f.transport.foregroundTasksCapability, service: currentService });
-    f.transport.bind({ command: async () => {}, foregroundTasksIdentity: identity,
-      foregroundTasks: async () => { start(); return result; }, attached() {}, detached() {}, error: error => f.errors.push(error) });
-    const socket = net.connect(foregroundTasksSocketPath(f.socketPath));
-    await once(socket, "connect");
-    let payload = ""; socket.on("data", chunk => { payload += chunk.toString(); });
-    socket.end(`${JSON.stringify({ v: 1, type: "foreground_tasks", id: "race", capability: f.transport.foregroundTasksCapability,
-      agentId: "agent-1", sessionId: "session-1", runtimeEpoch: f.transport.operatorEpoch,
-      request: { operation: "list", sessionId: "session-1", epoch: "epoch-1" } })}\n`);
-    await waiting;
-    currentService = { sessionId: "session-1", epoch: "epoch-2", execute: async () => ({}) };
-    finish({ private: "must not escape" });
-    await once(socket, "end");
-    assert.equal(JSON.parse(payload).success, false);
-    assert.match(JSON.parse(payload).error, /changed/);
-  } finally { await f.close(); }
-});
-
-test("legacy retained transport gains snapshot endpoint without replacing its controller", async () => {
-  const f = await fixture();
-  try {
-    // Reproduce the pre-upgrade object's shape/prototype and absence of .fork.
-    const legacy = f.transport as any;
-    await new Promise<void>(resolve => legacy.snapshotServer.close(resolve));
-    delete legacy.snapshotServer;
-    const descriptors = Object.getOwnPropertyDescriptors(BridgeTransport.prototype);
-    delete descriptors.ensureForkSnapshotEndpoint;
-    descriptors.bind = { value: function(callbacks: any) { this.callbacks = callbacks; if (this.connected) callbacks.attached(); } };
-    Object.setPrototypeOf(legacy, Object.create(Object.prototype, descriptors));
-    assert.equal(legacy.ensureForkSnapshotEndpoint, undefined);
-    const server = legacy.server, client = legacy.client;
-    retainBridgeForReload(f.transport, "source", true);
-    const retained = takeBridgeAfterReload("same-session")!;
-    retained.transport.bind({ command: async cmd => retained.transport.send({ id: cmd.id, owner: "upgraded" }),
-      forkSnapshot: () => ({ leafId: "current" }), attached() {}, detached() {}, error: error => f.errors.push(error) });
-    assert.equal(legacy.server, server);
-    assert.equal(legacy.client, client);
-    const observer = net.connect(`${f.socketPath}.fork`);
-    let payload = "";
-    observer.on("data", chunk => { payload += chunk.toString(); });
-    await once(observer, "end");
-    assert.equal(JSON.parse(payload).data.leafId, "current");
-    f.client.write('{"id":100,"type":"get_state"}\n');
-    assert.equal((await f.response(100)).owner, "upgraded");
-    assert.deepEqual(f.errors, []);
-    retained.transport.close();
-    const probe = net.connect(`${f.socketPath}.fork`);
-    await once(probe, "error");
-    probe.destroy();
-  } finally { await f.close(); }
-});
-
-test("resolver reads compact live manifest over real side socket with controller attached", async () => {
-  const f = await fixture();
-  try {
-    const { createHash } = await import("node:crypto");
-    const { mkdir, writeFile } = await import("node:fs/promises");
-    const { resolve } = await import("node:path");
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const sessionFile = resolve("same-session");
-    const runtimeDir = join(f.root, ".pi", "paseo-bridge", "runtimes");
-    await mkdir(runtimeDir, { recursive: true });
-    await writeFile(join(runtimeDir, createHash("sha256").update(sessionFile).digest("hex") + ".json"), JSON.stringify({ bridgeSocket: f.socketPath }));
-    const manifest = { sessionFile, leafId: "active", messages: [{ role: "assistant", content: [] }] };
-    f.transport.bind({ command: async cmd => f.transport.send({ id: cmd.id, owner: "unchanged" }), forkSnapshot: () => manifest,
-      attached() {}, detached() {}, error: error => f.errors.push(error) });
-    const moduleUrl = new URL("../shim/fork-support.js", import.meta.url).href;
-    const script = `import { readLiveForkSnapshot } from ${JSON.stringify(moduleUrl)}; console.log(JSON.stringify(readLiveForkSnapshot(${JSON.stringify(sessionFile)})));`;
-    const { stdout } = await promisify(execFile)(process.execPath, ["--input-type=module", "-e", script], { env: { ...process.env, HOME: f.root }, timeout: 10000 });
-    assert.deepEqual(JSON.parse(stdout), manifest);
-    f.client.write('{"id":101,"type":"get_state"}\n');
-    assert.equal((await f.response(101)).owner, "unchanged");
-    assert.deepEqual(f.errors, []);
+    f.client.pause();
+    const frame = { text: "x".repeat(8 * 1024 * 1024) };
+    for (let index = 0; index < 6 && f.transport.connected; index++) f.transport.send(frame);
+    assert.equal(f.transport.connected, false);
+    assert.match(String(f.errors[0]), /write queue.*limit/i);
   } finally { await f.close(); }
 });

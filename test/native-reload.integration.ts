@@ -9,7 +9,7 @@ import { join, resolve } from "node:path";
 const piBin = process.env.TEST_PI_BIN;
 
 test("Paseo-native RPC sessions can dispatch reload as an extension command", { timeout: 20000 }, async () => {
-  assert.ok(piBin, 'TEST_PI_BIN is required; run the named native RPC Nix check');
+  assert.ok(piBin, 'TEST_PI_BIN must point to the Pi executable');
   const root = await mkdtemp(join(tmpdir(), "pi-native-reload-"));
   const child = spawn(piBin!, ["--offline", "--mode", "rpc", "--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates", "--extension", process.env.BRIDGE_NATIVE_EXTENSION ?? resolve("extension/index.ts")], {
     cwd: root,
@@ -17,7 +17,7 @@ test("Paseo-native RPC sessions can dispatch reload as an extension command", { 
       XDG_CONFIG_HOME: join(root, 'config'), XDG_CACHE_HOME: join(root, 'cache'),
       PI_CODING_AGENT_DIR: join(root, "agent"), PI_PASEO_BRIDGE: "on",
       PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1",
-      PI_PASEO_BRIDGE_FORCE: "0", PI_PASEO_BRIDGE_NO_IMPORT: "1", PI_PASEO_BRIDGE_NO_TITLE: "1", PI_TELEMETRY: "0" },
+      PI_PASEO_BRIDGE_FORCE: "0", PI_PASEO_BRIDGE_NO_IMPORT: "1", PI_TELEMETRY: "0" },
     stdio: ["pipe", "pipe", "pipe"],
   });
   const closed = once(child, "close");

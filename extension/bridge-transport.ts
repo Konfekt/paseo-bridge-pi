@@ -1,75 +1,30 @@
 import * as net from "node:net";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import {
-  decodePermissionGateOperatorFrame,
-  handlePermissionGateOperatorRequest,
-  permissionGateOperatorSocketPath,
-  type PermissionGateOperatorIdentityV1,
-} from "./permission-gate-operator.js";
-import { decodeForegroundTasksFrame, foregroundTasksCapability, foregroundTasksSocketPath, validateForegroundTasksEnvelope, type ForegroundTasksAuthIdentityV1 } from "./foreground-task-operator.js";
-import { accountControlsCapability, accountControlsSocketPath, validateAccountControlsEnvelope } from "./account-controls-operator.js";
 
-import { createBtwEndpoint, type BtwIdentity } from "./btw-operator.js";
+const MAX_CONTROLLER_FRAME_BYTES = 16 * 1024 * 1024;
+const MAX_CONTROLLER_WRITE_QUEUE_BYTES = 32 * 1024 * 1024;
+const RELOAD_ADOPTION_TIMEOUT_MS = 90_000;
 
 type Callbacks = {
-  workflowsIdentity?(): BtwIdentity | undefined;
-  workflows?(request: unknown): Promise<unknown>;
-  btwIdentity?(): BtwIdentity | undefined;
-  btw?(request: unknown): Promise<unknown>;
   command(value: any): Promise<void>;
-  forkSnapshot?(): unknown;
   attached(): void;
   detached(): void;
   error(error: unknown): void;
-  permissionGateOperator?(): PermissionGateOperatorIdentityV1 | undefined;
-  harnessReadOnly?(request: unknown): Promise<unknown>;
-  foregroundTasksIdentity?(): ForegroundTasksAuthIdentityV1 | undefined;
-  foregroundTasks?(request: unknown): Promise<unknown>;
-  accountControlsIdentity?(): { agentId: string; sessionId: string; runtimeEpoch: string; serviceEpoch: string; capability: string } | undefined;
-  accountControls?(request: unknown): Promise<unknown>;
 };
 
-/** Socket ownership is independent of the replaceable extension context. */
+/** One private controller socket, retained across same-session extension reload. */
 export class BridgeTransport {
   private server: net.Server | null = null;
-  private snapshotServer: net.Server | null = null;
-  private operatorServer: net.Server | null = null;
-  private operatorSockets = new Set<net.Socket>();
-  private readonlyServer: net.Server | null = null;
-  private readonlyEndpointVersion = 2;
-  get harnessReadOnlySocketPath(): string { return `${this.pipePath}.harness-readonly-v2`; }
-  private readonlySockets = new Set<net.Socket>();
-  private foregroundTasksServer: net.Server | null = null;
-  private foregroundTasksSockets = new Set<net.Socket>();
-  private workflowsEndpoint?: ReturnType<typeof createBtwEndpoint>;
-  private _workflowsCapability?: string;
-  get workflowsCapability(): string { return this._workflowsCapability ??= randomBytes(32).toString("hex"); }
-  private btwEndpoint?: ReturnType<typeof createBtwEndpoint>;
-  private _btwCapability?: string;
-  get btwCapability(): string { return this._btwCapability ??= randomBytes(32).toString("hex"); }
-  private accountControlsServer: net.Server | null = null;
-  private accountControlsSockets = new Set<net.Socket>();
   private client: net.Socket | null = null;
   private callbacks?: Callbacks;
   private closed = false;
+  private _connectionEpoch = randomUUID();
 
   readonly sessionFile: string;
   readonly pipePath: string;
-  /** Local-trust runtime capability; not a boundary against same-UID code. */
-  private _operatorCapability?: string;
-  private _operatorEpoch?: string;
-  get operatorCapability(): string { return this._operatorCapability ??= randomBytes(32).toString("hex"); }
-  get operatorEpoch(): string { return this._operatorEpoch ??= randomUUID(); }
-  get harnessReadOnlyCapability(): string { return this._harnessReadOnlyCapability ??= randomBytes(32).toString("hex"); }
-  private _harnessReadOnlyCapability?: string;
-  private _foregroundTasksCapability?: string;
-  get foregroundTasksCapability(): string { return this._foregroundTasksCapability ??= foregroundTasksCapability(); }
-  private _accountControlsCapability?: string;
-  get accountControlsCapability(): string { return this._accountControlsCapability ??= accountControlsCapability(); }
-  rotateOperatorEpoch(): void { this._workflowsCapability = randomBytes(32).toString("hex"); this._btwCapability = randomBytes(32).toString("hex"); this._operatorEpoch = randomUUID(); this._harnessReadOnlyCapability = randomBytes(32).toString("hex"); this._foregroundTasksCapability = foregroundTasksCapability(); this._accountControlsCapability = accountControlsCapability(); }
 
   constructor(sessionFile: string, pipePath: string) {
     this.sessionFile = sessionFile;
@@ -77,288 +32,55 @@ export class BridgeTransport {
   }
 
   get connected(): boolean { return Boolean(this.client && !this.client.destroyed); }
+  /** Bind replies to the controller and extension context that admitted them. */
+  get connectionEpoch(): string { return this._connectionEpoch; }
 
   bind(callbacks: Callbacks): void {
-    this.rotateOperatorEpoch();
+    this._connectionEpoch = randomUUID();
     this.callbacks = callbacks;
-    if (this.server) {
-      this.ensureForkSnapshotEndpoint();
-      this.ensureOperatorEndpoint();
-      this.ensureReadonlyEndpoint();
-      this.ensureForegroundTasksEndpoint();
-      this.ensureAccountControlsEndpoint();
-    }
     if (this.connected) callbacks.attached();
   }
 
-  suspend(): void { this.callbacks = undefined; }
+  suspend(): void {
+    this._connectionEpoch = randomUUID();
+    this.callbacks = undefined;
+  }
 
   start(): void {
     if (process.platform !== "win32") {
       fs.mkdirSync(path.dirname(this.pipePath), { recursive: true, mode: 0o700 });
-      try { fs.unlinkSync(this.pipePath); } catch {}
+      try { fs.unlinkSync(this.pipePath); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
     }
-    this.ensureForkSnapshotEndpoint();
-    this.ensureOperatorEndpoint();
-    this.ensureReadonlyEndpoint();
-    this.ensureForegroundTasksEndpoint();
-    this.ensureAccountControlsEndpoint();
-    this.server = net.createServer((socket) => this.attach(socket));
-    this.server.on("error", (error) => this.callbacks?.error(error));
+    this.server = net.createServer(socket => this.attach(socket));
+    this.server.on("error", error => this.callbacks?.error(error));
     this.server.listen(this.pipePath, () => {
       if (process.platform !== "win32") {
-        try { fs.chmodSync(this.pipePath, 0o600); } catch {}
+        try { fs.chmodSync(this.pipePath, 0o600); }
+        catch (error) { this.callbacks?.error(error); this.close(); }
       }
-    });
-  }
-
-  private ensureOperatorEndpoint(): void {
-    // A retained transport may predate this endpoint. Prototype replacement
-    // during /reload does not run the new constructor/field initializers.
-    this.operatorSockets ??= new Set<net.Socket>();
-    if (this.operatorServer || this.closed) return;
-    const operatorPath = permissionGateOperatorSocketPath(this.pipePath);
-    if (process.platform !== "win32") {
-      try { fs.unlinkSync(operatorPath); } catch {}
-    }
-    this.operatorServer = net.createServer((socket) => {
-      if (this.operatorSockets.size >= 16 || this.closed) { socket.destroy(); return; }
-      this.operatorSockets.add(socket);
-      socket.on("close", () => this.operatorSockets.delete(socket));
-      socket.on("error", (error) => this.callbacks?.error(error));
-      socket.setTimeout(5_000, () => socket.destroy());
-      let buffer = Buffer.alloc(0);
-      let received = false;
-      socket.on("data", (chunk: Buffer) => {
-        if (received || buffer.length + chunk.length > 4097) { socket.destroy(); return; }
-        buffer = Buffer.concat([buffer, chunk]);
-        const newline = buffer.indexOf(0x0a);
-        if (newline < 0) return;
-        received = true;
-        if (newline === 0 || newline > 4096 || newline !== buffer.length - 1) { socket.destroy(); return; }
-        let response: Record<string, unknown>;
-        try {
-          const request = decodePermissionGateOperatorFrame(buffer.subarray(0, newline));
-          const identity = this.callbacks?.permissionGateOperator?.();
-          response = identity
-            ? handlePermissionGateOperatorRequest(request, identity)
-            : { v: 1, type: "permission_gate_mode", id: null, success: false, error: "Permission-gate operator unavailable" };
-        } catch (error) {
-          response = { v: 1, type: "permission_gate_mode", id: null, success: false,
-            error: error instanceof Error ? error.message.slice(0, 500) : "Invalid permission-gate operator frame" };
-        }
-        socket.end(`${JSON.stringify(response)}\n`);
-      });
-    });
-    this.operatorServer.on("error", (error) => this.callbacks?.error(error));
-    this.operatorServer.listen(operatorPath, () => {
-      if (process.platform !== "win32") {
-        try { fs.chmodSync(operatorPath, 0o600); } catch {}
-      }
-    });
-  }
-
-  private ensureReadonlyEndpoint(): void {
-    this.readonlySockets ??= new Set<net.Socket>();
-    if (this.readonlyServer || this.closed) return;
-    const socketPath = this.harnessReadOnlySocketPath;
-    if (process.platform !== "win32") { try { fs.unlinkSync(socketPath); } catch {} }
-    this.readonlyServer = net.createServer(socket => this.handleReadonlyConnection(socket));
-    this.readonlyServer.on("error", (error) => this.callbacks?.error(error));
-    const makePrivate = () => { if (process.platform !== "win32") { try { fs.chmodSync(socketPath, 0o600); } catch {} } };
-    this.readonlyServer.listen(socketPath, makePrivate);
-    // Bun can create the socket synchronously without invoking Node's listen
-    // callback. Restrict it before publishing a descriptor on either runtime.
-    makePrivate();
-  }
-
-  /** Bun retains createServer's original accept callback independently of its
-   * EventEmitter connection listeners. Retire only the legacy observation
-   * endpoint; a versioned path avoids old close/unlink racing the new listener.
-   * The provider/controller socket and all runtime capabilities remain owned. */
-  upgradeReadonlyEndpoint(): void {
-    this.readonlySockets ??= new Set<net.Socket>();
-    for (const socket of this.readonlySockets) socket.destroy();
-    this.readonlySockets.clear();
-    if (this.readonlyEndpointVersion === 2) return;
-    this.readonlyEndpointVersion = 2;
-    const legacy = this.readonlyServer;
-    this.readonlyServer = null;
-    legacy?.close();
-  }
-
-  private handleReadonlyConnection(socket: net.Socket): void {
-      if (this.readonlySockets.size >= 16 || this.closed) { socket.destroy(); return; }
-      this.readonlySockets.add(socket);
-      socket.on("close", () => this.readonlySockets.delete(socket));
-      socket.on("error", (error) => this.callbacks?.error(error));
-      socket.setTimeout(5000, () => socket.destroy());
-      let buffer = Buffer.alloc(0);
-      let received = false;
-      socket.on("data", (chunk: Buffer) => {
-        if (received || buffer.length + chunk.length > 8192) { socket.destroy(); return; }
-        buffer = Buffer.concat([buffer, chunk]);
-        const newline = buffer.indexOf(10);
-        if (newline < 0) return;
-        received = true;
-        if (!newline || newline !== buffer.length - 1) { socket.destroy(); return; }
-        void (async () => {
-          let response: Record<string, unknown>;
-          let requestId: string | null = null;
-          let requestAgentId: string | null = null;
-          let requestSessionId: string | null = null;
-          let requestRuntimeEpoch: string | null = null;
-          let responseLimit = 64 * 1024;
-          try {
-            const request = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, newline)));
-            const cb = this.callbacks?.harnessReadOnly;
-            if (!request || typeof request !== "object" || request.v !== 1 || request.type !== "harness_readonly"
-              || typeof request.id !== "string" || !/^[a-zA-Z0-9._:-]{1,128}$/.test(request.id)
-              || Object.keys(request).sort().join(",") !== "agentId,capability,id,method,payload,runtimeEpoch,sessionId,type,v"
-              || typeof request.capability !== "string" || !/^[a-f0-9]{64}$/.test(request.capability)
-              || typeof request.agentId !== "string" || typeof request.sessionId !== "string"
-              || typeof request.runtimeEpoch !== "string" || typeof request.method !== "string"
-              || !cb) throw new Error("Invalid or unavailable read-only request");
-            requestId = request.id;
-            requestAgentId = request.agentId;
-            requestSessionId = request.sessionId;
-            requestRuntimeEpoch = request.runtimeEpoch;
-            if (request.method === "subagents.conversation") responseLimit = 768 * 1024;
-            const data = await cb(request);
-            response = { v: 1, type: "harness_readonly", id: request.id, success: true,
-              agentId: request.agentId, sessionId: request.sessionId, runtimeEpoch: request.runtimeEpoch, data };
-          } catch (error) {
-            response = { v: 1, type: "harness_readonly", id: requestId, success: false,
-              error: error instanceof Error ? error.message.replace(/[\r\n\x00-\x1f\x7f]+/g, " ").slice(0, 300) : "Invalid read-only request" };
-            if (requestAgentId && requestSessionId && requestRuntimeEpoch) Object.assign(response, {
-              agentId: requestAgentId, sessionId: requestSessionId, runtimeEpoch: requestRuntimeEpoch,
-            });
-          }
-          const frame = `${JSON.stringify(response)}\n`;
-          if (Buffer.byteLength(frame) > responseLimit) socket.end(`${JSON.stringify({ v: 1, type: "harness_readonly", id: requestId, success: false,
-            ...(requestAgentId && requestSessionId && requestRuntimeEpoch ? { agentId: requestAgentId, sessionId: requestSessionId, runtimeEpoch: requestRuntimeEpoch } : {}),
-            error: "Oversized read-only result" })}\n`);
-          else socket.end(frame);
-        })().catch(() => socket.destroy());
-      });
-  }
-
-  private ensureForegroundTasksEndpoint(): void {
-    this.foregroundTasksSockets ??= new Set<net.Socket>();
-    if (this.foregroundTasksServer || this.closed) return;
-    const socketPath = foregroundTasksSocketPath(this.pipePath);
-    if (process.platform !== "win32") { try { fs.unlinkSync(socketPath); } catch {} }
-    this.foregroundTasksServer = net.createServer((socket) => {
-      if (this.foregroundTasksSockets.size >= 16 || this.closed) { socket.destroy(); return; }
-      this.foregroundTasksSockets.add(socket);
-      socket.on("close", () => this.foregroundTasksSockets.delete(socket));
-      socket.on("error", (error) => this.callbacks?.error(error));
-      socket.setTimeout(15_000, () => socket.destroy());
-      let buffer = Buffer.alloc(0), received = false;
-      socket.on("data", (chunk: Buffer) => {
-        if (received || buffer.length + chunk.length > 512 * 1024 + 1) { socket.destroy(); return; }
-        buffer = Buffer.concat([buffer, chunk]);
-        const newline = buffer.indexOf(10);
-        if (newline < 0) return;
-        received = true;
-        if (!newline || newline !== buffer.length - 1) { socket.destroy(); return; }
-        void (async () => {
-          let request: any, identity: ReturnType<NonNullable<Callbacks["foregroundTasksIdentity"]>>;
-          try {
-            request = decodeForegroundTasksFrame(buffer.subarray(0, newline));
-            identity = this.callbacks?.foregroundTasksIdentity?.();
-            const execute = this.callbacks?.foregroundTasks;
-            if (!identity || !execute || !validateForegroundTasksEnvelope(request, identity)) throw new Error("Foreground-task authentication failed");
-            const data = await execute(request.request);
-            const current = this.callbacks?.foregroundTasksIdentity?.();
-            if (this.closed || current !== identity && (!current || current.agentId !== identity.agentId || current.sessionId !== identity.sessionId
-              || current.runtimeEpoch !== identity.runtimeEpoch || current.capability !== identity.capability || current.service !== identity.service)) {
-              throw new Error("Foreground-task session changed during request");
-            }
-            const response = { v: 1, type: "foreground_tasks", id: request.id, success: true,
-              agentId: identity.agentId, sessionId: identity.sessionId, runtimeEpoch: identity.runtimeEpoch, data };
-            const frame = `${JSON.stringify(response)}\n`;
-            if (Buffer.byteLength(frame) > 256 * 1024) throw new Error("Oversized foreground-task response");
-            socket.end(frame);
-          } catch (error) {
-            const frame = `${JSON.stringify({ v: 1, type: "foreground_tasks", id: typeof request?.id === "string" ? request.id : null,
-              success: false, ...(identity ? { agentId: identity.agentId, sessionId: identity.sessionId, runtimeEpoch: identity.runtimeEpoch } : {}),
-              error: error instanceof Error ? error.message.replace(/[\r\n\x00-\x1f\x7f]+/g, " ").slice(0, 300) : "Foreground-task request failed" })}\n`;
-            socket.end(Buffer.byteLength(frame) <= 4096 ? frame : "{\"v\":1,\"type\":\"foreground_tasks\",\"id\":null,\"success\":false,\"error\":\"Foreground-task request failed\"}\n");
-          }
-        })().catch(() => socket.destroy());
-      });
-    });
-    this.foregroundTasksServer.on("error", (error) => this.callbacks?.error(error));
-    this.foregroundTasksServer.listen(socketPath, () => { if (process.platform !== "win32") { try { fs.chmodSync(socketPath, 0o600); } catch {} } });
-  }
-
-  private ensureAccountControlsEndpoint(): void {
-    if (!this.closed && !this.btwEndpoint) this.btwEndpoint = createBtwEndpoint(this.pipePath, () => this.callbacks);
-    if (!this.closed && !this.workflowsEndpoint) this.workflowsEndpoint = createBtwEndpoint(this.pipePath, () => ({
-      btwIdentity: () => this.callbacks?.workflowsIdentity?.(), btw: async request => { if (!this.callbacks?.workflows) throw new Error("Workflows unavailable"); return this.callbacks.workflows(request); }, error: error => this.callbacks?.error(error),
-    }), "workflows", ".workflows");
-    this.accountControlsSockets ??= new Set<net.Socket>();
-    if (this.accountControlsServer || this.closed) return;
-    const socketPath = accountControlsSocketPath(this.pipePath);
-    if (process.platform !== "win32") { try { fs.unlinkSync(socketPath); } catch {} }
-    this.accountControlsServer = net.createServer((socket) => {
-      if (this.accountControlsSockets.size >= 8 || this.closed) { socket.destroy(); return; }
-      this.accountControlsSockets.add(socket); socket.on("close", () => this.accountControlsSockets.delete(socket));
-      socket.setTimeout(10_000, () => socket.destroy()); let buffer = Buffer.alloc(0); let received = false;
-      socket.on("data", (chunk: Buffer) => {
-        if (received || buffer.length + chunk.length > 32 * 1024) { socket.destroy(); return; }
-        buffer = Buffer.concat([buffer, chunk]); const newline = buffer.indexOf(0x0a); if (newline < 0) return;
-        received = true; const id = "invalid";
-        void (async () => {
-          let requestId = id, response: any;
-          try {
-            const frame = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, newline))); requestId = frame?.id ?? id;
-            const identity = this.callbacks?.accountControlsIdentity?.(); const execute = this.callbacks?.accountControls;
-            if (newline !== buffer.length - 1 || !identity || !execute || !validateAccountControlsEnvelope(frame, identity)) throw new Error("Account-controls authentication failed");
-            const data = await execute(frame.request);
-            const current = this.callbacks?.accountControlsIdentity?.();
-            if (!current || current.agentId !== identity.agentId || current.sessionId !== identity.sessionId || current.runtimeEpoch !== identity.runtimeEpoch
-              || current.serviceEpoch !== identity.serviceEpoch || current.capability !== identity.capability) throw new Error("Account-controls identity changed during request");
-            response = { v: 1, type: "account_controls", id: requestId, success: true, agentId: identity.agentId, sessionId: identity.sessionId, runtimeEpoch: identity.runtimeEpoch, serviceEpoch: identity.serviceEpoch, data };
-          } catch (error) { response = { v: 1, type: "account_controls", id: requestId, success: false, error: error instanceof Error ? error.message.replace(/[\r\n\x00-\x1f\x7f]+/g, " ").slice(0, 250) : "Account-controls request failed" }; }
-          const output = `${JSON.stringify(response)}\n`;
-          if (Buffer.byteLength(output) <= 128 * 1024) socket.end(output); else socket.end(`${JSON.stringify({ v: 1, type: "account_controls", id: requestId, success: false, error: "Oversized account-controls response" })}\n`);
-        })();
-      });
-    });
-    this.accountControlsServer.on("error", (error) => this.callbacks?.error(error));
-    this.accountControlsServer.listen(socketPath, () => { if (process.platform !== "win32") { try { fs.chmodSync(socketPath, 0o600); } catch {} } });
-  }
-
-  private ensureForkSnapshotEndpoint(): void {
-    if (this.snapshotServer || this.closed) return;
-    // A separate read-only endpoint never takes over Paseo's controller socket.
-    const snapshotPath = `${this.pipePath}.fork`;
-    if (process.platform !== "win32") {
-      try { fs.unlinkSync(snapshotPath); } catch {}
-    }
-    this.snapshotServer = net.createServer((socket) => {
-      socket.on("error", (error) => this.callbacks?.error(error));
-      let response;
-      try {
-        if (!this.callbacks?.forkSnapshot) throw new Error("Native fork snapshot unavailable; retry after bridge update");
-        response = { type: "response", id: "fork-snapshot", success: true, data: this.callbacks.forkSnapshot() };
-      } catch (error) {
-        response = { type: "response", id: "fork-snapshot", success: false, error: String(error) };
-      }
-      socket.end(`${JSON.stringify(response)}\n`);
-    });
-    this.snapshotServer.on("error", (error) => this.callbacks?.error(error));
-    this.snapshotServer.listen(snapshotPath, () => {
-      if (process.platform !== "win32") { try { fs.chmodSync(snapshotPath, 0o600); } catch {} }
     });
   }
 
   send(value: unknown): void {
     if (!this.connected) return;
-    try { this.client!.write(`${JSON.stringify(value)}\n`); }
-    catch (error) { this.callbacks?.error(error); }
+    const socket = this.client!;
+    try {
+      const frame = `${JSON.stringify(value)}\n`;
+      const frameBytes = Buffer.byteLength(frame);
+      if (frameBytes > MAX_CONTROLLER_FRAME_BYTES) {
+        this.callbacks?.error(new Error("Controller output frame exceeds the 16 MiB limit"));
+        socket.destroy();
+        return;
+      }
+      if (socket.writableLength + frameBytes > MAX_CONTROLLER_WRITE_QUEUE_BYTES) {
+        this.callbacks?.error(new Error("Controller write queue exceeds the 32 MiB limit"));
+        socket.destroy();
+        return;
+      }
+      socket.write(frame);
+    } catch (error) { this.callbacks?.error(error); }
   }
 
   close(): void {
@@ -369,46 +91,22 @@ export class BridgeTransport {
     this.client = null;
     this.server?.close();
     this.server = null;
-    this.snapshotServer?.close();
-    this.snapshotServer = null;
-    this.operatorServer?.close();
-    this.operatorServer = null;
-    this.readonlyServer?.close();
-    this.readonlyServer = null;
-    this.foregroundTasksServer?.close();
-    this.foregroundTasksServer = null;
-    this.workflowsEndpoint?.close();
-    this.workflowsEndpoint = undefined;
-    this.btwEndpoint?.close();
-    this.btwEndpoint = undefined;
-    this.accountControlsServer?.close();
-    this.accountControlsServer = null;
-    for (const socket of this.accountControlsSockets ?? []) socket.destroy();
-    this.accountControlsSockets?.clear();
-    for (const socket of this.foregroundTasksSockets ?? []) socket.destroy();
-    this.foregroundTasksSockets?.clear();
-    for (const socket of this.operatorSockets ?? []) socket.destroy();
-    this.operatorSockets?.clear();
-    for (const socket of this.readonlySockets ?? []) socket.destroy();
-    this.readonlySockets?.clear();
     if (process.platform !== "win32") {
-      try { fs.unlinkSync(this.pipePath); } catch {}
-      try { fs.unlinkSync(`${this.pipePath}.fork`); } catch {}
-      try { fs.unlinkSync(permissionGateOperatorSocketPath(this.pipePath)); } catch {}
-      try { fs.unlinkSync(`${this.pipePath}.harness-readonly`); } catch {}
-      try { fs.unlinkSync(foregroundTasksSocketPath(this.pipePath)); } catch {}
-      try { fs.unlinkSync(accountControlsSocketPath(this.pipePath)); } catch {}
+      try { fs.unlinkSync(this.pipePath); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
     }
   }
 
   private attach(socket: net.Socket): void {
-    // Always own errors, including rejected secondary controllers.
-    socket.on("error", (error) => { this.callbacks?.error(error); detach(); });
     const detach = () => {
       if (this.client !== socket) return;
       this.client = null;
+      this._connectionEpoch = randomUUID();
       this.callbacks?.detached();
     };
+    // Own errors even on a rejected secondary controller.
+    socket.on("error", error => { this.callbacks?.error(error); detach(); });
     socket.on("close", detach);
     if (this.closed || this.client) {
       socket.end(`${JSON.stringify({ type: "response", id: null, command: "connect", success: false,
@@ -416,15 +114,22 @@ export class BridgeTransport {
       return;
     }
     this.client = socket;
+    this._connectionEpoch = randomUUID();
     socket.setNoDelay(true);
     const decoder = new StringDecoder("utf8");
     let buffer = "";
-    socket.on("data", (chunk) => {
+    socket.on("data", chunk => {
       buffer += decoder.write(chunk);
       for (;;) {
         const newline = buffer.indexOf("\n");
+        const frame = newline < 0 ? buffer : buffer.slice(0, newline);
+        if (Buffer.byteLength(frame) > MAX_CONTROLLER_FRAME_BYTES) {
+          this.callbacks?.error(new Error("Controller input frame exceeds the 16 MiB limit"));
+          socket.destroy();
+          return;
+        }
         if (newline < 0) break;
-        const line = buffer.slice(0, newline).replace(/\r$/, "");
+        const line = frame.replace(/\r$/, "");
         buffer = buffer.slice(newline + 1);
         if (!line.trim()) continue;
         let command: any;
@@ -437,7 +142,7 @@ export class BridgeTransport {
             error: "Pi runtime reload is in progress; retry after it completes." });
           continue;
         }
-        void callbacks.command(command).catch((error) => callbacks.error(error));
+        void callbacks.command(command).catch(error => callbacks.error(error));
       }
     });
     this.callbacks?.attached();
@@ -447,23 +152,21 @@ export class BridgeTransport {
 type RetainedBridge = {
   transport: BridgeTransport;
   agentId: string | null;
-  titleAttempted: boolean;
   timer: ReturnType<typeof setTimeout>;
 };
 const RELOAD_BRIDGE_KEY = "__piPaseoReloadTransportV1";
 
-/** Same-process, same-session handoff only; never leave a disabled bridge forever. */
+/** Same-process, same-session handoff; abandoned reloads release the socket. */
 export function retainBridgeForReload(
   transport: BridgeTransport,
   agentId: string | null,
-  titleAttempted: boolean,
-  timeoutMs = 90_000,
+  timeoutMs = RELOAD_ADOPTION_TIMEOUT_MS,
 ): void {
   discardRetainedBridge();
   transport.suspend();
   const root = globalThis as Record<string, unknown>;
   const retained: RetainedBridge = {
-    transport, agentId, titleAttempted,
+    transport, agentId,
     timer: setTimeout(() => {
       if (root[RELOAD_BRIDGE_KEY] === retained) discardRetainedBridge();
     }, timeoutMs),
@@ -482,12 +185,9 @@ export function takeBridgeAfterReload(sessionFile: string | undefined): Omit<Ret
   }
   delete root[RELOAD_BRIDGE_KEY];
   clearTimeout(retained.timer);
-  // A retained pre-snapshot transport has the old module's prototype. Upgrade
-  // methods in place, preserving its live controller/server; bind() adds only
-  // the new read-only endpoint and close() owns its cleanup.
+  // Replace methods without changing ownership of the live server and socket.
   Object.setPrototypeOf(retained.transport, BridgeTransport.prototype);
-  retained.transport.upgradeReadonlyEndpoint();
-  return { transport: retained.transport, agentId: retained.agentId, titleAttempted: retained.titleAttempted };
+  return { transport: retained.transport, agentId: retained.agentId };
 }
 
 export function discardRetainedBridge(): void {

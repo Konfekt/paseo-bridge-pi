@@ -14,7 +14,7 @@ export interface PaseoSocket {
 export function createPaseoWsConnection(
   ws: PaseoSocket,
   hello: Record<string, unknown>,
-  { timeoutMs = 5000, log = (_message: string) => {}, onSession = (_message: any) => {}, onFailure = (_error: Error) => {} } = {},
+  { timeoutMs = 5000, log = (_message: string) => {} } = {},
 ) {
   let failure: Error | undefined;
   let admitted = false;
@@ -43,7 +43,6 @@ export function createPaseoWsConnection(
       request.reject(error);
     }
     pending.clear();
-    try { onFailure(error); } catch { /* Subscription cleanup cannot disrupt pending rejection. */ }
     try { ws.close(); } catch { /* already closed */ }
   }
 
@@ -71,7 +70,6 @@ export function createPaseoWsConnection(
       return;
     }
     if (!admitted) return;
-    try { onSession(msg.message); } catch (error) { log(`paseo subscription handler failed: ${String(error)}`); }
     const request = pending.get(payload?.requestId);
     if (!request) return;
     pending.delete(payload.requestId);

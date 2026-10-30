@@ -1,70 +1,64 @@
-# 🔗 Pi ↔ Paseo
+# Pi ↔ Paseo
 
-[![Pi](https://img.shields.io/badge/Pi-1.x-blue)](https://pi.dev) [![Paseo](https://img.shields.io/badge/Paseo-0.13.0%2B-purple)](https://paseo.sh) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](package.json)
+Attach a terminal Pi conversation to stock Paseo. Read history, send messages, stop generation, and change model settings from Paseo while the same session remains open in the terminal.
 
-**One live conversation. Terminal and Paseo.**
+## Install
 
-Keep working in Pi while Paseo streams the conversation, sends messages and controls the model.
-Add the optional plugin for Goals, jobs, agents and accounts.
-
-[Plugin guide](plugin/README.md) · [Full reference](docs/reference.md)
-
-## 📦 Choose the components
-
-| Component | Use it for |
-| --- | --- |
-| [Pi extension](extension) | Attach the live terminal conversation to Paseo. |
-| [Provider shim](shim) | Route native Paseo RPC to the owning Pi session. |
-| [Paseo plugin](plugin/README.md) | Add Work, Goals, jobs, agents and account controls. |
-| [Optional Nix integration](nix/README.md) | Declarative packaging and configuration. |
-
-## 🚀 Install with Pi and Paseo
-
-Requires Pi 1.x, Node 22+, and Paseo 0.13.0+. No Nix installation, patched Paseo build, or separate plugin compiler is required.
-
-Install the Pi extension:
+Requires Pi 1.x, Node.js 22+, and Paseo 0.13.0+. Install the package on the Paseo daemon host, under the same account as Pi:
 
 ```sh
-pi install git:github.com/taugoust/paseo-bridge-pi
+pi install git:github.com/Konfekt/paseo-bridge-pi
 ```
 
-Inside Pi, run `/paseo-bridge install` to register the provider shim in writable Paseo configuration. Restart the Paseo daemon after active work finishes:
+Inside Pi, run:
+
+```text
+/paseo-bridge install
+```
+
+This registers the provider shim in writable Paseo configuration. After active work finishes, restart the daemon:
 
 ```sh
 paseo restart
 ```
 
-Install the optional Work and account-controls plugin separately:
+Start a terminal Pi session. Auto-connect is enabled by default; `/paseo-bridge status` reports the connection state. No additional Paseo plugin, custom application build, or package compiler is required.
 
-```sh
-paseo plugin install github:taugoust/paseo-bridge-pi --path plugin
-```
+## Controls
 
-The plugin compiles with stock Paseo and adds no runtime dependencies. Tool details use selectable plain text, without syntax highlighting or native tool-specific formatting. Optional controls still require their matching Pi extensions; server-specific integrations are listed in the [plugin guide](plugin/README.md). The root Paseo `pluginsEnabled` setting must be enabled to run installed plugins.
-
-[Nix modules](nix/README.md) remain available for declaratively managed installations.
-
-## 🎛️ Everyday controls
-
-| Command | Action |
+| Command | Effect |
 | --- | --- |
-| `/paseo-bridge status` | Inspect the connection. |
-| `/paseo-bridge connect` / `disconnect` | Attach or detach this session. |
-| `/paseo-bridge auto on` / `off` | Set the auto-connect preference. |
+| `/paseo-bridge connect` | Attach the current session. |
+| `/paseo-bridge disconnect` | Detach without stopping Pi. |
+| `/paseo-bridge auto on` / `off` | Set auto-connect for subsequent sessions. |
+| `/paseo-bridge status` | Inspect configuration and connection state. |
 | `/remote-reload` | Reload Pi resources while idle, including from Paseo. |
 
-## 📚 Go further
+Paseo uses its native chat and question interfaces. Attached terminal sessions mirror ordinary Pi select, input, and confirmation dialogs. Respond in either interface; the result returns to the original Pi callback once. Dialog-producing extensions need no bridge-specific integration. See the [reference](docs/reference.md) for lifecycle limits.
 
-| Topic | Guide |
-| --- | --- |
-| Packages, modules and the pure Nix constructor | [Nix API](nix/README.md) |
-| Commands, environment and reload behavior | [Reference](docs/reference.md) |
-| Permissions, private sockets and account controls | [Plugin guide](plugin/README.md) |
-| Companion tools and workflows | [pi-agent-extensions](https://github.com/taugoust/pi-agent-extensions) |
+The bridge preserves Pi's permission enforcement. It adds no permission-mode control, account dashboard, subagent projection, terminal orchestration, or automatic title-generation request. Android visual acceptance remains unverified.
 
-> [!IMPORTANT]
-> A server update does not update built-in desktop/mobile UI. Supervised forks stay supervised; credentials and control capabilities remain private runtime state.
+## Development
 
-## 📄 License
+```sh
+npm install
+npm test
+npm run typecheck
+npm run test:native
+npm pack --dry-run
+```
 
-MIT; see [package metadata](package.json). Adapted Paseo UI sources retain their Apache-2.0 notices.
+Native integration tests require an installed Pi executable; see [verification](docs/reference.md#verification). A checkout can be registered with `npm run dev-install` and removed with `npm run dev-uninstall`.
+
+## Uninstall
+
+Run `/paseo-bridge uninstall` inside Pi, then remove the package and restart Paseo:
+
+```sh
+pi remove git:github.com/Konfekt/paseo-bridge-pi
+paseo restart
+```
+
+## License
+
+MIT; see [package metadata](package.json).

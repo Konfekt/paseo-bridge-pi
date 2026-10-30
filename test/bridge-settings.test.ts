@@ -111,7 +111,6 @@ test('environment parsing and persisted precedence preserve legacy opt-out prese
   assert.equal(settings.isAutoEnabled(), true);
   for (const [no, positive, enabled] of [
     ['PI_PASEO_BRIDGE_NO_IMPORT', 'PI_PASEO_BRIDGE_IMPORT_SESSIONS', settings.isImportEnabled],
-    ['PI_PASEO_BRIDGE_NO_TITLE', 'PI_PASEO_BRIDGE_GENERATE_TITLES', settings.isTitleGenerationEnabled],
   ] as const) {
     delete process.env[no];
     process.env[positive] = 'off';

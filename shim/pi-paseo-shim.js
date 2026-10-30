@@ -11,23 +11,8 @@ import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import {
 	assertNoLiveRuntimeOwner,
-	assertRuntimeNotReaped,
 	matchingRuntimeRecords,
 } from "./runtime-registry.js";
-import { parseTmuxTarget } from "./tmux-target.js";
-import { topologyRelay } from "./topology-relay.js";
-import { createForkedSession, resolveForkPlan } from "./fork-support.js";
-import { startForkArchiveMonitor } from "./fork-lifecycle.js";
-import {
-	findForkRuntimeRecord,
-	findSourcePane,
-	forkStartupTimeoutMs,
-	killTmuxPane,
-	launchForkTui,
-	pipePathForAgent,
-	selectForkTuiBin,
-} from "./tmux-fork.js";
-
 const CONNECT_TIMEOUT_MS = 500;
 const args = process.argv.slice(2);
 
@@ -87,13 +72,9 @@ function sessionIdFromFile(sessionFile) {
 	return /^[0-9a-f-]{16,}$/i.test(id) ? id : null;
 }
 
-function bridge(socket, sessionFile, agentId = null) {
+function bridge(socket, sessionFile) {
 	socket.setNoDelay?.(true);
 	let tombstone = false;
-	const stopArchiveMonitor =
-		agentId && findForkRuntimeRecord(agentId)
-			? startForkArchiveMonitor(agentId, { onKilled: () => process.exit(0) })
-			: () => {};
 	process.stdin.pipe(socket);
 	socket.pipe(process.stdout);
 	process.stdin.on("end", () => {
@@ -106,9 +87,8 @@ function bridge(socket, sessionFile, agentId = null) {
 	const enterTombstone = () => {
 		if (tombstone) return;
 		tombstone = true;
-		stopArchiveMonitor();
 		const resumeRef = sessionIdFromFile(sessionFile) ?? sessionFile;
-		const message = `The terminal pi session has ended. Resume it from the project directory with: pi --session ${resumeRef} - or use Fork in Paseo to continue from this conversation in a new session.`;
+		const message = `The terminal pi session has ended. Resume it from the project directory with: pi --session ${resumeRef}.`;
 		process.stdin.unpipe(socket);
 		// Fails any in-flight turn: Paseo treats process_exit as a fatal runtime event.
 		writeJsonLine({ type: "process_exit", error: message });
@@ -194,36 +174,13 @@ function resolveRealPi() {
 	return null;
 }
 
+/** Native RPC sessions belong to the Pi child, never a bridge-managed TUI. */
 function passthrough() {
 	const real = resolveRealPi();
-	if (!real) {
-		process.stderr.write(
-			"pi-paseo-shim: could not locate the real pi binary. Set PI_REAL_BIN to the pi executable or its cli.js.\n",
-		);
-		process.exit(1);
-	}
-	const child = spawn(real.command, [...real.prefix, ...args], {
-		stdio: "inherit",
-	});
-	child.on("error", (err) => {
-		process.stderr.write(
-			`pi-paseo-shim: failed to spawn real pi: ${err.message}\n`,
-		);
-		process.exit(1);
-	});
-	child.on("exit", (code, signal) => {
-		process.exit(signal ? 1 : (code ?? 1));
-	});
-}
-
-/** Internal, non-persisted Paseo helpers must remain RPC-owned, never TUI-owned. */
-function ephemeralPassthrough() {
-	const real = resolveRealPi();
 	if (!real)
-		throw new Error("Could not locate real Pi for an internal RPC helper");
+		throw new Error("Could not locate the real Pi executable. Set PI_REAL_BIN to its executable or cli.js.");
 	const child = spawn(real.command, [...real.prefix, ...args], {
 		stdio: ["pipe", "pipe", "pipe"],
-		env: { ...process.env, PASEO_TMUX_TOPOLOGY: "0" },
 	});
 	let stopping = false;
 	let killTimer;
@@ -248,7 +205,7 @@ function ephemeralPassthrough() {
 	process.once("SIGINT", stop);
 	child.once("error", (error) => {
 		process.stderr.write(
-			`pi-paseo-shim: internal RPC helper failed: ${error.message}\n`,
+			`pi-paseo-shim: native Pi RPC failed: ${error.message}\n`,
 		);
 		stop();
 	});
@@ -259,208 +216,16 @@ function ephemeralPassthrough() {
 	});
 }
 
-function commandFailure(command, error) {
-	writeJsonLine({
-		type: "response",
-		...(command?.id ? { id: command.id } : {}),
-		command: typeof command?.type === "string" ? command.type : "prompt",
-		success: false,
-		error: error instanceof Error ? error.message : String(error),
-	});
-}
-
-function commandSuccessWithoutAgent(command) {
-	writeJsonLine({
-		type: "response",
-		...(command?.id ? { id: command.id } : {}),
-		command: "prompt",
-		success: true,
-		data: { agentInvoked: false },
-	});
-}
-
-async function waitForSocket(socketPath, timeoutMs = forkStartupTimeoutMs()) {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		const socket = await tryConnect(socketPath);
-		if (socket) return socket;
-		await new Promise((resolve) => setTimeout(resolve, 100));
-	}
-	throw new Error("timed out waiting for the forked Pi TUI bridge socket");
-}
-
-function forkAwarePassthrough() {
-	const real = resolveRealPi();
-	const targetAgentId = process.env.PASEO_AGENT_ID?.trim();
-	const supervisedTuiBin = process.env.PI_PASEO_TUI_BIN?.trim();
-	const unsafeTuiBin = process.env.PI_PASEO_UNSAFE_TUI_BIN?.trim();
-	if (
-		!real ||
-		!targetAgentId ||
-		(!supervisedTuiBin && !unsafeTuiBin) ||
-		process.platform === "win32"
-	) {
-		passthrough();
-		return;
-	}
-
-	const child = spawn(real.command, [...real.prefix, ...args], {
-		stdio: ["pipe", "pipe", "pipe"],
-	});
-	let backend = child.stdin;
-	let switched = false;
-	let firstPromptSeen = false;
-	let stopArchiveMonitor = () => {};
-	child.stdout.pipe(process.stdout);
-	child.stderr.pipe(process.stderr);
-	child.on("error", (error) => {
-		if (!switched) {
-			process.stderr.write(
-				`pi-paseo-shim: failed to spawn real pi: ${error.message}\n`,
-			);
-			process.exit(1);
-		}
-	});
-	child.on("exit", (code, signal) => {
-		if (!switched) process.exit(signal ? 1 : (code ?? 1));
-	});
-
-	const switchToFork = async (command) => {
-		const plan = resolveForkPlan({ command, targetAgentId });
-		if (!plan) return false;
-		const sourcePane = findSourcePane(plan.sourceSessionFile);
-		const tuiBin = selectForkTuiBin(sourcePane, {
-			supervised: supervisedTuiBin,
-			unsafe: unsafeTuiBin,
-		});
-		if (plan.trimmedIncompleteTools)
-			process.stderr.write(
-				"pi-paseo-shim: fork snapshot omitted the unfinished native tool-call batch; completed context was preserved.\n",
-			);
-		const forkSessionFile = createForkedSession(
-			plan.sourceSessionFile,
-			plan.sourceEntryId,
-			plan.sourceSnapshot,
-		);
-		const launched = launchForkTui({
-			placement: plan.placement,
-			sourcePane,
-			sourceSessionFile: plan.sourceSessionFile,
-			forkSessionFile,
-			cwd: plan.fork.cwd || process.env.PASEO_AGENT_CWD || process.cwd(),
-			agentId: targetAgentId,
-			tuiBin,
-			rpcArgs: args,
-		});
-		let socket;
-		try {
-			socket = await waitForSocket(launched.socketPath);
-		} catch (error) {
-			killTmuxPane(launched.paneId, { socketPath: launched.tmuxSocket });
-			throw error;
-		}
-
-		switched = true;
-		stopArchiveMonitor = startForkArchiveMonitor(targetAgentId, {
-			onKilled: () => process.exit(0),
-		});
-		child.stdout.unpipe(process.stdout);
-		child.kill("SIGTERM");
-		backend = socket;
-		socket.setNoDelay?.(true);
-		socket.pipe(process.stdout);
-		socket.on("close", () => {
-			backend = null;
-			writeJsonLine({
-				type: "process_exit",
-				error: "The forked terminal Pi session has ended.",
-			});
-		});
-		socket.on("error", () => {
-			backend = null;
-		});
-
-		if (plan.nextPrompt) {
-			socket.write(
-				`${JSON.stringify({ ...command, message: plan.nextPrompt })}\n`,
-			);
-		} else {
-			commandSuccessWithoutAgent(command);
-		}
-		return true;
-	};
-
-	const handleLine = async (line) => {
-		if (!line.trim()) return;
-		let command;
-		try {
-			command = JSON.parse(line);
-		} catch {
-			backend?.write(`${line}\n`);
-			return;
-		}
-		if (!switched && !firstPromptSeen && command?.type === "prompt") {
-			firstPromptSeen = true;
-			try {
-				if (await switchToFork(command)) return;
-			} catch (error) {
-				commandFailure(command, error);
-				return;
-			}
-		}
-		if (!backend) {
-			commandFailure(command, "The terminal Pi session is no longer running");
-			return;
-		}
-		backend.write(`${line}\n`);
-	};
-
-	let buffer = "";
-	let queue = Promise.resolve();
-	process.stdin.on("data", (chunk) => {
-		buffer += chunk.toString("utf8");
-		for (;;) {
-			const newline = buffer.indexOf("\n");
-			if (newline === -1) break;
-			const line = buffer.slice(0, newline).replace(/\r$/, "");
-			buffer = buffer.slice(newline + 1);
-			queue = queue
-				.then(() => handleLine(line))
-				.catch((error) => {
-					process.stderr.write(
-						`pi-paseo-shim: fork relay failed: ${String(error)}\n`,
-					);
-				});
-		}
-	});
-	process.stdin.on("end", () => {
-		queue = queue.then(async () => {
-			if (buffer.trim()) await handleLine(buffer.replace(/\r$/, ""));
-			backend?.end();
-		});
-	});
-	process.stdin.resume();
-
-	const shutdown = () => {
-		stopArchiveMonitor();
-		if (!switched) child.kill("SIGTERM");
-		process.exit(0);
-	};
-	process.once("SIGTERM", shutdown);
-	process.once("SIGINT", shutdown);
-}
-
 async function main() {
 	// Paseo marks internal metadata generation with --no-session. Check before
-	// discovery/attach/topology so it cannot create or claim an interactive TUI.
+	// attachment lookup so a helper cannot connect to an interactive session.
 	if (args.includes("--no-session")) {
-		ephemeralPassthrough();
+		passthrough();
 		return;
 	}
 	let sessionFile = extractSessionArg(args);
 	const assignedAgentId = process.env.PASEO_AGENT_ID?.trim();
 	const runtimeRecords = matchingRuntimeRecords(sessionFile, assignedAgentId);
-	assertRuntimeNotReaped(runtimeRecords);
 	if (!sessionFile && runtimeRecords.length)
 		sessionFile = runtimeRecords[0].sessionFile;
 	if (sessionFile) {
@@ -468,30 +233,24 @@ async function main() {
 			...runtimeRecords
 				.filter((record) => typeof record.bridgeSocket === "string")
 				.map((record) => record.bridgeSocket),
-			...(assignedAgentId ? [pipePathForAgent(assignedAgentId)] : []),
 			pipePathForSession(sessionFile),
 		];
 		for (const pipePath of [...new Set(candidatePaths)]) {
 			const socket = await tryConnect(pipePath);
 			if (socket) {
-				bridge(socket, sessionFile, assignedAgentId);
+				bridge(socket, sessionFile);
 				return;
 			}
 		}
 		// A failed connection can mean startup/reload, permissions, or a live
-		// managed runtime whose bridge is down. Never unlink another owner's
+		// terminal runtime whose bridge is down. Never unlink another owner's
 		// endpoint or mistake transport failure for permission to spawn a writer.
 		assertNoLiveRuntimeOwner(sessionFile, {
 			agentId: assignedAgentId,
 			records: runtimeRecords,
 		});
 	}
-	const target = parseTmuxTarget();
-	if (target) {
-		await topologyRelay({ target, args, sessionFile, waitForSocket });
-		return;
-	}
-	forkAwarePassthrough();
+	passthrough();
 }
 
 main().catch((error) => {

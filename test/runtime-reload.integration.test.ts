@@ -16,10 +16,10 @@ test("real Pi reload acknowledges once, retains the Paseo socket and rebinds com
   const runtime = join(root, "runtime");
   await mkdir(runtime);
   await writeFile(session, JSON.stringify({ type: "session", version: 3, id: randomUUID(), timestamp: new Date().toISOString(), cwd: root }) + "\n");
-  const child = spawn(piBin!, ["--mode", "rpc", "--session", session, "--no-extensions", "--extension", resolve("extension/index.ts")], {
+  const child = spawn(piBin!, ["--offline", "--mode", "rpc", "--session", session, "--no-extensions", "--no-skills", "--no-prompt-templates", "--extension", resolve("extension/index.ts")], {
     cwd: root,
     env: { ...process.env, HOME: root, XDG_RUNTIME_DIR: runtime, PI_CODING_AGENT_DIR: join(root, "agent"),
-      PI_PASEO_BRIDGE: "on", PI_PASEO_BRIDGE_FORCE: "1", PI_PASEO_BRIDGE_NO_IMPORT: "1", PI_PASEO_BRIDGE_NO_TITLE: "1", PI_TELEMETRY: "0" },
+      PI_PASEO_BRIDGE: "on", PI_PASEO_BRIDGE_FORCE: "1", PI_PASEO_BRIDGE_NO_IMPORT: "1", PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0" },
     stdio: ["pipe", "pipe", "pipe"],
   });
   let stderr = "";

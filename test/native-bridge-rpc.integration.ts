@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 
-// The executable is supplied by native-rpc-check.nix, never a user wrapper.
+// Supply an explicit raw Pi executable, never a permission-gate wrapper.
 // Model streams are forbidden; the ordinary fixture prompt is consumed by input.
 const executable = process.env.BRIDGE_NATIVE_PI;
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -19,10 +19,6 @@ export default function(pi) {
   let syntheticCompactionAttempt = 0;
   pi.on("session_start", event => {
     appendFileSync(process.env.OFFLINE_LIFECYCLE_FILE, event.reason + "\\n");
-    writeFileSync(process.env.OFFLINE_LIFECYCLE_FILE + ".capabilities", JSON.stringify({
-      commandOutcomes: typeof pi.dispatchExtensionCommand === "function",
-      promptAdmission: typeof pi.submitUserMessage === "function",
-    }));
   });
   pi.on("agent_start", () => appendFileSync(process.env.OFFLINE_LIFECYCLE_FILE, "AGENT_STARTED\\n"));
   pi.on("session_before_compact", event => {
@@ -53,26 +49,21 @@ export default function(pi) {
       input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 32768, maxTokens: 1024 }))
   });
-  pi.registerCommand("offline-fixture-command", { description: "metadata only", handler: async () => {} });
   pi.registerCommand("offline-fixture-seed-compaction", { description: "seed compactable local history", handler: async (_args, ctx) => {
     const huge = "local compaction fixture ".repeat(60000);
     ctx.sessionManager.appendMessage({ role: "user", content: huge, timestamp: Date.now() });
     ctx.sessionManager.appendMessage({ role: "user", content: huge, timestamp: Date.now() });
   }});
-  pi.registerCommand("offline-fixture-command", { description: "offline command outcome", handler: async (args, ctx) => {
-    appendFileSync(process.env.OFFLINE_LIFECYCLE_FILE, "COMMAND_STARTED\\n");
-    ctx.ui.notify("literal command notice: " + args, "warning");
-    if (args === "fail") throw new Error("literal command failure\\n  detail");
-    if (args === "reload" || args === "reload-dialog") {
-      const pending = args === "reload-dialog" ? globalThis.__piPaseoRemoteUiV1.input("Pending reload fixture", "Answer") : undefined;
-      await ctx.reload();
-      await pending;
-      return;
-    }
+  pi.registerCommand("offline-fixture-command", { description: "stock command submission", handler: async (args) => {
+    const receipt = process.env.OFFLINE_INPUT_RECEIPT + ".command";
+    writeFileSync(receipt + "-start", JSON.stringify({ args }));
     const release = process.env.OFFLINE_INPUT_RECEIPT + ".command-release";
-    while (!existsSync(release)) await new Promise(resolve => setTimeout(resolve, 10));
-    ctx.ui.notify("settled command notice: " + args, "info");
-    writeFileSync(process.env.OFFLINE_INPUT_RECEIPT + ".command", JSON.stringify({ args }));
+    const deadline = Date.now() + 4000;
+    while (!existsSync(release)) {
+      if (Date.now() >= deadline) throw new Error("Command fixture release timed out");
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    writeFileSync(receipt, JSON.stringify({ args, result: "handled:" + args }));
   }});
   pi.registerCommand("offline-fixture-seed-history", { description: "seed local history", handler: async (_args, ctx) => {
     const sm = ctx.sessionManager;
@@ -83,19 +74,7 @@ export default function(pi) {
     sm.appendContextEdit(omitted, null);
     writeFileSync(process.env.OFFLINE_LIFECYCLE_FILE + ".history", JSON.stringify({ first, omitted }));
   }});
-  pi.registerCommand("offline-fixture-dialog", { description: "offline dialog probe", handler: async (args) => {
-    const remote = globalThis.__piPaseoRemoteUiV1;
-    if (!remote) throw new Error("Offline remote UI global missing");
-    const method = args.trim();
-    if (!remote.isConnected()) throw new Error("Offline remote UI disconnected");
-    const settings = { paseoQuestionnaire: { v: 1, toolCallId: "fixture-tool", index: 0, input: true } };
-    const value = method === "confirm" ? await remote.confirm("Confirm fixture", "Continue?")
-      : method === "editor" ? await remote.editor("Editor fixture", "Initial text")
-      : method === "correlated" ? await remote.select("Correlated fixture", ["One"], settings)
-      : method === "correlated-input" ? await remote.input("Correlated input", "Literal response", settings)
-      : await remote.input("Input fixture", "Literal response");
-    writeFileSync(process.env.OFFLINE_INPUT_RECEIPT + ".dialog", JSON.stringify({ method, value: value ?? null }));
-  }});
+
 }`;
 
 function rpc(stream: Socket | NodeJS.ReadableStream, write: (line: string) => void) {
@@ -128,7 +107,7 @@ function rpc(stream: Socket | NodeJS.ReadableStream, write: (line: string) => vo
 }
 
 test("actual Pi executable and production bridge RPC", { skip: !executable, timeout: 45000 }, async t => {
-  // Short path also fits Unix sockaddr_un in Nix build directories.
+  // Keep the socket path within the Unix sockaddr_un length limit.
   const temporary = await mkdtemp(path.join(tmpdir(), "brpc-"));
   const home = path.join(temporary, "home"), cwd = path.join(temporary, "cwd");
   const runtime = path.join(temporary, "run"), agent = path.join(home, ".pi", "agent");
@@ -150,14 +129,14 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
     cwd, detached: true, stdio: ["pipe", "pipe", "pipe"],
     // Allowlist only. In particular no API keys, tmux, service, auth, agent
     // sockets, user Pi configuration, or inherited wrapper environment.
-    env: { PATH: path.dirname(executable!), HOME: home, TMPDIR: temporary,
+    env: { PATH: [path.dirname(executable!), path.dirname(process.execPath)].join(path.delimiter), HOME: home, TMPDIR: temporary,
       XDG_RUNTIME_DIR: runtime, XDG_CONFIG_HOME: path.join(home, ".config"),
       XDG_CACHE_HOME: path.join(home, ".cache"), XDG_DATA_HOME: path.join(home, ".local/share"),
       OFFLINE_LIFECYCLE_FILE: path.join(temporary, "lifecycle"),
       OFFLINE_INPUT_RECEIPT: path.join(temporary, "input-receipt.json"),
       PI_CODING_AGENT_DIR: agent, PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0",
-      PI_PASEO_BRIDGE_FORCE: "1", PI_PASEO_BRIDGE_NO_IMPORT: "1", PI_PASEO_BRIDGE_NO_TITLE: "1",
-      PI_PASEO_BRIDGE_IMPORT_SESSIONS: "0", PI_PASEO_BRIDGE_GENERATE_TITLES: "0", PASEO_HOST: "fixture://offline" },
+      PI_PASEO_BRIDGE_FORCE: "1", PI_PASEO_BRIDGE_NO_IMPORT: "1",
+      PI_PASEO_BRIDGE_IMPORT_SESSIONS: "0", PASEO_HOST: "fixture://offline" },
   });
   let stderr = "", startupError: Error | undefined;
   child.stderr.on("data", data => { stderr = (stderr + data).slice(-12000); });
@@ -180,10 +159,8 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
         await delay(50);
       }
     }
-    const dialogs: any[] = [];
     const extensionNotices: string[] = [];
     const compactionEvents: any[] = [];
-    const dialogCancellations: string[] = [];
     let dialogBuffer = "";
     socket.on("data", chunk => {
       dialogBuffer += chunk.toString();
@@ -193,10 +170,8 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
         const line = dialogBuffer.slice(0, end); dialogBuffer = dialogBuffer.slice(end + 1);
         try {
           const event = JSON.parse(line);
-          if (event.type === "extension_ui_request" && ["select", "input", "confirm", "editor"].includes(event.method)) dialogs.push(event);
           if (event.type === "extension_ui_request" && event.method === "notify" && typeof event.message === "string") extensionNotices.push(event.message);
           if (event.type === "compaction_start" || event.type === "compaction_end") compactionEvents.push(event);
-          if (event.type === "extension_ui_cancel") dialogCancellations.push(event.id);
         } catch { /* Other protocol traffic is owned by the RPC fixture. */ }
       }
     });
@@ -207,23 +182,10 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       assert.equal(result.success, true, JSON.stringify(result));
       return result.data;
     };
-    const capabilities = JSON.parse(await readFile(path.join(temporary, "lifecycle.capabilities"), "utf8"));
-    t.diagnostic(`Runtime capabilities: ${JSON.stringify(capabilities)}; stock third-party command rejection is NOT functional command parity`);
     const seedHistory = async (message: string) => {
-      // Fixture setup is terminal/native-owned on stock, not a claim that the
-      // bridge can execute an uncooperative third-party extension command.
-      const response = capabilities.commandOutcomes ? await bridge("prompt", { message }) : await native("prompt", { message });
+      // Native RPC awaits fixture setup before testing independent bridge reads.
+      const response = await native("prompt", { message });
       assert.equal(response.success, true, JSON.stringify(response));
-    };
-    const assertUnsupportedCommand = async (type: string, message: string) => {
-      const noticesBefore = extensionNotices.length;
-      const response = await bridge(type, { message });
-      assert.equal(response.success, false, JSON.stringify(response));
-      assert.match(response.error, /cannot report extension command outcomes/);
-      assert.equal((await native("abort")).success, true, "barrier behind any accidental asynchronous delivery");
-      assert.ok(!(await readFile(path.join(temporary, "lifecycle"), "utf8")).includes("COMMAND_STARTED"), "rejected third-party handler must never execute");
-      assert.equal(extensionNotices.length, noticesBefore, "rejected third-party command must not emit notices");
-      await assert.rejects(readFile(path.join(temporary, "input-receipt.json.command")), { code: "ENOENT" });
     };
     await t.test("native bridge routes state and commands", async () => {
       const state = await ok("get_state");
@@ -231,13 +193,7 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       assert.equal(state.model.id, "first");
       assert.equal(state.sessionFile, session);
       assert.equal(state.isStreaming, false);
-      const { commands, bridgeCommandSupport } = await ok("get_commands");
-      assert.deepEqual(bridgeCommandSupport, {
-        owned: ["paseo-bridge", "remote-reload", "paseo_capture_entries"],
-        unsupported: ["paseo_tree", "reload"],
-        arbitraryExtensionCommands: capabilities.commandOutcomes,
-        disconnectReceipt: "accepted", reloadReceipt: "accepted",
-      });
+      const { commands } = await ok("get_commands");
       assert.ok(commands.some((c: any) => c.name === "offline-fixture-command"));
       assert.ok(commands.some((c: any) => c.name === "remote-reload"));
     });
@@ -336,8 +292,7 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
     await t.test("idle bridge prompt reaches actual Pi input as extension provenance without streaming behavior", async () => {
       assert.equal((await ok("get_state")).isStreaming, false);
       const accepted = await ok("prompt", { message: "ordinary offline bridge provenance fixture" });
-      if (capabilities.promptAdmission) assert.equal(accepted.agentInvoked, false, "Pi's input hook consumed the prompt without starting a model turn");
-      else assert.equal(Object.hasOwn(accepted, "agentInvoked"), false, "stock delivery does not expose input-consumption disposition");
+      assert.equal(Object.hasOwn(accepted, "agentInvoked"), false, "stock submission does not expose input-consumption disposition");
       const deadline = Date.now() + 4000;
       let receipt: any;
       for (;;) {
@@ -384,32 +339,38 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       assert.ok(!lifecycle.includes("PROVIDER_CALLED"));
       assert.ok(!lifecycle.includes("AGENT_STARTED"));
     });
-    await t.test("third-party commands: real outcomes where supported, explicit no-effects rejection on stock", async () => {
-      if (!capabilities.commandOutcomes) {
-        for (const type of ["prompt", "steer", "follow_up"]) await assertUnsupportedCommand(type, `/offline-fixture-command ${type}`);
-        return;
-      }
+    await t.test("stock extension commands acknowledge submission and execute the actual handler", async () => {
       const release = path.join(temporary, "input-receipt.json.command-release");
       const receipt = path.join(temporary, "input-receipt.json.command");
       for (const type of ["prompt", "steer", "follow_up"]) {
-        await rm(release, { force: true }); await rm(receipt, { force: true });
-        let settled = false;
-        const pending = bridge(type, { message: `/offline-fixture-command ${type}` }).then(result => { settled = true; return result; });
+        await rm(release, { force: true });
+        await rm(receipt, { force: true });
+        await rm(receipt + "-start", { force: true });
+        const result = await ok(type, { message: `/offline-fixture-command ${type}` });
+        assert.equal(Object.hasOwn(result, "agentInvoked"), false, "submission is not a handler-completion receipt");
         const deadline = Date.now() + 4000;
-        while (!extensionNotices.includes(`literal command notice: ${type}`)) {
-          assert.ok(Date.now() < deadline, "notification must arrive while command is still awaiting completion");
-          await delay(10);
+        for (;;) {
+          try {
+            assert.deepEqual(JSON.parse(await readFile(receipt + "-start", "utf8")), { args: type });
+            break;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            assert.ok(Date.now() < deadline, "stock Pi must enter the registered handler");
+            await delay(10);
+          }
         }
-        assert.equal(settled, false);
         await assert.rejects(readFile(receipt), { code: "ENOENT" });
         await writeFile(release, "release");
-        const result = await pending;
-        assert.equal(result.success, true);
-        assert.equal(result.data.agentInvoked, false);
-        assert.deepEqual(JSON.parse(await readFile(receipt, "utf8")), { args: type });
-        const failed = await bridge(type, { message: "/offline-fixture-command fail" });
-        assert.equal(failed.success, false);
-        assert.equal(failed.error, "literal command failure\n  detail");
+        for (;;) {
+          try {
+            assert.deepEqual(JSON.parse(await readFile(receipt, "utf8")), { args: type, result: `handled:${type}` });
+            break;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            assert.ok(Date.now() < deadline, "the actual handler must finish independently of its submission receipt");
+            await delay(10);
+          }
+        }
       }
       for (const type of ["steer", "follow_up"]) {
         const rejected = await bridge(type, { message: "/remote-reload" });
@@ -419,102 +380,6 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       const lifecycle = await readFile(path.join(temporary, "lifecycle"), "utf8");
       assert.ok(!lifecycle.includes("PROVIDER_CALLED"));
       assert.ok(!lifecycle.includes("AGENT_STARTED"));
-    });
-    await t.test("Stop cancels observation where supported; stock rejected work never starts", async () => {
-      if (!capabilities.commandOutcomes) {
-        await assertUnsupportedCommand("prompt", "/offline-fixture-command cancel");
-        await ok("abort");
-        await assert.rejects(readFile(path.join(temporary, "input-receipt.json.command")), { code: "ENOENT" });
-        return;
-      }
-      const release = path.join(temporary, "input-receipt.json.command-release");
-      const receipt = path.join(temporary, "input-receipt.json.command");
-      await rm(release, { force: true }); await rm(receipt, { force: true });
-      const pending = bridge("prompt", { message: "/offline-fixture-command cancel" });
-      const deadline = Date.now() + 4000;
-      while (!extensionNotices.includes("literal command notice: cancel")) {
-        assert.ok(Date.now() < deadline, "command must start before Stop"); await delay(10);
-      }
-      await ok("abort");
-      const canceled = await pending;
-      assert.equal(canceled.success, false);
-      assert.match(canceled.error, /wait aborted.*may still be running/);
-      await assert.rejects(readFile(receipt), { code: "ENOENT" });
-      await writeFile(release, "release local work");
-      for (;;) {
-        try { assert.deepEqual(JSON.parse(await readFile(receipt, "utf8")), { args: "cancel" }); break; }
-        catch (error: any) { if (error.code !== "ENOENT") throw error; }
-        assert.ok(Date.now() < deadline, "local work must remain inspectable after wait cancellation"); await delay(10);
-      }
-      assert.ok(!extensionNotices.includes("settled command notice: cancel"), "settled wait cannot leak later notifications");
-      assert.ok((await ok("get_state")).sessionId);
-    });
-    await t.test("remote dialogs use stock-native frames and a non-destructive editor fallback", async () => {
-      const literal = "  literal {\"x\":1}\nsecond line  ";
-      const cases = [
-        { method: "input", response: { value: literal }, expected: literal },
-        { method: "correlated", response: { value: literal }, expected: literal },
-        { method: "correlated-input", response: { value: literal }, expected: literal },
-        { method: "editor", choice: "Write replacement", response: { value: literal }, expected: literal },
-        { method: "editor", choice: "Keep existing text", response: {}, expected: "Initial text" },
-        { method: "editor", choice: "cancel", response: {}, expected: null },
-        { method: "confirm", response: { confirmed: true }, expected: true },
-        { method: "confirm", response: { confirmed: false }, expected: false },
-        { method: "input", response: { cancelled: true }, expected: null },
-      ];
-      for (const probe of cases) {
-        const receiptPath = path.join(temporary, "input-receipt.json.dialog");
-        await rm(receiptPath, { force: true });
-        // Test the explicit remote UI adapter independently of unsupported
-        // third-party slash dispatch. Native RPC invokes the fixture on stock.
-        const dispatched = capabilities.commandOutcomes
-          ? ok("prompt", { message: `/offline-fixture-dialog ${probe.method}` })
-          : native("prompt", { message: `/offline-fixture-dialog ${probe.method}` }).then(result => assert.equal(result.success, true, JSON.stringify(result)));
-        const deadline = Date.now() + 4000;
-        while (!dialogs.length) {
-          if (Date.now() >= deadline) {
-            let started = "not invoked";
-            try { started = await readFile(path.join(temporary, "input-receipt.json.dialog-start"), "utf8"); } catch {}
-            assert.fail(`${probe.method} must publish a native dialog request; start=${started}; stderr=${stderr}`);
-          }
-          await delay(10);
-        }
-        let request = dialogs.shift();
-        if (probe.method === "editor") {
-          assert.equal(request.method, "select");
-          assert.match(request.title, /Current text:\nInitial text/);
-          assert.deepEqual(request.options, ["Keep existing text", "Write replacement"]);
-          socket!.write(JSON.stringify({ type: "extension_ui_response", id: request.id,
-            ...(probe.choice === "cancel" ? { cancelled: true } : { value: probe.choice }) }) + "\n");
-          if (probe.choice === "Write replacement") {
-            while (!dialogs.length) {
-              assert.ok(Date.now() < deadline, "replacement text must use the stock input dialog");
-              await delay(10);
-            }
-            request = dialogs.shift();
-            assert.equal(request.method, "input");
-            socket!.write(JSON.stringify({ type: "extension_ui_response", id: request.id, ...probe.response }) + "\n");
-          }
-        } else {
-          assert.equal(request.method, probe.method === "correlated" ? "select" : probe.method === "correlated-input" ? "input" : probe.method);
-          if (probe.method.startsWith("correlated")) {
-            assert.deepEqual(request.paseoQuestionnaire, { v: 1, toolCallId: "fixture-tool", index: 0, input: true });
-          } else assert.equal(request.paseoQuestionnaire, undefined);
-          socket!.write(JSON.stringify({ type: "extension_ui_response", id: request.id, ...probe.response }) + "\n");
-        }
-        await dispatched;
-        let receipt: any;
-        for (;;) {
-          try { receipt = JSON.parse(await readFile(receiptPath, "utf8")); break; }
-          catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-            assert.ok(Date.now() < deadline, "dialog must settle its original extension caller");
-            await delay(10);
-          }
-        }
-        assert.deepEqual(receipt, { method: probe.method, value: probe.expected });
-      }
-      assert.ok(!(await readFile(path.join(temporary, "lifecycle"), "utf8")).includes("PROVIDER_CALLED"));
     });
     await t.test("native remote-reload keeps the isolated Pi and attached bridge alive", async () => {
       const pid = child.pid;
@@ -537,31 +402,6 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       assert.equal(after.model.id, before.model.id);
       assert.equal((await ok("get_session_stats")).totalMessages, 0);
       assert.ok(!(await readFile(path.join(temporary, "lifecycle"), "utf8")).includes("PROVIDER_CALLED"));
-    });
-    await t.test("third-party reload: old RPC settles where supported; stock rejects without reloading", async () => {
-      if (!capabilities.commandOutcomes) {
-        const lifecycle = await readFile(path.join(temporary, "lifecycle"), "utf8");
-        await assertUnsupportedCommand("prompt", "/offline-fixture-command reload-dialog");
-        assert.equal(await readFile(path.join(temporary, "lifecycle"), "utf8"), lifecycle);
-        assert.equal(dialogs.length, 0);
-        assert.ok((await ok("get_state")).sessionId);
-        return;
-      }
-      const before = extensionNotices.filter(message => message.startsWith("Pi runtime reloaded.")).length;
-      const response = await bridge("prompt", { message: "/offline-fixture-command reload-dialog" });
-      assert.equal(response.success, false);
-      assert.match(response.error, /runtime reloaded.*outcome is unknown/);
-      const deadline = Date.now() + 4000;
-      while (extensionNotices.filter(message => message.startsWith("Pi runtime reloaded.")).length <= before) {
-        assert.ok(Date.now() < deadline, "replacement binding must resume on the retained socket");
-        await delay(10);
-      }
-      assert.equal(child.exitCode, null);
-      assert.equal(socket!.destroyed, false);
-      const abandoned = dialogs.shift();
-      assert.equal(abandoned?.title, "Pending reload fixture");
-      assert.ok(dialogCancellations.includes(abandoned.id), "reload must dismiss the old native permission by its raw dialog ID");
-      assert.ok((await ok("get_state")).sessionId);
     });
     await t.test("history replay and capture follow Pi's canonical projection", async () => {
       await seedHistory("/offline-fixture-seed-history");

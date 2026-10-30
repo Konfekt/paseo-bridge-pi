@@ -3,10 +3,11 @@ import test from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { assertNoLiveRuntimeOwner, claimRuntimeLaunch, harnessRuntimeMetadata, markPaseoAgentPane, clearPaseoAgentPane, validRuntimeReapingEvent, assertRuntimeNotReaped, matchingRuntimeRecords, processStartToken, resolveTmuxIdentity, runtimeOwnerMayBeAlive } from "../shim/runtime-registry.js";
-import { killForkPaneForAgent } from "../shim/tmux-fork.js";
+import { assertNoLiveRuntimeOwner, matchingRuntimeRecords, processStartToken, readRuntimeRecords, runtimeOwnerMayBeAlive } from "../shim/runtime-registry.js";
 
 const record = { sessionFile: "/project/session.jsonl", agentId: "agent", pid: 123, processStartToken: "boot:1" };
 test("live owner blocks fallback; missing/reused process permits it", () => {
@@ -27,47 +28,6 @@ test("discovery matches agent alias or canonical path", () => {
   assert.deepEqual(matchingRuntimeRecords("/different", "agent", [record]), [record]);
   assert.deepEqual(matchingRuntimeRecords("/different", "other", [record]), []);
 });
-test("harness metadata explicitly allowlists non-secret fields", () => {
-  const metadata = harnessRuntimeMetadata({ PI_HARNESS_RUNTIME_ID: "runtime", PI_HARNESS_TASK_ID: "task", PI_HARNESS_CONTROL_TOKEN: "secret" });
-  assert.equal(metadata.managed, true);
-  assert.equal(metadata.taskId, "task");
-  assert.equal(JSON.stringify(metadata).includes("secret"), false);
-  assert.equal(harnessRuntimeMetadata({}).managed, false);
-});
-test("tmux identity uses stable IDs on the explicitly inherited server", () => {
-  const env = { TMUX: "/tmp/server,12,0", TMUX_PANE: "%8" };
-  const result = resolveTmuxIdentity(env, (command, args) => {
-    assert.equal(command, "tmux");
-    assert.deepEqual(args.slice(0, 6), ["-S", "/tmp/server", "display-message", "-p", "-t", "%8"]);
-    return { status: 0, stdout: "$2\t@3\t%8\n" };
-  }, value => value);
-  assert.deepEqual(result, { tmuxSocket: "/tmp/server", tmuxSessionId: "$2", tmuxWindowId: "@3", tmuxPane: "%8" });
-  assert.deepEqual(resolveTmuxIdentity(env, () => ({ status: 0, stdout: "$2\t@3\t%9" }), value => value), {});
-  assert.deepEqual(resolveTmuxIdentity({}), {});
-  assert.equal(resolveTmuxIdentity(env, () => ({ status: 0, stdout: "$2\t@3\t%8\t1\n" }), value => value).infrastructure, true);
-});
-test("actual pane resolution canonicalizes socket aliases and agent tags use that server", () => {
-  const placement = resolveTmuxIdentity({ TMUX: "/alias,1,0", TMUX_PANE: "%5" }, (_command, args) => {
-    assert.equal(args[1], "/canonical");
-    return { status: 0, stdout: "$1\t@2\t%5\n" };
-  }, () => "/canonical");
-  assert.equal(placement.tmuxSocket, "/canonical");
-  assert.equal(markPaseoAgentPane(placement, "agent", (_command, args) => {
-    assert.deepEqual(args, ["-S", "/canonical", "set-option", "-p", "-t", "%5", "@paseo_pi_agent_pid", "42", ";",
-      "set-option", "-p", "-t", "%5", "@paseo_pi_agent_start_token", "abc:123", ";",
-      "set-option", "-p", "-t", "%5", "@paseo_agent_id", "agent"]);
-    return { status: 0 };
-  }, { pid: 42, startToken: "abc:123" }), true);
-  assert.equal(clearPaseoAgentPane(placement, "agent", (_command, args) => {
-    assert.deepEqual(args.slice(0, 6), ["-S", "/canonical", "if-shell", "-F", "-t", "%5"]);
-    assert.equal(args[6], "#{&&:#{==:#{@paseo_agent_id},agent},#{&&:#{==:#{@paseo_pi_agent_pid},42},#{==:#{@paseo_pi_agent_start_token},abc:123}}}");
-    assert.equal(args[7], "set-option -p -u -t %5 @paseo_agent_id ; set-option -p -u -t %5 @paseo_pi_agent_pid ; set-option -p -u -t %5 @paseo_pi_agent_start_token");
-    return { status: 0 };
-  }, { pid: 42, startToken: "abc:123" }), true);
-});
-test("managed children are never reaped by fork archive cleanup", () => {
-  assert.equal(killForkPaneForAgent("agent", { runtimeRecord: { ...record, forkCreated: true, managed: true }, spawnSync() { throw new Error("must not touch tmux"); } }), false);
-});
 test("shim fails closed with a live owner and unavailable socket without spawning Pi", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "paseo-owner-test-"));
   try {
@@ -75,7 +35,7 @@ test("shim fails closed with a live owner and unavailable socket without spawnin
     fs.mkdirSync(directory, { recursive: true });
     const sessionFile = path.join(home, "session.jsonl");
     fs.writeFileSync(path.join(directory, "owner.json"), JSON.stringify({ sessionFile, pid: process.pid,
-      managed: true, bridgeSocket: path.join(home, "missing.sock") }));
+      bridgeSocket: path.join(home, "missing.sock") }));
     const shim = fileURLToPath(new URL("../shim/pi-paseo-shim.js", import.meta.url));
     const result = spawnSync(process.execPath, [shim, "--mode", "rpc", "--session", sessionFile], {
       env: { ...process.env, HOME: home, XDG_RUNTIME_DIR: home, PI_REAL_BIN: "/must-not-be-launched", PASEO_AGENT_ID: "" },
@@ -86,37 +46,57 @@ test("shim fails closed with a live owner and unavailable socket without spawnin
     assert.doesNotMatch(result.stderr, /failed to spawn/);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
-test("allocation claims reject concurrent and unresolved launches", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-launch-claim-"));
-  try {
-    const release = claimRuntimeLaunch("agent", directory);
-    assert.throws(() => claimRuntimeLaunch("agent", directory), /already pending or unresolved/);
-    release();
-    const releaseAgain = claimRuntimeLaunch("agent", directory);
-    releaseAgain();
-  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
-});
-test("dead managed ownership is unresolved, not automatic revival authority", () => {
-  assert.throws(() => assertNoLiveRuntimeOwner(record.sessionFile, { records: [{ ...record, managed: true }],
-    kill() { throw Object.assign(new Error(), { code: "ESRCH" }); } }), /unresolved managed/);
-});
-test("reaping events require exact trusted task, attempt, runtime, child and bounded worker epoch", () => {
-  const env = { PI_HARNESS_RUNTIME_ID: "runtime", PI_HARNESS_CHILD_ID: "child", PI_HARNESS_TASK_ID: "task", PI_HARNESS_ATTEMPT: "2" };
-  const event = { runtimeId: "runtime", taskId: "task", childId: "child", attempt: 2, workerEpoch: "a".repeat(32) };
-  assert.equal(validRuntimeReapingEvent(event, env), true);
-  assert.equal(validRuntimeReapingEvent({ ...event, attempt: 1 }, env), false, "stale attempts cannot seal the current runtime");
-  for (const value of [null, [], {}, { ...event, runtimeId: "other" }, { ...event, taskId: "other" },
-    { ...event, childId: "other" }, { ...event, workerEpoch: "bad" }, { ...event, controlToken: "secret" }]) {
-    assert.equal(validRuntimeReapingEvent(value, env), false);
-  }
-  assert.equal(validRuntimeReapingEvent(event, {}), false);
-});
-test("reaped records reject attachment and fallback, even for the current PID", () => {
-  const reaped = { ...record, pid: process.pid, lifecycle: "reaped", managed: true };
-  assert.throws(() => assertRuntimeNotReaped([reaped]), /explicitly reaped/);
-  assert.throws(() => assertNoLiveRuntimeOwner(record.sessionFile, { records: [reaped], ignorePid: process.pid }), /explicitly reaped/);
-  assert.doesNotThrow(() => assertRuntimeNotReaped([{ ...record, lifecycle: "active" }]));
-});
 test("Linux process identity includes boot and process start", () => {
   if (process.platform === "linux") assert.match(processStartToken()!, /^[a-f0-9-]+:\d+$/);
+});
+
+test("unattached shim forwards native RPC and closes its owned Pi child on controller EOF", { timeout: 10000 }, async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "paseo-native-rpc-"));
+  const nativePi = path.join(home, "pi.mjs");
+  fs.writeFileSync(nativePi, `import { createInterface } from "node:readline";
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+createInterface({ input: process.stdin }).on("line", line => {
+  const command = JSON.parse(line);
+  console.log(JSON.stringify({ type: "response", id: command.id, command: command.type, success: true,
+    data: { source: "native-pi", pid: process.pid, argv: process.argv.slice(2) } }));
+});
+`);
+  const shim = fileURLToPath(new URL("../shim/pi-paseo-shim.js", import.meta.url));
+  const args = ["--mode", "rpc", "--session", path.join(home, "session.jsonl")];
+  const child = spawn(process.execPath, [shim, ...args], {
+    env: { ...process.env, HOME: home, XDG_RUNTIME_DIR: home, PI_REAL_BIN: nativePi, PASEO_AGENT_ID: "" },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let nativePid: number | undefined;
+  t.after(() => {
+    child.kill("SIGKILL");
+    if (nativePid) { try { process.kill(nativePid, "SIGKILL"); } catch {} }
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const lines = createInterface({ input: child.stdout });
+  const response = once(lines, "line");
+  child.stdin.write('{"id":"state","type":"get_state"}\n');
+  const [line] = await response;
+  const reply = JSON.parse(line);
+  assert.equal(reply.id, "state");
+  assert.equal(reply.command, "get_state");
+  assert.equal(reply.success, true);
+  assert.equal(reply.data.source, "native-pi");
+  assert.deepEqual(reply.data.argv, args);
+  nativePid = reply.data.pid;
+  const closed = once(child, "close");
+  child.stdin.end();
+  const [code] = await closed;
+  assert.equal(code, 0);
+  assert.throws(() => process.kill(nativePid!, 0), { code: "ESRCH" });
+  nativePid = undefined;
+});
+
+test("invalid persisted ownership is not treated as permission to launch another writer", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "paseo-invalid-owner-"));
+  try {
+    fs.writeFileSync(path.join(directory, "owner.json"), JSON.stringify({ pid: process.pid, bridgeSocket: "/missing.sock" }));
+    assert.throws(() => readRuntimeRecords(directory), /Invalid Pi runtime registry record/);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

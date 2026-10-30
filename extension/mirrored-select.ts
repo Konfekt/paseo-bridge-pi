@@ -1,16 +1,7 @@
-export function selectionFromPaseoResolution(payload: any, fallback: string | undefined): string | undefined {
-  const resolution = payload?.resolution;
-  if (!resolution || typeof resolution !== "object") return fallback;
-  if (resolution.behavior === "deny") return undefined;
-  const answer = resolution.updatedInput?.answers?.Response;
-  return typeof answer === "string" ? answer : fallback;
-}
-
 export async function coordinateMirroredSelect(options: {
   remoteResult: Promise<string | undefined>;
   localSelect: (signal: AbortSignal) => Promise<string | undefined>;
   resolveLocal: (value: string | undefined) => Promise<unknown>;
-  finishRemote: (value: string | undefined) => void;
   signal?: AbortSignal;
 }): Promise<string | undefined> {
   const localController = new AbortController();
@@ -32,14 +23,12 @@ export async function coordinateMirroredSelect(options: {
       return winner.value;
     }
 
-    const settled = await Promise.race([
-      options.resolveLocal(winner.value).then((payload) => ({ source: "daemon" as const, payload })),
-      options.remoteResult.then((value) => ({ source: "remote" as const, value })),
+    // Submission is not consumption: only the response received through the
+    // controller settles the original Pi request, including local selections.
+    return await Promise.race([
+      options.resolveLocal(winner.value).then(() => options.remoteResult),
+      options.remoteResult,
     ]);
-    if (settled.source === "remote") return settled.value;
-    const authoritative = selectionFromPaseoResolution(settled.payload, winner.value);
-    options.finishRemote(authoritative);
-    return authoritative;
   } finally {
     options.signal?.removeEventListener("abort", abortLocal);
   }

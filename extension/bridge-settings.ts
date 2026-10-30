@@ -49,10 +49,6 @@ export function isImportEnabled(): boolean {
   return !process.env.PI_PASEO_BRIDGE_NO_IMPORT && environmentBoolean("PI_PASEO_BRIDGE_IMPORT_SESSIONS");
 }
 
-export function isTitleGenerationEnabled(): boolean {
-  return !process.env.PI_PASEO_BRIDGE_NO_TITLE && environmentBoolean("PI_PASEO_BRIDGE_GENERATE_TITLES");
-}
-
 function assertMutableTarget(file: string): void {
   let stat: fs.Stats;
   try {
@@ -75,8 +71,7 @@ export function writeMutableJson(file: string, value: Record<string, unknown>): 
     assertMutableTarget(file);
     const directory = path.dirname(file);
     fs.mkdirSync(directory, { recursive: true });
-    const realDirectory = fs.realpathSync(directory);
-    if (realDirectory === "/nix/store" || realDirectory.startsWith("/nix/store/") || !(fs.statSync(directory).mode & 0o222)) {
+    if (!(fs.statSync(directory).mode & 0o222)) {
       throw new Error(`Refusing to update immutable directory ${directory}; change its declarative configuration instead.`);
     }
     fs.accessSync(directory, fs.constants.W_OK);

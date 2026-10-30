@@ -24,22 +24,6 @@ function fixture(timeoutMs = 1000) {
   return { socket, conn: createPaseoWsConnection(socket, hello, { timeoutMs }) };
 }
 
-test("admitted subscription events preserve RPC correlation and close notification is one-shot", async () => {
-  const socket = new Socket(), events: any[] = [], failures: Error[] = [];
-  const conn = createPaseoWsConnection(socket, hello, { onSession: message => events.push(message), onFailure: error => failures.push(error) });
-  socket.message({ type: "session", message: { type: "agent_update", payload: { kind: "upsert" } } });
-  assert.equal(events.length, 0);
-  socket.onopen?.(); socket.ack();
-  const pending = conn.requestWithId("subscribed", { type: "fetch_agents_request", requestId: "subscribed", subscribe: {} });
-  await tick();
-  socket.message({ type: "session", message: { type: "agent_update", payload: { kind: "upsert", agent: { id: "exact-child", title: "Human Name" } } } });
-  socket.response("subscribed", { accepted: true });
-  assert.equal((await pending).accepted, true);
-  assert.equal(events[0].payload.agent.id, "exact-child");
-  conn.close(); conn.close();
-  assert.equal(failures.length, 1);
-});
-
 test("session requests wait for actual server_info admission, not socket open", async () => {
   const { socket, conn } = fixture();
   const pending = conn.requestWithId("one", { type: "set_agent_model_request", requestId: "one" });

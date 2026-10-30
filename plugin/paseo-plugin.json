@@ -1,6 +1,0 @@
-{
-  "id": "paseo-permission-gate",
-  "requirements": {
-    "paseo": ">=0.13.0"
-  }
-}
