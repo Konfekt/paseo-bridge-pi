@@ -8,6 +8,8 @@ export const extensionDir = norm(path.join(repoRoot, "extension"));
 export const shimPath = norm(path.join(repoRoot, "shim", "pi-paseo-shim.js"));
 export const piSettingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
 export const paseoConfigPath = path.join(os.homedir(), ".paseo", "config.json");
+export const RPIV_INCOMPATIBILITY_WARNING =
+  "Compatibility warning: @juicesharp/rpiv-ask-user-question is incompatible with terminal-attached sessions in stock Paseo 0.13.0. App submissions do not reach its custom terminal widget. If installed, disable its extensions with pi config, then reload idle Pi sessions. See docs/reference.md#incompatible-question-package.";
 
 export function norm(p) {
   return p.replaceAll("\\", "/");

@@ -25,6 +25,7 @@
     "README.md"
   ],
   "scripts": {
+    "postinstall": "node scripts/install.js --warn-only",
     "dev-install": "node scripts/install.js",
     "dev-uninstall": "node scripts/uninstall.js",
     "test": "node --experimental-strip-types --test test/*.test.ts",

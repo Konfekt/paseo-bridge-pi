@@ -6,10 +6,14 @@ import {
   paseoConfigPath,
   piSettingsPath,
   readJson,
+  RPIV_INCOMPATIBILITY_WARNING,
   samePath,
   shimPath,
   writeJson,
 } from "./config.js";
+
+console.warn(RPIV_INCOMPATIBILITY_WARNING);
+if (process.argv.includes("--warn-only")) process.exit(0);
 
 // Development-only registration (`npm run dev-install` in a checkout). The
 // supported install path is the pi package flow described in the README.

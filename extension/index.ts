@@ -34,6 +34,7 @@ import { projectedUserCaptures, readTextContent } from "./session-projection.js"
 import { createPaseoWsConnection } from "./paseo-ws.js";
 import { applyRemoteModel } from "./model-sync.js";
 import { normalizePiEventForPaseo } from "./tool-result-normalization.js";
+import { RPIV_INCOMPATIBILITY_WARNING } from "../scripts/config.js";
 import { TurnVisibilityProjection } from "./turn-visibility.js";
 import { bridgeSettingsFile, isAutoEnabled, isImportEnabled, writeBridgeSettings, writeMutableJson } from "./bridge-settings.js";
 
@@ -1168,6 +1169,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       try {
         switch (sub) {
           case "install": {
+            notify(RPIV_INCOMPATIBILITY_WARNING, "warning");
             const result = installShimIntoPaseoConfig();
             if (reportFailure && !result.ok) throw new Error(result.message);
             notify(result.message, result.ok ? "info" : "error");

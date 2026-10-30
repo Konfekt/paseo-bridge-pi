@@ -59,7 +59,7 @@ Ordinary Pi RPC and terminal attachment have different UI boundaries:
 | Pi launched in RPC mode by Paseo | Pi emits its ordinary RPC UI requests; Paseo presents native questions. |
 | Existing terminal Pi attached through the bridge | Ordinary `ctx.ui.select`, `input`, and `confirm` calls appear in both the terminal and Paseo. |
 
-No bridge-specific API is required in dialog-producing extensions. The bridge wraps Pi's public UI methods at session startup, restores its own bindings on shutdown, and binds again after reload or session replacement. RPC mode is not wrapped. Without an attached controller, the original terminal UI runs unchanged; dialogs already open when Paseo attaches remain terminal-local.
+No bridge-specific API is required in extensions using ordinary Pi dialogs. The bridge wraps Pi's public UI methods at session startup, restores its own bindings on shutdown, and binds again after reload or session replacement. RPC mode is not wrapped. Without an attached controller, the original terminal UI runs unchanged; dialogs already open when Paseo attaches remain terminal-local.
 
 Select and input return the selected text or `undefined` on cancellation. Confirmation returns a boolean; cancellation is `false`, matching Pi. Abort signals and timeouts dismiss both interfaces. Provider Stop, controller disconnect, and session shutdown cancel pending mirrored dialogs. Paseo's app Stop applies to tracked agent runs, not idle terminal extension commands. These are live Pi callbacks, not durable questions recoverable after Pi exits.
 
@@ -70,6 +70,25 @@ Paseo renders the request with its existing question components. The bridge rece
 Local choices complete only after the response returns through the controller. If submission fails, the callback remains pending and a notice directs the response to Paseo. Cancellation settles locally even when the daemon is unreachable; failed dismissal is reported, and the stale question may need dismissal in the app.
 
 Permission questions remain subject to Pi's existing gate and authorization policy. The bridge neither disables enforcement nor infers approval from chat text.
+
+### Incompatible question package
+
+`@juicesharp/rpiv-ask-user-question` is a third-party Pi package, not a built-in Pi tool. Version 2.13.9 uses a custom widget in terminal mode. Stock Paseo 0.13.0 creates an "Ask user question" form from the tool call, but routes answers through ordinary select/input requests. The custom widget emits neither, so app submission can dismiss the permission without completing the Pi tool. This affects terminal-attached sessions, not the package's ordinary RPC-mode dialog path.
+
+Disable the package's extensions with `pi config`, or keep its package entry with an empty extension filter in Pi settings:
+
+```json
+{
+  "source": "npm:@juicesharp/rpiv-ask-user-question",
+  "extensions": []
+}
+```
+
+This removes the package's `ask_user_question` tool on the next reload or start; Pi has no built-in replacement with that name. Other extensions' ordinary select/input/confirmation dialogs and permission enforcement remain available. The bridge adds no RPIV-specific adapter.
+
+Disabling a package does not unload an already-open widget. Complete or cancel that dialog in the terminal, wait for Pi to become idle, then run `/reload` locally or `/remote-reload` from Paseo. An app submission made before disabling does not retroactively reach the widget.
+
+Package installation prints a compatibility warning through its npm postinstall hook; `/paseo-bridge install` and `npm run dev-install` also warn. These notices do not alter other packages. If package-manager lifecycle scripts are disabled, the in-Pi setup warning remains available.
 
 ## Remote command limits
 

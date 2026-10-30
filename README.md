@@ -10,6 +10,8 @@ Requires Pi 1.x, Node.js 22+, and Paseo 0.13.0+. Install the package on the Pase
 pi install git:github.com/Konfekt/paseo-bridge-pi
 ```
 
+**Incompatible package:** `@juicesharp/rpiv-ask-user-question` uses a custom terminal widget whose answers cannot be delivered from stock Paseo 0.13.0. Disable its extensions with `pi config` for terminal-attached sessions, then reload Pi while idle. Package installation and `/paseo-bridge install` print this warning; neither changes other packages. See [details and pending-dialog recovery](docs/reference.md#incompatible-question-package).
+
 Inside Pi, run:
 
 ```text
@@ -34,7 +36,7 @@ Start a terminal Pi session. Auto-connect is enabled by default; `/paseo-bridge 
 | `/paseo-bridge status` | Inspect configuration and connection state. |
 | `/remote-reload` | Reload Pi resources while idle, including from Paseo. |
 
-Paseo uses its native chat and question interfaces. Attached terminal sessions mirror ordinary Pi select, input, and confirmation dialogs. Respond in either interface; the result returns to the original Pi callback once. Dialog-producing extensions need no bridge-specific integration. See the [reference](docs/reference.md) for lifecycle limits.
+Paseo uses its native chat and question interfaces. Attached terminal sessions mirror ordinary Pi select, input, and confirmation dialogs. Respond in either interface; the result returns to the original Pi callback once. Extensions using these ordinary dialogs need no bridge-specific integration; custom terminal widgets remain local. See the [reference](docs/reference.md) for lifecycle limits.
 
 The bridge preserves Pi's permission enforcement. It adds no permission-mode control, account dashboard, subagent projection, terminal orchestration, or automatic title-generation request. Android visual acceptance remains unverified.
 
