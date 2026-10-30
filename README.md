@@ -1,13 +1,13 @@
 # 🔗 Pi ↔ Paseo
 
-[![Pi](https://img.shields.io/badge/Pi-1.x-blue)](https://pi.dev) [![Paseo](https://img.shields.io/badge/Paseo-0.11.4%2B-purple)](https://paseo.sh) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](package.json)
+[![Pi](https://img.shields.io/badge/Pi-1.x-blue)](https://pi.dev) [![Paseo](https://img.shields.io/badge/Paseo-0.13.0%2B-purple)](https://paseo.sh) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](package.json)
 
 **One live conversation. Terminal and Paseo.**
 
 Keep working in Pi while Paseo streams the conversation, sends messages and controls the model.
 Add the optional plugin for Goals, jobs, agents and accounts.
 
-[Nix setup](nix/README.md) · [Plugin guide](plugin/README.md) · [Full reference](docs/reference.md)
+[Plugin guide](plugin/README.md) · [Full reference](docs/reference.md)
 
 ## 📦 Choose the components
 
@@ -16,40 +16,33 @@ Add the optional plugin for Goals, jobs, agents and accounts.
 | [Pi extension](extension) | Attach the live terminal conversation to Paseo. |
 | [Provider shim](shim) | Route native Paseo RPC to the owning Pi session. |
 | [Paseo plugin](plugin/README.md) | Add Work, Goals, jobs, agents and account controls. |
-| [Nix integration](nix/README.md) | Compose packages, trusted launchers and configuration. |
+| [Optional Nix integration](nix/README.md) | Declarative packaging and configuration. |
 
-## 🚀 Start with Nix
+## 🚀 Install with Pi and Paseo
 
-```nix
-inputs.paseo-bridge-pi = {
-  url = "github:taugoust/paseo-bridge-pi";
-  inputs.nixpkgs.follows = "nixpkgs";
-};
-```
+Requires Pi 1.x, Node 22+, and Paseo 0.13.0+. No Nix installation, patched Paseo build, or separate plugin compiler is required.
 
-Import the Home Manager or NixOS module and configure `programs.paseo-bridge-pi`.
-Your host supplies endpoints, trusted launchers and secret-file references; the package assembles the wrappers.
-
-**[Complete configuration example →](nix/README.md)**
-
-<details>
-<summary>Install without Nix</summary>
+Install the Pi extension:
 
 ```sh
 pi install git:github.com/taugoust/paseo-bridge-pi
 ```
 
-Run `/paseo-bridge install` against writable native Paseo configuration, then restart the daemon. Use the Nix integration for declaratively managed configuration instead.
+Inside Pi, run `/paseo-bridge install` to register the provider shim in writable Paseo configuration. Restart the Paseo daemon after active work finishes:
 
-Install the optional plugin separately:
+```sh
+paseo restart
+```
+
+Install the optional Work and account-controls plugin separately:
 
 ```sh
 paseo plugin install github:taugoust/paseo-bridge-pi --path plugin
 ```
 
-Requires Pi 1.x and Node 22+. The plugin requires Paseo 0.11.4+; advanced controls may also need matching Pi extensions and server patches.
+The plugin compiles with stock Paseo and adds no runtime dependencies. Tool details use selectable plain text, without syntax highlighting or native tool-specific formatting. Optional controls still require their matching Pi extensions; server-specific integrations are listed in the [plugin guide](plugin/README.md). The root Paseo `pluginsEnabled` setting must be enabled to run installed plugins.
 
-</details>
+[Nix modules](nix/README.md) remain available for declaratively managed installations.
 
 ## 🎛️ Everyday controls
 

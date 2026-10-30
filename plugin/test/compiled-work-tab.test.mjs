@@ -10,17 +10,8 @@ assert.ok(compilerPath, 'Set PASEO_PLUGIN_COMPILER to the installed Paseo compil
 // Resolve schema/runtime dependencies from the real host compiler installation,
 // not undeclared bridge-local packages. Missing host dependencies must fail.
 const require = createRequire(resolve(compilerPath));
-const nativePresentation = await import(pathToFileURL(require.resolve('@getpaseo/server/pi-tool-presentation')));
-const nativeDisplay = await import(pathToFileURL(require.resolve('@getpaseo/protocol/tool-call-display')));
-const nativeToolLabel = (name, input, result) => {
-  const detail = nativePresentation.mapPiToolCallDetail(nativePresentation.parseToolArgs(name, input), nativePresentation.parseToolResult(result));
-  const display = nativeDisplay.buildToolCallDisplayModel({ name, detail, status: 'completed', error: null });
-  return `Tool ${display.displayName}${display.summary ? ` · ${display.summary}` : ''} · completed`;
-};
 const nodes = node => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)];
-// Nested native syntax Text tokens concatenate exactly as RN/DOM text nodes do.
-const compactText = node => typeof node === 'string' ? node : Array.isArray(node) ? node.map(compactText).join('') : compactText(node?.props?.children ?? []);
-const text = node => typeof node === 'string' ? node : Array.isArray(node) ? node.map(text).join(' ') : node?.props?.testID === 'work-code-line' ? compactText(node) : node?.type === 'SettingsAction' ? text([node.props.label, node.props.hint, node.props.actionLabel, node.props.children]) : text(node?.props?.children ?? []);
+const text = node => typeof node === 'string' ? node : Array.isArray(node) ? node.map(text).join(' ') : node?.type === 'SettingsAction' ? text([node.props.label, node.props.hint, node.props.actionLabel, node.props.children]) : text(node?.props?.children ?? []);
 
 // A small host renderer: execute compiled components, keep hook identity by JSX
 // key/path, and run real effect setup/cleanup on mount/unmount. No Work logic is
@@ -335,7 +326,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     messages = [...messages, { id: 'm2', role: 'tool', text: 'Live tool execution evidence' }];
     tree = render();
     assert.doesNotMatch(text(tree), /Live tool execution evidence/, 'tool output never leaks into the collapsed label');
-    assert.ok(nodes(tree).some(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Tool Tool · unknown'), 'unmatched result remains an honest collapsed tool badge');
+    assert.ok(nodes(tree).some(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Tool tool · unknown'), 'unmatched result remains an honest collapsed tool badge');
     assert.equal(nodes(tree).filter(n => n.props?.testID === 'work-agent-conversation').length, 1);
     assert.ok(nodes(tree).some(n => n.type === 'ScrollView' && n.props.style?.maxHeight === 320), 'bounded native timeline retained');
     assert.match(text(tree), /Streaming assistant delta/);
@@ -352,7 +343,7 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.equal(timeline.props.contentContainerStyle.gap ?? 0, 0, 'timeline does not insert gaps for invisible correlated result rows');
     assert.ok(!nodes(tree).some(n => n.key === 'result-row'), 'correlated tool results have no empty layout wrapper');
     assert.ok(nodes(tree).filter(n => n.type === 'View' && n.props.style?.marginHorizontal === -13).every(n => !n.props.style.marginBottom), 'collapsed tool badges have no extra inter-row margin');
-    assert.match(text(tree), /git status --short/, 'badge uses the compact native command summary');
+    assert.doesNotMatch(text(tree), /git status --short/, 'arguments remain inside the collapsed tool badge');
     assert.match(text(tree), /formatted/, 'assistant prose is rendered through the Markdown adapter');
     assert.ok(nodes(tree).some(n => n.props?.testID === 'transcript-markdown'));
     assert.ok(nodes(tree).some(n => n.type === 'p' && n.props.style.fontSize === 15 && n.props.style.lineHeight === '21px'), 'body matches native content typography');
@@ -371,18 +362,18 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     assert.ok(nodes(tree).some(n => n.type === 'View' && n.props.style?.alignSelf === 'flex-end'), 'parent input uses the native user-message bubble treatment');
     assert.equal(nodes(tree).filter(n => n.type === 'Text' && n.props.children === 'parent').length, 0, 'no separate parent role label');
     assert.doesNotMatch(text(tree), /ARGUMENT_SECRET|RESULT_SECRET|LIVE_RESULT_SECRET/, 'correlated tool results and full arguments stay inside the collapsed badge');
-    const toolBadge = nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Tool Shell · git status --short · completed');
-    assert.ok(toolBadge, 'badge uses native icon/name/summary presentation');
+    const toolBadge = nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Tool bash · completed');
+    assert.ok(toolBadge, 'badge identifies the exact tool and lifecycle status');
     assert.equal(toolBadge.props.accessibilityState.expanded, false, 'tool details start collapsed');
     assert.equal(nodes(toolBadge).filter(n => n.type === 'Icon').length, 1, 'native collapsed badges have one leading icon, no trailing check/chevron clutter');
-    assert.ok(nodes(toolBadge).some(n => n.type === 'Icon' && n.props.name === 'SquareTerminal' && n.props.size === 12));
+    assert.ok(nodes(toolBadge).some(n => n.type === 'Icon' && n.props.name === 'Wrench' && n.props.size === 12));
     let automaticScrolls = 0;
     timeline.props.ref.current = { scrollToEnd() { automaticScrolls++; } };
     toolBadge.props.onPress(); tree = render();
     nodes(tree).find(n => n.type === 'ScrollView' && n.props.style?.maxHeight === 320).props.onContentSizeChange();
     assert.equal(automaticScrolls, 0, 'expanding earlier tool details preserves the reading anchor instead of snapping to the live tail');
     timeline.props.ref.current = null;
-    assert.doesNotMatch(text(tree), /ARGUMENT_SECRET/, 'native Bash schema omits unsupported private argument fields even when expanded');
+    assert.doesNotMatch(text(tree), /ARGUMENT_SECRET/, 'known-tool argument projection omits private fields even when expanded');
     assert.match(text(tree), /git status --short/, 'supported native command remains visible when expanded');
     assert.match(text(tree), /LIVE_RESULT_SECRET/, 'newer live completion overlays the persisted call and reveals its result only on click');
     assert.doesNotMatch(text(tree), /"result": "RESULT_SECRET"/, 'stale persisted result is superseded by the latest correlated live result');
@@ -403,23 +394,21 @@ test('compiled Work uses one workspace tab, source-scoped persistent UI, and UI-
     ];
     tree = render();
     assert.doesNotMatch(text(tree), /literal file|exact content|old exact fragment/, 'all representative details remain collapsed');
-    for (const label of ['Tool Shell · printf actual-shell-json · completed', 'Tool Custom tool · completed', 'Tool Read · /tmp/actual.json · completed', 'Tool Write · /tmp/written.ts · completed', 'Tool Edit · /tmp/edited.ts · completed', nativeToolLabel('background_job', typedJobArguments, typedJobResult), nativeToolLabel('custom_tool', { action: 'literal' }, { content: [{ type: 'text', text: literalJsonResult }] })]) {
-      nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === label).props.onPress();
-      tree = render();
+    for (const badge of nodes(tree).filter(n => n.type === 'Pressable' && /^Tool (bash|custom_tool|read|write|edit|background_job) · completed$/.test(n.props.accessibilityLabel ?? '') && !n.props.accessibilityState.expanded)) {
+      badge.props.onPress();
     }
+    tree = render();
     assert.ok(text(tree).includes('{"content":[1,2],"shell_stdout":true}'), 'shell JSON stdout remains literal content');
     assert.match(text(tree), /unknown tool readable output/, 'legacy unknown transport retains readable output through the native fallback');
-    assert.match(text(tree), /Running · 0s/, 'validated typed job details use native lifecycle presentation');
-    assert.doesNotMatch(text(tree), /TYPED_JOB_RAW_FALLBACK|Started in a new tmux pane/, 'typed projection is not replaced by the older flattened transport text');
+    assert.match(text(tree), /Started in a new tmux pane/, 'validated typed results retain their original text');
+    assert.doesNotMatch(text(tree), /TYPED_JOB_RAW_FALLBACK/, 'matching typed results replace clipped transport text');
     assert.ok(text(tree).includes(literalJsonResult), 'unknown literal JSON payload is terminal text, not reinterpreted as another transport');
     assert.ok(text(tree).includes(jsonFile), 'double-stringified MCP result shows exact JSON file text, not its transport envelope');
-    assert.match(text(tree), /export const written = "exact content";/);
-    assert.deepEqual(nodes(tree).filter(n => n.props?.testID === 'work-code-line-number').map(n => text(n)), ['7'], 'only Read content gets absolute positions, using its authoritative offset');
-    assert.ok(nodes(tree).filter(n => n.props?.testID === 'work-native-code-surface').length >= 4, 'native shell/file details use bounded code surfaces');
-    assert.ok(nodes(tree).some(n => n.props?.testID === 'work-native-tool-section'), 'native unknown-tool fallback uses prose rather than a fabricated code surface');
-    assert.match(text(tree), /− old exact fragment/);
-    assert.match(text(tree), /\+ new exact fragment/);
-    assert.doesNotMatch(text(tree), /structuredContent|\\\\"content\\\\"|@@/, 'no duplicated transport, escaped envelope, or fabricated diff positions');
+    assert.ok(text(tree).includes(JSON.stringify('export const written = "exact content";\n')), 'write arguments retain their source text as JSON');
+    assert.match(text(tree), /old exact fragment/);
+    assert.match(text(tree), /new exact fragment/);
+    assert.ok(nodes(tree).filter(n => n.props?.testID === 'work-tool-text').length >= 4, 'expanded tool details use selectable bounded text');
+    assert.doesNotMatch(text(tree), /structuredContent|@@/, 'no duplicated transport or fabricated diff positions');
     messages = previousMessages;
     tree = render();
     nodes(tree).find(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Older messages').props.onPress(); tree = render();

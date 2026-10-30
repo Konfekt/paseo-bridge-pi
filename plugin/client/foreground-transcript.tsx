@@ -19,7 +19,7 @@ export function ForegroundTranscriptEntry({ entry, colors, expanded, onToggle }:
     {tool ? <NativeToolBadge name={entry.toolName!} status={entry.status ?? "unknown"}
       argumentsValue={entry.arguments ?? (entry.toolPhase === "call" ? entry.text : undefined)}
       result={entry.toolPhase === "call" ? undefined : literalToolResult(entry.text, "text")}
-      toolPresentation={entry.toolPresentation} toolCallId={entry.toolCallId} resultSource="history" colors={colors} expanded={expanded} onToggle={onToggle} />
+      toolPresentation={entry.toolPresentation} colors={colors} expanded={expanded} onToggle={onToggle} />
       : <Text selectable style={{ color: colors.foreground, fontSize: 14, lineHeight: 20 }}>{entry.text}</Text>}
   </View>;
 }

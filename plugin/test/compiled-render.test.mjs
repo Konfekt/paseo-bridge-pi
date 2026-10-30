@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const compilerPath = process.env.PASEO_PLUGIN_COMPILER;
 const root = fileURLToPath(new URL('../', import.meta.url));
-const require = createRequire(import.meta.url);
+const require = createRequire(resolve(compilerPath));
 
 test('compiled popover uses actual host export boundaries and renders every status branch', { skip: !compilerPath }, async () => {
   const { compilePlugin } = await import(pathToFileURL(resolve(compilerPath)));

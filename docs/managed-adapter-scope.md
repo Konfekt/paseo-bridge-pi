@@ -1,4 +1,6 @@
-# Managed adapter reachability audit
+# Historical managed adapter reachability audit
+
+This audit describes the former fork-compiled renderer, not the current plugin. Stock-Paseo tool details now use [plain-text presentation](transcript-presentation.md); the native mapper extraction and parity claims below are historical evidence only. Runtime/control integrations remain separate from rendering.
 
 This is a concrete configured-runtime audit, not a claim of universal compatibility with every Pi extension.
 

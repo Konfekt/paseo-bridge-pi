@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-const require = createRequire(import.meta.url),
+const require = createRequire(resolve(process.env.PASEO_PLUGIN_COMPILER)),
 	root = fileURLToPath(new URL("../", import.meta.url));
 test("worktree removal rechecks open Paseo agents including symlinked subdirectories and fails closed on incomplete inventory", {
 	skip: !process.env.PASEO_PLUGIN_COMPILER,

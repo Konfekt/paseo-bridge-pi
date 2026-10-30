@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
-const require = createRequire(import.meta.url), root = fileURLToPath(new URL("../", import.meta.url));
 assert.ok(process.env.PASEO_PLUGIN_COMPILER, "PASEO_PLUGIN_COMPILER required");
+const require = createRequire(resolve(process.env.PASEO_PLUGIN_COMPILER)), root = fileURLToPath(new URL("../", import.meta.url));
 test("compiled recorded-owner route reuses exact live runtime and rechecks source/child ownership", async () => {
   const dir = await mkdtemp(join(tmpdir(), "worktree-owner-route-"));
   try {

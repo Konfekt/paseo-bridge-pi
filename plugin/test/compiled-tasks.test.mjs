@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 const compilerPath = process.env.PASEO_PLUGIN_COMPILER;
 const root = fileURLToPath(new URL('../', import.meta.url));
-const require = createRequire(import.meta.url);
+const require = createRequire(resolve(compilerPath));
 const walk = node => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(walk)];
 const text = node => typeof node === 'string' ? node : !node || typeof node !== 'object' ? '' : [node.props?.children].flat(Infinity).map(text).join(' ');
 

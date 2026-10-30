@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { cp, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { pathToFileURL, fileURLToPath } from "node:url";
-const require = createRequire(import.meta.url),
+const require = createRequire(resolve(process.env.PASEO_PLUGIN_COMPILER)),
 	root = fileURLToPath(new URL("../", import.meta.url));
 const nodes = (x) =>
 	!x || typeof x !== "object"

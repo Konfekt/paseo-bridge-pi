@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const compilerPath = process.env.PASEO_PLUGIN_COMPILER;
 const root = fileURLToPath(new URL('../', import.meta.url));
-const require = createRequire(import.meta.url);
+const require = createRequire(resolve(compilerPath));
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 test('compiled contribution preserves Pi pills, isolates installations and ignores late results', { skip: !compilerPath }, async () => {

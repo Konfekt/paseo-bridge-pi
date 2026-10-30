@@ -122,7 +122,7 @@ composer popover for directly owned helper tasks. The temporary popover can stre
 conversation, send user messages, answer individual pending interactions, and stop
 a helper; closing it only hides the view. These controls use private bridge APIs
 rather than slash commands, so they do not interrupt the parent chat or turn.
-The plugin requires Paseo 0.11.4 or newer and a matching bridge runtime. Install the plugin on
+The plugin requires stock Paseo 0.13.0 or newer and a matching bridge runtime. Install the plugin on
 the daemon host, as the same user running Pi:
 
 ```sh

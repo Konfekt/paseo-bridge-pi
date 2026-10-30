@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const compilerPath = process.env.PASEO_PLUGIN_COMPILER;
-const require = createRequire(import.meta.url);
+const require = createRequire(resolve(compilerPath));
 const root = fileURLToPath(new URL('../', import.meta.url));
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const nodes = element => !element || typeof element !== 'object' ? [] : [element, ...[element.props?.children].flat(Infinity).flatMap(nodes)];

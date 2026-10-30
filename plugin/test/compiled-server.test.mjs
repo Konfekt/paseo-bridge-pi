@@ -15,7 +15,7 @@ import { validateHarnessReadOnlyDescriptor } from '../server/harness-readonly-tr
 
 const compilerPath = process.env.PASEO_PLUGIN_COMPILER;
 const pluginRoot = fileURLToPath(new URL('../', import.meta.url));
-const require = createRequire(import.meta.url);
+const require = createRequire(resolve(compilerPath));
 
 test('compiled plugin backend operates the real bridge without prompt dispatch or leaking capability', { skip: !compilerPath, timeout: 10000 }, async () => {
   const { compilePlugin } = await import(pathToFileURL(resolve(compilerPath)));

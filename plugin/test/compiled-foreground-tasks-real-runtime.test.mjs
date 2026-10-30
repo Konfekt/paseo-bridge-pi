@@ -71,12 +71,11 @@ export default function fixture(pi) {
 test('real HeadlessForegroundManager and Pi workers integrate through the private Paseo bridge (no fake core service)', {
   skip: !runtimeEnabled, timeout: 240_000,
 }, async () => {
-  assert.ok(compilerPath, 'Set PASEO_PLUGIN_COMPILER to the installed Paseo 0.10 compiler');
+  assert.ok(compilerPath, 'Set PASEO_PLUGIN_COMPILER to the installed stock Paseo compiler');
   assert.ok(paeRoot, 'PAE_FOREGROUND_RUNTIME_TEST=1 requires an explicit PI_AGENT_EXTENSIONS_SOURCE path');
   const piTestPath = process.env.PI_TUI_TEST_PI;
   assert.ok(piTestPath, 'PAE_FOREGROUND_RUNTIME_TEST=1 requires PI_TUI_TEST_PI pointing to a raw, unguarded Pi executable');
   const rawPi = await realpath(piTestPath);
-  assert.ok(rawPi.startsWith('/nix/store/'), `PI_TUI_TEST_PI must resolve to an immutable Nix-store executable, got ${rawPi}`);
   const versionCheck = execFileSync(rawPi, ['--version'], { encoding: 'utf8' }).trim();
   assert.equal(versionCheck, '1.0.0', `PAE_FOREGROUND_RUNTIME_TEST requires Pi 1.0.0, got ${versionCheck} from ${rawPi}`);
   await access(rawPi, constants.X_OK);
