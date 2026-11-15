@@ -5,33 +5,15 @@
 // the real pi with unchanged argv so Paseo-native behaviour is preserved.
 import net from "node:net";
 import path from "node:path";
-import os from "node:os";
 import fs from "node:fs";
-import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import {
 	assertNoLiveRuntimeOwner,
 	matchingRuntimeRecords,
+	pipePathForSession,
 } from "./runtime-registry.js";
 const CONNECT_TIMEOUT_MS = 500;
 const args = process.argv.slice(2);
-
-// Keep in sync with extension/index.ts (pipePathForSession).
-function pipePathForSession(sessionFile) {
-	let normalized = path.resolve(sessionFile);
-	if (process.platform === "win32") normalized = normalized.toLowerCase();
-	const hash = crypto
-		.createHash("sha256")
-		.update(normalized)
-		.digest("hex")
-		.slice(0, 20);
-	if (process.platform === "win32")
-		return `\\\\.\\pipe\\pi-paseo-bridge-${hash}`;
-	const dir = process.env.XDG_RUNTIME_DIR
-		? path.join(process.env.XDG_RUNTIME_DIR, "pi-paseo")
-		: path.join(os.homedir(), ".pi", "paseo-bridge");
-	return path.join(dir, `${hash}.sock`);
-}
 
 function extractSessionArg(argv) {
 	for (let i = 0; i < argv.length; i += 1) {

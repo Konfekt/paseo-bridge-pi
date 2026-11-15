@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as net from "node:net";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BridgeTransport, retainBridgeForReload, takeBridgeAfterReload, discardRetainedBridge } from "../extension/bridge-transport.ts";
@@ -165,4 +165,40 @@ test("a stalled controller cannot retain more than the bounded output queue", as
     assert.equal(f.transport.connected, false);
     assert.match(String(f.errors[0]), /write queue.*limit/i);
   } finally { await f.close(); }
+});
+
+test("cleanup is best effort when the socket file cannot be removed", {
+  skip: process.platform === "win32" || process.getuid?.() === 0,
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-bridge-cleanup-"));
+  const directory = join(root, "run");
+  await mkdir(directory);
+  const errors: unknown[] = [];
+  const callbacks = { command: async () => {}, attached() {}, detached() {}, error: (error: unknown) => errors.push(error) };
+  const transports = [new BridgeTransport("direct", join(directory, "a.sock")), new BridgeTransport("retained", join(directory, "b.sock"))];
+  try {
+    for (const transport of transports) {
+      transport.bind(callbacks);
+      transport.start();
+    }
+    const deadline = Date.now() + 2000;
+    for (const transport of transports) {
+      for (;;) {
+        try { await access(transport.pipePath); break; }
+        catch { assert(Date.now() < deadline, "bridge socket must be created"); await new Promise(resolve => setTimeout(resolve, 5)); }
+      }
+    }
+    await chmod(directory, 0o500);
+    // A direct teardown (disconnect, session switch) must not throw midway.
+    assert.doesNotThrow(() => transports[0].close());
+    // An abandoned reload is released from a timer, where a throw would crash Pi.
+    retainBridgeForReload(transports[1], null, 5);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(takeBridgeAfterReload("retained"), undefined);
+    assert.equal(errors.length, 2, "each cleanup failure is still reported");
+  } finally {
+    await chmod(directory, 0o700);
+    for (const transport of transports) transport.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });

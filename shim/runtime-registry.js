@@ -1,9 +1,34 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+// Shared by the shim and the extension, so both derive the same names.
+export const bridgeStateDirectory = () => path.join(os.homedir(), ".pi", "paseo-bridge");
+
 export function runtimeRegistryDirectory() {
-  return path.join(os.homedir(), ".pi", "paseo-bridge", "runtimes");
+  return path.join(bridgeStateDirectory(), "runtimes");
+}
+
+/** Canonical session identity: resolved, and case-insensitive on Windows. */
+export function sessionKey(sessionFile) {
+  const resolved = path.resolve(sessionFile);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+const sha256 = value => crypto.createHash("sha256").update(value).digest("hex");
+
+export function pipePathForSession(sessionFile) {
+  const hash = sha256(sessionKey(sessionFile)).slice(0, 20);
+  if (process.platform === "win32") return `\\\\.\\pipe\\pi-paseo-bridge-${hash}`;
+  const directory = process.env.XDG_RUNTIME_DIR
+    ? path.join(process.env.XDG_RUNTIME_DIR, "pi-paseo")
+    : bridgeStateDirectory();
+  return path.join(directory, `${hash}.sock`);
+}
+
+export function runtimeRecordFile(sessionFile, directory = runtimeRegistryDirectory()) {
+  return path.join(directory, `${sha256(sessionKey(sessionFile))}.json`);
 }
 
 export function readRuntimeRecords(directory = runtimeRegistryDirectory()) {
@@ -57,14 +82,10 @@ export function runtimeOwnerMayBeAlive(record, options = {}) {
 }
 
 export function matchingRuntimeRecords(sessionFile, agentId, records = readRuntimeRecords()) {
-  const normalize = value => {
-    const resolved = path.resolve(value);
-    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-  };
+  const key = sessionFile ? sessionKey(sessionFile) : null;
   return records.filter(record =>
     (agentId && record.agentId === agentId)
-    || (sessionFile && typeof record.sessionFile === "string"
-      && normalize(record.sessionFile) === normalize(sessionFile)));
+    || (key && typeof record.sessionFile === "string" && sessionKey(record.sessionFile) === key));
 }
 
 export function assertNoLiveRuntimeOwner(sessionFile, options = {}) {

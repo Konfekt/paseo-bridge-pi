@@ -20,6 +20,8 @@ export class BridgeTransport {
   private server: net.Server | null = null;
   private client: net.Socket | null = null;
   private callbacks?: Callbacks;
+  // Kept across suspend so a retained bridge can still report teardown failures.
+  private reportCleanupError?: (error: unknown) => void;
   private closed = false;
   private _connectionEpoch = randomUUID();
 
@@ -38,6 +40,7 @@ export class BridgeTransport {
   bind(callbacks: Callbacks): void {
     this._connectionEpoch = randomUUID();
     this.callbacks = callbacks;
+    this.reportCleanupError = callbacks.error;
     if (this.connected) callbacks.attached();
   }
 
@@ -83,6 +86,7 @@ export class BridgeTransport {
     } catch (error) { this.callbacks?.error(error); }
   }
 
+  /** Best effort: teardown also runs from timers, where a throw would crash Pi. */
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -93,7 +97,7 @@ export class BridgeTransport {
     this.server = null;
     if (process.platform !== "win32") {
       try { fs.unlinkSync(this.pipePath); } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") this.reportCleanupError?.(error);
       }
     }
   }
