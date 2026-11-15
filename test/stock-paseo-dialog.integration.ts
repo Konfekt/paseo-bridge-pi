@@ -23,7 +23,8 @@ test("stock Paseo questions deliver each decision once to the original Pi callba
   const providerUrl = pathToFileURL(await realpath(providerEntry!));
   const hostPackage = JSON.parse(await readFile(new URL("../../../../../../package.json", providerUrl), "utf8"));
   assert.equal(hostPackage.name, "@getpaseo/server");
-  assert.equal(hostPackage.version, "0.13.0", "this proof targets the published stock host release");
+  const [major, minor] = String(hostPackage.version).split(/[.-]/).map(Number);
+  assert.ok(major > 0 || minor >= 13, `stock Paseo ${hostPackage.version} is older than the supported minimum 0.13.0`);
   const { PiRpcAgentClient } = await import(providerUrl.href);
   const {createPaseoDaemon} = await import(new URL("../../../exports.js", providerUrl).href);
   const { PiCliRuntime } = await import(new URL("cli-runtime.js", providerUrl).href);
@@ -69,8 +70,12 @@ test("stock Paseo questions deliver each decision once to the original Pi callba
       return child;
     },
   });
+  // Newer daemons check provider availability on the daemon's own PATH.
+  const previousPath = process.env.PATH;
+  process.env.PATH = [path.dirname(executable!), previousPath].filter(Boolean).join(path.delimiter);
+  t.after(() => { process.env.PATH = previousPath; });
   const daemon = await createPaseoDaemon({
-    listen: "127.0.0.1:0", paseoHome, daemonVersion: "0.13.0", corsAllowedOrigins: [], hostnames: true,
+    listen: "127.0.0.1:0", paseoHome, daemonVersion: hostPackage.version, corsAllowedOrigins: [], hostnames: true,
     mcpEnabled: false, browserToolsEnabled: false, staticDir: cwd, mcpDebug: false,
     agentClients: {pi: new PiRpcAgentClient({logger, runtime: runtimeClient})},
     agentStoragePath: path.join(paseoHome, "agents"), relayEnabled: false, pluginsEnabled: false,

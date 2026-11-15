@@ -29,7 +29,7 @@ Session names remain native Pi data. The bridge makes no separate model request 
 | `/paseo-bridge auto on` / `off` | Save the auto-connect preference; default is on. |
 | `/paseo-bridge connect` | Start attachment work for the current terminal session. |
 | `/paseo-bridge disconnect` | Request bridge teardown without stopping Pi. |
-| `/paseo-bridge status` | Show configuration, auto-connect, and session state. |
+| `/paseo-bridge status` | Show configuration, the Paseo CLI in use, auto-connect, and session state. |
 | `/remote-reload` | Reload extensions and resources while idle. |
 
 A successful `connect` response acknowledges starting attachment work, not an established Paseo connection. A disconnect acknowledgement likewise precedes teardown.
@@ -39,16 +39,6 @@ Pi's built-in `/reload` is terminal-only. Send `/remote-reload` without argument
 The first response acknowledges reload acceptance; `Pi runtime reloaded` confirms the replacement extension has started. The controller endpoint is retained across resource reload. Requests during the replacement gap receive an explicit retry error. A retained bridge not adopted within 90 seconds closes instead of remaining suspended.
 
 Resource reload updates extensions, skills, prompts, themes, and context files. It does not update the Pi executable, replace a running provider shim, or restart Paseo. After package updates that change the shim, restart Paseo after active work finishes. Keep the terminal Pi sessions open for reattachment.
-
-When updating from the former dashboard/tmux version, also restart existing Pi processes after active work finishes. Resource reload retains transport objects and cannot remove servers already created by that version. No automatic live-state migration is performed.
-
-If the former optional Paseo plugin is installed, remove its separate registration:
-
-```sh
-paseo plugin remove paseo-permission-gate
-```
-
-This removes the optional UI, not Pi's permission enforcement. Updating the Pi package alone does not uninstall a Paseo plugin.
 
 ## Remote questions
 
@@ -63,7 +53,7 @@ No bridge-specific API is required in extensions using ordinary Pi dialogs. The 
 
 Select and input return the selected text or `undefined` on cancellation. Confirmation returns a boolean; cancellation is `false`, matching Pi. Abort signals and timeouts dismiss both interfaces. Provider Stop, controller disconnect, and session shutdown cancel pending mirrored dialogs. Paseo's app Stop applies to tracked agent runs, not idle terminal extension commands. These are live Pi callbacks, not durable questions recoverable after Pi exits.
 
-Custom TUI components and multiline editors remain terminal-local. Startup dialogs opened before the bridge's startup handler, or calls through method references captured before binding, cannot be intercepted. For startup-dialog mirroring, load the bridge before extensions that open those dialogs. The adapter uses the shared public UI object tested with stock Pi 1.0.0 and 1.1.0; Pi has no dedicated dialog interception hook. Mirrored confirmation uses the original Yes/No selector to distinguish No from cancellation, so its terminal UI prompt event has kind `select`.
+Custom TUI components and multiline editors remain terminal-local. Startup dialogs opened before the bridge's startup handler, or calls through method references captured before binding, cannot be intercepted. For startup-dialog mirroring, load the bridge before extensions that open those dialogs. The adapter wraps Pi's shared public UI object; Pi has no dedicated dialog interception hook. Mirrored confirmation uses the original Yes/No selector to distinguish No from cancellation, so its terminal UI prompt event has kind `select`.
 
 Paseo renders the request with its existing question components. The bridge receives the response through the provider, resolves the original Pi callback, and settles mirrored local/remote choices once. A local choice dismisses its pending Paseo question; duplicate or late remote replies must not execute the callback again. A visible choice alone is not proof of delivery: the owning callback must receive the result.
 
@@ -73,7 +63,7 @@ Permission questions remain subject to Pi's existing gate and authorization poli
 
 ### Incompatible question package
 
-`@juicesharp/rpiv-ask-user-question` is a third-party Pi package, not a built-in Pi tool. Version 2.13.9 uses a custom widget in terminal mode. Stock Paseo 0.13.0 creates an "Ask user question" form from the tool call, but routes answers through ordinary select/input requests. The custom widget emits neither, so app submission can dismiss the permission without completing the Pi tool. This affects terminal-attached sessions, not the package's ordinary RPC-mode dialog path.
+`@juicesharp/rpiv-ask-user-question` is a third-party Pi package, not a built-in Pi tool. It uses a custom widget in terminal mode. Stock Paseo creates an "Ask user question" form from the tool call, but routes answers through ordinary select/input requests. The custom widget emits neither, so app submission can dismiss the permission without completing the Pi tool. This affects terminal-attached sessions, not the package's ordinary RPC-mode dialog path.
 
 Disable the package's extensions with `pi config`, or keep its package entry with an empty extension filter in Pi settings:
 
@@ -117,6 +107,35 @@ The `paseo` CLI must be on `PATH`, or set `PASEO_CLI` to its executable path. Re
 
 Saved auto-connect preferences live under Pi's configured agent directory in `paseo-bridge/settings.json`.
 
+## Compatibility
+
+The bridge pins no Pi or Paseo version and performs no runtime version check. It relies only on public interfaces that both projects keep stable, so newer releases are accepted as they are. Pi packages are declared as `"*"` peer dependencies, as Pi requires for host-provided packages.
+
+| Component | Minimum | Latest verified |
+| --- | --- | --- |
+| Pi (`@earendil-works/pi-coding-agent`) | 1.0.0 | 1.5.2 |
+| Paseo (`@getpaseo/server`, `@getpaseo/cli`) | 0.13.0 | 0.15.4 |
+
+How the latest releases compare with the minimums:
+
+- **Pi 1.5.2:** every extension event, `ctx.ui` method, and SDK export the bridge uses is unchanged. Pi now treats a starting run as busy and requires `deliverAs` for `sendUserMessage` while busy; the bridge already sends `followUp` whenever Pi is not idle. `agent_settled` now carries `aborted`; the bridge does not depend on it. No deprecations affect the bridge.
+- **Paseo 0.15.4:** the Pi provider sends the same RPC commands and accepts the same capture markers, WebSocket requests, CLI commands (`import`, `inspect`, `agent reload`), and `agents.providers.pi.command` configuration. New: it reads `isStreaming`, `isCompacting`, and `pendingMessageCount` from `get_state` before stopping an idle runtime, which the bridge reports, and it extracts images from forwarded tool results itself.
+- **Paseo 0.16 (beta):** the stock-daemon test passes. Paseo reads history from the `sessionFile` reported by `get_state` instead of calling `get_messages`, no longer reads `contextEntries` from entry captures, and opens short-lived history-only sessions for agents that are not loaded. Before relying on 0.16, check in the app that opening an unloaded agent's timeline while its terminal session is live leaves that session attached.
+
+### Checking a new release
+
+For a new Pi release:
+
+1. Read the changelog's breaking changes for extension events (`session_start`, `session_shutdown`, `agent_*`, `turn_*`, `message_*`, `tool_execution_*`, `session_*compact*`, `model_select`, `thinking_level_select`, `session_info_changed`), `ctx.ui.select`/`input`/`confirm`, `pi.sendUserMessage`, `ctx.reload`, `ctx.compact`, and the `buildSessionProjection` and `getAgentDir` exports.
+2. Install it with `npm install -D --save-exact @earendil-works/pi-coding-agent@<version> @earendil-works/pi-ai@<version>`, then run `npm run typecheck` and the full test suite with `TEST_PI_BIN` and `BRIDGE_NATIVE_PI` pointing to the new `pi`.
+
+For a new Paseo release:
+
+1. Compare `dist/server/server/agent/providers/pi/cli-runtime.js` and `rpc-types.d.ts` with the previous release. Every RPC command it sends must be handled in `handleCommand` or answered with Pi's `Unknown command` error.
+2. Check that `agent.js` still uses the `PASEO_ENTRY_CAPTURE`, `PASEO_SUBMITTED_USER_ENTRY`, and `PASEO_COMMAND_RESULT` markers and the `paseo_capture_entries` and `paseo_tree` commands.
+3. Check the CLI's `import`, `inspect --json` (`Archived` field), and `agent reload` commands, the WebSocket `hello` handshake and the `set_agent_model_request`, `set_agent_thinking_request`, `update_agent_request`, and `agent_permission_response` messages, and the `agents.providers.pi.command` configuration schema.
+4. Run `npm run test:native` against the new server and CLI, as described below.
+
 ## Verification
 
 Use `npm test`, `npm run typecheck`, and `npm pack --dry-run` for source and package checks. No formatter or linter is configured. Native fixtures use isolated homes and no model calls or live user sessions:
@@ -129,6 +148,6 @@ BRIDGE_NATIVE_PI="$(command -v pi)" TEST_PI_BIN="$(command -v pi)" \
   npm run test:native
 ```
 
-The stock-daemon proof targets published Paseo 0.13.0 and needs its matching CLI. It uses the real Pi SDK extension runner with a controlled terminal renderer, ordinary `ctx.ui` calls, and the production shim. It checks import, app and terminal choices, cancellation, timeout, reload, pending-question cleanup, and callback delivery after the actual controller response. It uses the development Pi SDK by default; set `BRIDGE_PI_SDK` to another installed package's absolute `dist/index.js` to check that SDK. Tests requiring an executable or provider path are skipped when that environment variable is absent.
+The stock-daemon test runs a published Paseo server of version 0.13.0 or newer in-process, with the CLI of the same version. It uses the real Pi SDK extension runner with a controlled terminal renderer, ordinary `ctx.ui` calls, and the production shim. It checks import, app and terminal choices, cancellation, timeout, reload, pending-question cleanup, and callback delivery after the actual controller response. It uses the development Pi SDK by default; set `BRIDGE_PI_SDK` to another installed package's absolute `dist/index.js` to check that SDK. Tests requiring an executable or provider path are skipped when that environment variable is absent.
 
 Desktop and Android use stock Paseo interfaces; backend callback delivery and native provider tests do not prove Android layout, gestures, or visual acceptance. No Android visual acceptance is claimed.

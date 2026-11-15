@@ -7,7 +7,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { assertNoLiveRuntimeOwner, matchingRuntimeRecords, processStartToken, readRuntimeRecords, runtimeOwnerMayBeAlive } from "../shim/runtime-registry.js";
+import { createHash } from "node:crypto";
+import { assertNoLiveRuntimeOwner, matchingRuntimeRecords, pipePathForSession, processStartToken, readRuntimeRecords, runtimeOwnerMayBeAlive, runtimeRecordFile } from "../shim/runtime-registry.js";
 
 const record = { sessionFile: "/project/session.jsonl", agentId: "agent", pid: 123, processStartToken: "boot:1" };
 test("live owner blocks fallback; missing/reused process permits it", () => {
@@ -99,4 +100,20 @@ test("invalid persisted ownership is not treated as permission to launch another
     fs.writeFileSync(path.join(directory, "owner.json"), JSON.stringify({ pid: process.pid, bridgeSocket: "/missing.sock" }));
     assert.throws(() => readRuntimeRecords(directory), /Invalid Pi runtime registry record/);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("endpoint and record names stay stable for already-running sessions", { skip: process.platform === "win32" }, () => {
+  // Shim and extension may come from different package versions during an
+  // upgrade; both must derive the same names from the session path.
+  const previous = process.env.XDG_RUNTIME_DIR;
+  process.env.XDG_RUNTIME_DIR = "/run/user/1";
+  try {
+    const sha = (value: string) => createHash("sha256").update(value).digest("hex");
+    const session = "/project/session.jsonl";
+    assert.equal(pipePathForSession("/project/./session.jsonl"), `/run/user/1/pi-paseo/${sha(session).slice(0, 20)}.sock`);
+    assert.equal(runtimeRecordFile(session, "/records"), `/records/${sha(session)}.json`);
+  } finally {
+    if (previous === undefined) delete process.env.XDG_RUNTIME_DIR;
+    else process.env.XDG_RUNTIME_DIR = previous;
+  }
 });

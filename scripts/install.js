@@ -1,7 +1,7 @@
 import os from "node:os";
 import {
+  addShimToPaseoConfig,
   extensionDir,
-  isOurShimCommand,
   norm,
   paseoConfigPath,
   piSettingsPath,
@@ -51,21 +51,15 @@ if (settings.extensions.some((entry) => samePath(entry, extensionDir))) {
 
 // 2. Point Paseo's pi provider command at the shim.
 const config = readJson(paseoConfigPath) ?? {};
-config.agents = config.agents ?? {};
-config.agents.providers = config.agents.providers ?? {};
-const currentCommand = config.agents.providers.pi?.command;
-if (isOurShimCommand(currentCommand)) {
+const shimResult = addShimToPaseoConfig(config, [norm(process.execPath), shimPath]);
+if (shimResult === "already-installed") {
   console.log(`paseo shim already registered in ${paseoConfigPath}`);
-} else if (currentCommand) {
+} else if (shimResult === "conflict") {
   console.error(`ERROR: ${paseoConfigPath} already overrides the pi provider command:`);
-  console.error(`  ${JSON.stringify(currentCommand)}`);
-  console.error("Remove agents.providers.pi.command manually, then re-run `npm run install`.");
+  console.error(`  ${JSON.stringify(config.agents.providers.pi.command)}`);
+  console.error("Remove agents.providers.pi.command manually, then re-run `npm run dev-install`.");
   process.exit(1);
 } else {
-  config.agents.providers.pi = {
-    ...(config.agents.providers.pi ?? {}),
-    command: [norm(process.execPath), shimPath],
-  };
   writeJson(paseoConfigPath, config);
   console.log(`registered paseo pi provider shim in ${paseoConfigPath}`);
   changed = true;

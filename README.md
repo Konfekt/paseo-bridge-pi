@@ -4,13 +4,13 @@ Attach a terminal Pi conversation to stock Paseo. Read history, send messages, s
 
 ## Install
 
-Requires Pi 1.x, Node.js 22+, and Paseo 0.13.0+. Install the package on the Paseo daemon host, under the same account as Pi:
+Requires Pi 1.0.0 or newer and Paseo 0.13.0 or newer; newer releases are expected to work without a bridge update (see [compatibility](docs/reference.md#compatibility)). Install the package on the Paseo daemon host, under the same account as Pi:
 
 ```sh
 pi install git:github.com/Konfekt/paseo-bridge-pi
 ```
 
-**Incompatible package:** `@juicesharp/rpiv-ask-user-question` uses a custom terminal widget whose answers cannot be delivered from stock Paseo 0.13.0. Disable its extensions with `pi config` for terminal-attached sessions, then reload Pi while idle. Package installation and `/paseo-bridge install` print this warning; neither changes other packages. See [details and pending-dialog recovery](docs/reference.md#incompatible-question-package).
+**Incompatible package:** `@juicesharp/rpiv-ask-user-question` uses a custom terminal widget whose answers cannot be delivered from stock Paseo. Disable its extensions with `pi config` for terminal-attached sessions, then reload Pi while idle. Package installation and `/paseo-bridge install` print this warning; neither changes other packages. See [details and pending-dialog recovery](docs/reference.md#incompatible-question-package).
 
 Inside Pi, run:
 
@@ -50,7 +50,7 @@ npm run test:native
 npm pack --dry-run
 ```
 
-Native integration tests require an installed Pi executable; see [verification](docs/reference.md#verification). A checkout can be registered with `npm run dev-install` and removed with `npm run dev-uninstall`.
+Native integration tests require an installed Pi executable and, for the stock-daemon test, a Paseo installation; see [verification](docs/reference.md#verification). A checkout can be registered with `npm run dev-install` and removed with `npm run dev-uninstall`.
 
 ## Uninstall
 

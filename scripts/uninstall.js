@@ -1,9 +1,9 @@
 import {
   extensionDir,
-  isOurShimCommand,
   paseoConfigPath,
   piSettingsPath,
   readJson,
+  removeShimFromPaseoConfig,
   samePath,
   writeJson,
 } from "./config.js";
@@ -26,18 +26,14 @@ if (!changed) console.log("pi extension was not registered");
 
 // 2. Remove the shim from Paseo's pi provider command.
 const config = readJson(paseoConfigPath);
-const piProvider = config?.agents?.providers?.pi;
-if (piProvider && isOurShimCommand(piProvider.command)) {
-  delete piProvider.command;
-  if (Object.keys(piProvider).length === 0) delete config.agents.providers.pi;
-  if (Object.keys(config.agents.providers).length === 0) delete config.agents.providers;
-  if (Object.keys(config.agents).length === 0) delete config.agents;
+const shimResult = removeShimFromPaseoConfig(config);
+if (shimResult === "removed") {
   writeJson(paseoConfigPath, config);
   console.log(`removed paseo pi provider shim from ${paseoConfigPath}`);
   changed = true;
-} else if (piProvider?.command) {
+} else if (shimResult === "conflict") {
   console.log(`leaving ${paseoConfigPath} untouched - pi provider command is not the bridge shim:`);
-  console.log(`  ${JSON.stringify(piProvider.command)}`);
+  console.log(`  ${JSON.stringify(config.agents.providers.pi.command)}`);
 } else {
   console.log("paseo shim was not registered");
 }
