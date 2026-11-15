@@ -56,7 +56,10 @@ function localDialog(title, _options, settings) {
       resolve(value);
     };
     const aborted = () => finish(undefined);
-    const poll = setInterval(() => { if (existsSync(process.env.DIALOG_RELEASE_FILE)) finish("One"); }, 5);
+    // The abort fixture shares the release file as its abort trigger; only the
+    // abort may settle it, or the outcome depends on which timer fires first.
+    const poll = title === "Abort fixture" ? undefined
+      : setInterval(() => { if (existsSync(process.env.DIALOG_RELEASE_FILE)) finish("One"); }, 5);
     const timeout = settings?.timeout ? setTimeout(aborted, settings.timeout) : undefined;
     settings?.signal?.addEventListener("abort", aborted, {once: true});
     if (settings?.signal?.aborted) aborted();
