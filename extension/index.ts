@@ -54,6 +54,7 @@ import { createPaseoWsConnection } from "./paseo-ws.js";
 import { applyRemoteModel } from "./model-sync.js";
 import { normalizePiEventForPaseo } from "./tool-result-normalization.js";
 import { TurnVisibilityProjection } from "./turn-visibility.js";
+import { paseoVersionWarning, piVersionWarning, runningPiVersion, warnOnce } from "./version-support.js";
 import { bridgeSettingsFile, environmentBoolean, isAutoEnabled, isImportEnabled, writeBridgeSettings, writeMutableJson } from "./bridge-settings.js";
 
 type NotifyType = "info" | "warning" | "error";
@@ -216,6 +217,8 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
 
   let transport: BridgeTransport | null = null;
   let currentSessionFile: string | null = null;
+  // Version reported by the Paseo daemon at the last WebSocket admission.
+  let lastPaseoVersion: string | undefined;
   let reloadRequested = false;
   let reloadExecuting = false;
   let commandsInFlight = 0;
@@ -400,7 +403,16 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       // Stock Paseo sends direct permission acknowledgements only to sources
       // declaring owned subscriptions. No observation subscription is needed.
       capabilities: { owned_subscriptions: true, all_providers: true },
-    }, { log: debugLog });
+    }, {
+      log: debugLog,
+      onServerInfo: (info) => {
+        lastPaseoVersion = typeof info.version === "string" ? info.version : undefined;
+        warnOnce(paseoVersionWarning(lastPaseoVersion), (message) => {
+          debugLog(message);
+          notifyTui(message, "warning");
+        });
+      },
+    });
   }
 
   async function resolvePaseoSelect(requestId: string, value: string | undefined): Promise<void> {
@@ -464,10 +476,10 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     transport?.send(obj);
   }
 
-  function notifyTui(message: string): void {
+  function notifyTui(message: string, notifyType: NotifyType = "info"): void {
     if (latestCtx?.mode !== "tui") return;
     try {
-      latestCtx.ui.notify(message, "info");
+      latestCtx.ui.notify(message, notifyType);
     } catch (err) {
       debugLog(`notifyTui failed: ${String(err)}`);
     }
@@ -958,6 +970,10 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   function connectSession(ctx: ExtensionContext): string {
     const file = ctx.sessionManager.getSessionFile();
     if (!file) return "This session is ephemeral (--no-session); nothing to bridge.";
+    warnOnce(piVersionWarning(), (message) => {
+      debugLog(message);
+      notifyTui(message, "warning");
+    });
     if (file !== currentSessionFile) {
       stopServer();
       startServer(file);
@@ -1149,6 +1165,10 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     handler: reloadRuntime,
   });
 
+  function versionNote(warning: string | undefined): string {
+    return warning ? ` (${warning.includes("older") ? "older than supported" : "untested; continuing tentatively"})` : "";
+  }
+
   function bridgeStatus(): string {
     let shimInstalled = false;
     try {
@@ -1168,6 +1188,8 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       `settings: ${bridgeSettingsFile()}`,
       `session import: ${isImportEnabled() ? "on" : "off"}`,
       `session: ${session}`,
+      `Pi: ${runningPiVersion() ?? "unknown"}${versionNote(piVersionWarning())}`,
+      `Paseo: ${lastPaseoVersion ? `${lastPaseoVersion}${versionNote(paseoVersionWarning(lastPaseoVersion))}` : "not yet contacted"}`,
     ].join("\n");
   }
 

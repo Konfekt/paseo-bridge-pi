@@ -29,7 +29,7 @@ Session names remain native Pi data. The bridge makes no separate model request 
 | `/paseo-bridge auto on` / `off` | Save the auto-connect preference; default is on. |
 | `/paseo-bridge connect` | Start attachment work for the current terminal session. |
 | `/paseo-bridge disconnect` | Request bridge teardown without stopping Pi. |
-| `/paseo-bridge status` | Show configuration, the Paseo CLI in use, auto-connect, and session state. |
+| `/paseo-bridge status` | Show configuration, the Paseo CLI in use, auto-connect, session state, and the Pi and Paseo versions. |
 | `/remote-reload` | Reload extensions and resources while idle. |
 
 A successful `connect` response acknowledges starting attachment work, not an established Paseo connection. A disconnect acknowledgement likewise precedes teardown.
@@ -109,7 +109,7 @@ Saved auto-connect preferences live under Pi's configured agent directory in `pa
 
 ## Compatibility
 
-The bridge pins no Pi or Paseo version and performs no runtime version check. It relies only on public interfaces that both projects keep stable, so newer releases are accepted as they are. Pi packages are declared as `"*"` peer dependencies, as Pi requires for host-provided packages.
+The bridge pins no Pi or Paseo version and never refuses one. It relies only on public interfaces that both projects keep stable, so newer releases keep working. A Pi or Paseo release newer than the latest verified minor line, a pre-release, or one older than the minimum produces a one-time warning in the terminal (Pi at session start, Paseo when the daemon first admits the bridge's WebSocket connection); `/paseo-bridge status` shows both versions. `extension/version-support.ts` holds the verified range. Pi packages are declared as `"*"` peer dependencies, as Pi requires for host-provided packages.
 
 | Component | Minimum | Latest verified |
 | --- | --- | --- |
@@ -128,6 +128,7 @@ For a new Pi release:
 
 1. Read the changelog's breaking changes for extension events (`session_start`, `session_shutdown`, `agent_*`, `turn_*`, `message_*`, `tool_execution_*`, `session_*compact*`, `model_select`, `thinking_level_select`, `session_info_changed`), `ctx.ui.select`/`input`/`confirm`, `pi.sendUserMessage`, `ctx.reload`, `ctx.compact`, and the `buildSessionProjection` and `getAgentDir` exports.
 2. Install it with `npm install -D --save-exact @earendil-works/pi-coding-agent@<version> @earendil-works/pi-ai@<version>`, then run `npm run typecheck` and the full test suite with `TEST_PI_BIN` and `BRIDGE_NATIVE_PI` pointing to the new `pi`.
+3. If everything passes, raise `PI_TESTED_VERSION` in `extension/version-support.ts`; a test checks that it matches the pinned devDependency.
 
 For a new Paseo release:
 
@@ -135,6 +136,7 @@ For a new Paseo release:
 2. Check that `agent.js` still uses the `PASEO_ENTRY_CAPTURE`, `PASEO_SUBMITTED_USER_ENTRY`, and `PASEO_COMMAND_RESULT` markers and the `paseo_capture_entries` and `paseo_tree` commands.
 3. Check the CLI's `import`, `inspect --json` (`Archived` field), and `agent reload` commands, the WebSocket `hello` handshake and the `set_agent_model_request`, `set_agent_thinking_request`, `update_agent_request`, and `agent_permission_response` messages, and the `agents.providers.pi.command` configuration schema.
 4. Run `npm run test:native` against the new server and CLI, as described below.
+5. If everything passes, raise `PASEO_TESTED_VERSION` in `extension/version-support.ts`.
 
 ## Verification
 

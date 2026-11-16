@@ -113,3 +113,19 @@ test("synchronous send failure rejects every pending request", async () => {
   await failedFirst;
   assert.equal(socket.closed, true);
 });
+
+test("server_info is passed to the observer, and a throwing observer does not block admission", async () => {
+  const socket = new Socket();
+  const seen: unknown[] = [];
+  const conn = createPaseoWsConnection(socket, hello, {
+    onServerInfo: info => { seen.push(info.version); throw new Error("observer bug"); },
+  });
+  socket.onopen?.();
+  socket.message({ type: "session", message: { type: "status", payload: { status: "server_info", version: "0.16.0" } } });
+  const pending = conn.requestWithId("v", { type: "ping", requestId: "v" });
+  await tick();
+  socket.response("v", { ok: true });
+  assert.equal((await pending).ok, true);
+  assert.deepEqual(seen, ["0.16.0"]);
+  conn.close();
+});

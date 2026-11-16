@@ -14,7 +14,11 @@ export interface PaseoSocket {
 export function createPaseoWsConnection(
   ws: PaseoSocket,
   hello: Record<string, unknown>,
-  { timeoutMs = 5000, log = (_message: string) => {} } = {},
+  {
+    timeoutMs = 5000,
+    log = (_message: string) => {},
+    onServerInfo = (_info: Record<string, unknown>) => {},
+  } = {},
 ) {
   let failure: Error | undefined;
   let admitted = false;
@@ -67,6 +71,8 @@ export function createPaseoWsConnection(
       admitted = true;
       clearTimeout(handshakeTimer);
       resolveReady();
+      // Observers (for example the version warning) must not break admission.
+      try { onServerInfo(payload); } catch (error) { log(`server_info observer failed: ${String(error)}`); }
       return;
     }
     if (!admitted) return;
