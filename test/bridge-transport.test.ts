@@ -202,3 +202,18 @@ test("cleanup is best effort when the socket file cannot be removed", {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("frames split inside a UTF-8 character or ending in CRLF are decoded intact", async () => {
+  const f = await fixture();
+  try {
+    f.transport.bind({ command: async cmd => { f.transport.send({ id: cmd.id, owner: "new", text: cmd.message }); }, attached() {}, detached() {}, error: error => f.errors.push(error) });
+    const frame = Buffer.from('{"id":7,"type":"prompt","message":"caf\u00e9 \u2713"}\r\n{"id":8,"type":"prompt","message":"x"}\n', "utf8");
+    const split = frame.indexOf(Buffer.from("\u00e9", "utf8")) + 1;
+    f.client.write(frame.subarray(0, split));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    f.client.write(frame.subarray(split));
+    assert.equal((await f.response(7)).text, "caf\u00e9 \u2713");
+    assert.equal((await f.response(8)).text, "x");
+    assert.deepEqual(f.errors, []);
+  } finally { await f.close(); }
+});

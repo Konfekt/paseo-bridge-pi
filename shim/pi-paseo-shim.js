@@ -7,6 +7,7 @@ import net from "node:net";
 import path from "node:path";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import {
 	assertNoLiveRuntimeOwner,
 	matchingRuntimeRecords,
@@ -74,9 +75,10 @@ function bridge(socket, sessionFile) {
 		process.stdin.unpipe(socket);
 		// Fails any in-flight turn: Paseo treats process_exit as a fatal runtime event.
 		writeJsonLine({ type: "process_exit", error: message });
+		const decoder = new StringDecoder("utf8");
 		let buffer = "";
 		process.stdin.on("data", (chunk) => {
-			buffer += chunk.toString("utf8");
+			buffer += decoder.write(chunk);
 			for (;;) {
 				const newline = buffer.indexOf("\n");
 				if (newline === -1) break;
@@ -89,7 +91,7 @@ function bridge(socket, sessionFile) {
 				} catch {
 					continue;
 				}
-				if (parsed && typeof parsed === "object" && parsed.id) {
+				if (parsed && typeof parsed === "object" && parsed.id != null) {
 					writeJsonLine({
 						type: "response",
 						id: parsed.id,

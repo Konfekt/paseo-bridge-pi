@@ -4,7 +4,7 @@ Attach a terminal Pi conversation to stock Paseo. Read history, send messages, s
 
 ## Install
 
-Requires Pi 1.0.0 or newer and Paseo 0.13.0 or newer; newer releases are expected to work without a bridge update (see [compatibility](docs/reference.md#compatibility)). Install the package on the Paseo daemon host, under the same account as Pi:
+Requires Pi 1.0.0 or newer and Paseo 0.13.0 or newer; newer releases are expected to work without a bridge update and get a one-time warning until verified (see [compatibility](docs/reference.md#compatibility)). Install the package on the Paseo daemon host, under the same account as Pi:
 
 ```sh
 pi install git:github.com/Konfekt/paseo-bridge-pi

@@ -2,7 +2,6 @@ import * as net from "node:net";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { StringDecoder } from "node:string_decoder";
 
 const MAX_CONTROLLER_FRAME_BYTES = 16 * 1024 * 1024;
 const MAX_CONTROLLER_WRITE_QUEUE_BYTES = 32 * 1024 * 1024;
@@ -120,33 +119,42 @@ export class BridgeTransport {
     this.client = socket;
     this._connectionEpoch = randomUUID();
     socket.setNoDelay(true);
-    const decoder = new StringDecoder("utf8");
-    let buffer = "";
-    socket.on("data", chunk => {
-      buffer += decoder.write(chunk);
-      for (;;) {
-        const newline = buffer.indexOf("\n");
-        const frame = newline < 0 ? buffer : buffer.slice(0, newline);
-        if (Buffer.byteLength(frame) > MAX_CONTROLLER_FRAME_BYTES) {
+    // A local closure, not a method: a transport retained across reload gets the new prototype.
+    const dispatchLine = (line: string): void => {
+      if (!line.trim()) return;
+      let command: any;
+      try { command = JSON.parse(line); }
+      catch { return; }
+      if (!command || typeof command !== "object" || Array.isArray(command)) return;
+      const callbacks = this.callbacks;
+      if (!callbacks) {
+        this.send({ type: "response", id: command.id, command: command.type, success: false,
+          error: "Pi runtime reload is in progress; retry after it completes." });
+        return;
+      }
+      void callbacks.command(command).catch(error => callbacks.error(error));
+    };
+    // Frame on raw bytes: a newline byte never occurs inside a UTF-8 sequence, and counting
+    // only new bytes keeps a large unterminated frame from rescanning its buffer per chunk.
+    let pending: Buffer[] = [];
+    let pendingBytes = 0;
+    socket.on("data", (chunk: Buffer) => {
+      for (let start = 0; ;) {
+        const newline = chunk.indexOf(0x0a, start);
+        const end = newline < 0 ? chunk.length : newline;
+        pendingBytes += end - start;
+        if (pendingBytes > MAX_CONTROLLER_FRAME_BYTES) {
           this.callbacks?.error(new Error("Controller input frame exceeds the 16 MiB limit"));
           socket.destroy();
           return;
         }
-        if (newline < 0) break;
-        const line = frame.replace(/\r$/, "");
-        buffer = buffer.slice(newline + 1);
-        if (!line.trim()) continue;
-        let command: any;
-        try { command = JSON.parse(line); }
-        catch { continue; }
-        if (!command || typeof command !== "object" || Array.isArray(command)) continue;
-        const callbacks = this.callbacks;
-        if (!callbacks) {
-          this.send({ type: "response", id: command.id, command: command.type, success: false,
-            error: "Pi runtime reload is in progress; retry after it completes." });
-          continue;
-        }
-        void callbacks.command(command).catch(error => callbacks.error(error));
+        if (end > start) pending.push(chunk.subarray(start, end));
+        if (newline < 0) return;
+        const line = Buffer.concat(pending, pendingBytes).toString("utf8").replace(/\r$/, "");
+        pending = [];
+        pendingBytes = 0;
+        start = newline + 1;
+        dispatchLine(line);
       }
     });
     this.callbacks?.attached();
