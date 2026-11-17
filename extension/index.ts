@@ -38,7 +38,15 @@ import {
   removeShimFromPaseoConfig,
   RPIV_INCOMPATIBILITY_WARNING,
 } from "../scripts/config.js";
-import { paseoImportArgs, importRetryDelay } from "./import-placement.js";
+import {
+  firstUserPrompt,
+  importIntoSessionWorkspace,
+  importRetryDelay,
+  paseoImportArgs,
+  sessionWorkspaceId,
+  sessionWorkspaceTitle,
+  workspaceTitleRequest,
+} from "./import-placement.js";
 import { BridgeTransport, retainBridgeForReload, takeBridgeAfterReload, discardRetainedBridge } from "./bridge-transport.js";
 import { isRuntimeReloadCommand, requireIdleReload, validateReloadPrompt } from "./reload-command.js";
 import { abortAndWaitForIdle } from "./abort-dispatch.js";
@@ -379,7 +387,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   // state the daemon only accepts as client requests (it caches
   // model/thinking/titles and prefers the cache over anything visible
   // through the provider RPC surface).
-  function openPaseoWs(): {
+  function openPaseoWs(timeoutMs?: number): {
     request: (build: (requestId: string) => Record<string, unknown>) => Promise<any>;
     requestWithId: (requestId: string, message: Record<string, unknown>) => Promise<any>;
     close: () => void;
@@ -405,6 +413,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       capabilities: { owned_subscriptions: true, all_providers: true },
     }, {
       log: debugLog,
+      ...(timeoutMs ? { timeoutMs } : {}),
       onServerInfo: (info) => {
         lastPaseoVersion = typeof info.version === "string" ? info.version : undefined;
         warnOnce(paseoVersionWarning(lastPaseoVersion), (message) => {
@@ -810,6 +819,12 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   }
 
   const agentMapFile = path.join(bridgeStateDirectory(), "agents.json");
+  // Imports can wait for Paseo to start the session's provider.
+  const IMPORT_TIMEOUT_MS = 60_000;
+  let workspaceAwaitingTitle: string | undefined;
+  const PASEO_WS_UNREACHABLE = new Set([
+    "Paseo hello rejected", "Paseo hello timeout", "Paseo connection error", "Paseo connection closed",
+  ]);
 
   function writeRuntimeRecord(sessionFile: string, cwd: string): void {
     try {
@@ -909,6 +924,37 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       importAttempted.delete(sessionFile);
     };
     const runImport = () => {
+      const conn = openPaseoWs(IMPORT_TIMEOUT_MS);
+      if (!conn) {
+        runCliImport();
+        return;
+      }
+      const sm = latestCtx?.sessionManager;
+      const title = sessionWorkspaceTitle(sm?.getSessionName(), firstUserPrompt(sm?.getEntries() ?? []));
+      importIntoSessionWorkspace(
+        conn,
+        { sessionFile, cwd, workspaceId: sessionWorkspaceId(sessionKey(sessionFile)), ...(title ? { title } : {}) },
+        (err) => debugLog(`session workspace unavailable; importing into the folder workspace: ${String(err)}`),
+      )
+        .then((result) => {
+          if (!isCurrent()) return;
+          debugLog(`paseo import placed ${result.agentId} in ${result.workspaceId ?? "the folder workspace"}`);
+          workspaceAwaitingTitle = result.untitled ? result.workspaceId : undefined;
+          writeAgentMapEntry(sessionFile, result.agentId);
+          adoptAgent(result.agentId, false);
+        })
+        .catch((err) => {
+          if (!isCurrent()) return;
+          const message = String(err?.message ?? err);
+          debugLog(`paseo import failed: ${message}`);
+          // A daemon that refuses this WebSocket client may still accept the CLI.
+          if (PASEO_WS_UNREACHABLE.has(message)) runCliImport();
+          else retryImport();
+        })
+        .finally(() => conn.close());
+    };
+    // Relay hosts are reachable only through the CLI.
+    const runCliImport = () => {
       const args = paseoImportArgs({ sessionFile, cwd, host: process.env.PASEO_HOST });
       runPaseoCli(cli, args, (code, output) => {
         if (!isCurrent()) return;
@@ -975,6 +1021,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       notifyTui(message, "warning");
     });
     if (file !== currentSessionFile) {
+      workspaceAwaitingTitle = undefined;
       stopServer();
       startServer(file);
     }
@@ -1092,6 +1139,22 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     const agentId = currentAgentId;
     if (!agentId || !name) return;
     paseoSessionRequest(requestId => ({ type: "update_agent_request", agentId, name, requestId }), "session name");
+    // Only this session's own workspace has this ID; a folder workspace is left alone.
+    const title = sessionWorkspaceTitle(name);
+    if (currentSessionFile && title) {
+      workspaceAwaitingTitle = undefined;
+      paseoSessionRequest(workspaceTitleRequest(sessionWorkspaceId(sessionKey(currentSessionFile)), title), "workspace title");
+    }
+  }
+
+  // A session imported before its first prompt names its workspace after that prompt.
+  function titleWorkspaceFromPrompt(ctx: ExtensionContext): void {
+    const workspaceId = workspaceAwaitingTitle;
+    if (!workspaceId || !currentAgentId) return;
+    const title = sessionWorkspaceTitle(ctx.sessionManager.getSessionName(), firstUserPrompt(ctx.sessionManager.getEntries()));
+    if (!title) return;
+    workspaceAwaitingTitle = undefined;
+    paseoSessionRequest(workspaceTitleRequest(workspaceId, title), "workspace title");
   }
 
   pi.on("session_info_changed", (_event, ctx) => syncSessionName(ctx));
@@ -1101,6 +1164,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     send(event);
     emitSubmittedUserEntries(ctx);
     emitEntryCapture(ctx, "turn_end");
+    titleWorkspaceFromPrompt(ctx);
   });
 
   pi.on("session_before_compact", async (event: any, ctx) => {
