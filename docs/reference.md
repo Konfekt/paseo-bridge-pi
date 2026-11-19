@@ -88,7 +88,7 @@ On stock Pi, submission confirms acceptance only. It does not prove that a comma
 
 Retained history comes from Pi. Timeline rewind from Paseo is not supported for attached terminal sessions. Paseo's MCP injection applies to its ordinary RPC sessions, not an already-running terminal session. The bridge does not convert native text-history forks into interactive terminals.
 
-Each imported session gets its own Paseo workspace in the session's directory, because Paseo's sidebar lists workspaces rather than agents and sessions sharing the folder's workspace look like one entry. The workspace ID derives from the session file, so retries and later terminal starts reuse it. Its title is the Pi session name, else the first prompt; a session imported before its first prompt is titled after that prompt, and renaming the Pi session renames the workspace. A host that cannot create the workspace, a session whose workspace was archived, and a relay `PASEO_HOST` import into the folder workspace instead. Sessions imported before this behavior keep their existing workspace.
+Each imported session gets its own Paseo workspace in the session's directory, because Paseo's sidebar lists workspaces rather than agents and sessions sharing the folder's workspace look like one entry. The workspace ID derives from the session file, so retries and later terminal starts reuse it. Its title is the Pi session name, else the first prompt, and renaming the Pi session renames the workspace. A new session is imported once Pi has saved its first message, since Pi creates the session file only then and Paseo reads it on import. A host that cannot create the workspace, a session whose workspace was archived, and a relay `PASEO_HOST` import into the folder workspace instead. Sessions imported before this behavior keep their existing workspace.
 
 ## Configuration
 
@@ -116,13 +116,12 @@ The bridge pins no Pi or Paseo version and never refuses one. It relies only on 
 | Component | Minimum | Latest verified |
 | --- | --- | --- |
 | Pi (`@earendil-works/pi-coding-agent`) | 1.0.0 | 1.5.2 |
-| Paseo (`@getpaseo/server`, `@getpaseo/cli`) | 0.13.0 | 0.15.4 |
+| Paseo (`@getpaseo/server`, `@getpaseo/cli`) | 0.13.0 | 0.16.2 |
 
 How the latest releases compare with the minimums:
 
 - **Pi 1.5.2:** every extension event, `ctx.ui` method, and SDK export the bridge uses is unchanged. Pi now treats a starting run as busy and requires `deliverAs` for `sendUserMessage` while busy; the bridge already sends `followUp` whenever Pi is not idle. `agent_settled` now carries `aborted`; the bridge does not depend on it. No deprecations affect the bridge.
-- **Paseo 0.15.4:** the Pi provider sends the same RPC commands and accepts the same capture markers, WebSocket requests, CLI commands (`import`, `inspect`, `agent reload`), and `agents.providers.pi.command` configuration. New: it reads `isStreaming`, `isCompacting`, and `pendingMessageCount` from `get_state` before stopping an idle runtime, which the bridge reports, and it extracts images from forwarded tool results itself.
-- **Paseo 0.16.1:** the stock-daemon and session-workspace tests pass. Paseo reads history from the `sessionFile` reported by `get_state` instead of calling `get_messages`, no longer reads `contextEntries` from entry captures, and opens short-lived history-only sessions for agents that are not loaded. Before relying on 0.16, check in the app that opening an unloaded agent's timeline while its terminal session is live leaves that session attached.
+- **Paseo 0.16.2:** the Pi provider sends the same RPC commands and accepts the same capture markers, WebSocket requests, CLI commands (`import`, `inspect`, `agent reload`), and `agents.providers.pi.command` configuration. It reads `isStreaming`, `isCompacting`, and `pendingMessageCount` from `get_state` before stopping an idle runtime, which the bridge reports, and it extracts images from forwarded tool results itself. It reads history from the `sessionFile` that `get_state` reports rather than calling `get_messages`, and uses only `treeEntries` from entry captures; the bridge still answers `get_messages` and sends `contextEntries` for earlier releases. Because import reads the session file, which Pi creates only once the conversation starts, the bridge imports a new session after Pi saves its first message. Reading the timeline of an agent the daemon has not loaded opens a short-lived history-only session; when it closes, the bridge has Paseo reload the agent so the terminal session stays attached.
 
 ### Checking a new release
 
@@ -152,6 +151,6 @@ BRIDGE_NATIVE_PI="$(command -v pi)" TEST_PI_BIN="$(command -v pi)" \
   npm run test:native
 ```
 
-The stock-daemon test runs a published Paseo server of version 0.13.0 or newer in-process, with the CLI of the same version. It uses the real Pi SDK extension runner with a controlled terminal renderer, ordinary `ctx.ui` calls, and the production shim. It checks import, a separate workspace for each session in one folder, app and terminal choices, cancellation, timeout, reload, pending-question cleanup, and callback delivery after the actual controller response. It uses the development Pi SDK by default; set `BRIDGE_PI_SDK` to another installed package's absolute `dist/index.js` to check that SDK. Tests requiring an executable or provider path are skipped when that environment variable is absent.
+The stock-daemon test runs a published Paseo server of version 0.13.0 or newer in-process, with the CLI of the same version. It uses the real Pi SDK extension runner with a controlled terminal renderer, ordinary `ctx.ui` calls, and the production shim. It checks import, a separate workspace for each session in one folder, deferred import of a new session until Pi saves it, reattachment after a history-only read of an unloaded agent, app and terminal choices, cancellation, timeout, reload, pending-question cleanup, and callback delivery after the actual controller response. It uses the development Pi SDK by default; set `BRIDGE_PI_SDK` to another installed package's absolute `dist/index.js` to check that SDK. Tests requiring an executable or provider path are skipped when that environment variable is absent.
 
 Desktop and Android use stock Paseo interfaces; backend callback delivery and native provider tests do not prove Android layout, gestures, or visual acceptance. No Android visual acceptance is claimed.

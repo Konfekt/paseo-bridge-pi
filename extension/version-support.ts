@@ -4,7 +4,7 @@ import * as piSdk from "@earendil-works/pi-coding-agent";
 export const PI_MIN_VERSION = "1.0.0";
 export const PI_TESTED_VERSION = "1.5.2";
 export const PASEO_MIN_VERSION = "0.13.0";
-export const PASEO_TESTED_VERSION = "0.15.4";
+export const PASEO_TESTED_VERSION = "0.16.2";
 
 type Release = { core: [number, number, number]; prerelease: boolean };
 

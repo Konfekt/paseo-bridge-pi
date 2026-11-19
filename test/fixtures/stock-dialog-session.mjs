@@ -38,7 +38,8 @@ const loader = new DefaultResourceLoader({cwd: process.cwd(), agentDir: process.
   additionalExtensionPaths: [process.env.BRIDGE_NATIVE_EXTENSION], extensionFactories: [fixture],
   noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true});
 await loader.reload();
-if (!existsSync(sessionFile)) writeFileSync(sessionFile, "");
+// DIALOG_FRESH keeps the file absent, like a new Pi session before its first message.
+if (!existsSync(sessionFile) && process.env.DIALOG_FRESH !== "1") writeFileSync(sessionFile, "");
 const {session} = await createAgentSession({cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR,
   resourceLoader: loader, sessionManager: SessionManager.open(sessionFile, undefined, process.cwd()), noTools: "all"});
 
@@ -74,6 +75,11 @@ const lines = readline.createInterface({input: process.stdin});
 lines.on("line", line => {
   const command = JSON.parse(line);
   if (command.type === "get_state") { reply(command.id, {}); return; }
+  if (command.type === "append_user") {
+    session.sessionManager.appendMessage({role: "user", content: [{type: "text", text: command.message}], timestamp: Date.now()});
+    reply(command.id);
+    return;
+  }
   if (command.type === "reload") { void session.reload().then(() => reply(command.id)); return; }
   void session.prompt(command.message, {expandPromptTemplates: true}).then(() => reply(command.id), error => {
     process.stdout.write(JSON.stringify({id: command.id, type: "response", success: false, error: String(error)}) + "\n");
