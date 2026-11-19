@@ -43,6 +43,7 @@ import {
   importIntoSessionWorkspace,
   importRetryDelay,
   paseoImportArgs,
+  sessionFileSaved,
   sessionWorkspaceId,
   sessionWorkspaceTitle,
   workspaceTitleRequest,
@@ -908,6 +909,9 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
 
   function registerWithPaseo(sessionFile: string, cwd: string): void {
     if (importAttempted.has(sessionFile) || lifecycleClosed || Date.now() < importRetryAt) return;
+    // Pi writes a new session's file only once its conversation starts, and Paseo reads
+    // that file on import. The import timer retries once the file exists.
+    if (!sessionFileSaved(sessionFile)) return;
     const isCurrent = () => !lifecycleClosed && currentSessionFile === sessionFile;
     importAttempted.add(sessionFile);
     if (!isImportEnabled()) return;
@@ -1031,7 +1035,9 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     importRetryAt = 0;
     startImportRetries();
     registerWithPaseo(file, ctx.cwd);
-    return "Connecting session to Paseo...";
+    return sessionFileSaved(file)
+      ? "Connecting session to Paseo..."
+      : "Connecting session to Paseo once Pi saves its first message...";
   }
 
   pi.on("session_start", async (event, ctx) => {

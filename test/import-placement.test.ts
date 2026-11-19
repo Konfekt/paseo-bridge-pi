@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   firstUserPrompt,
   importIntoSessionWorkspace,
   importRetryDelay,
   paseoImportArgs,
+  sessionFileSaved,
   sessionWorkspaceId,
   sessionWorkspaceTitle,
   workspaceTitleRequest,
@@ -15,6 +19,17 @@ test("import command names the native session and its working directory", () => 
     ["import", "--provider", "pi", "/session.jsonl", "--cwd", "/repo", "--json", "--host", "host"]);
   assert.deepEqual(paseoImportArgs({ sessionFile: "/s", cwd: "/c" }),
     ["import", "--provider", "pi", "/s", "--cwd", "/c", "--json"]);
+});
+
+test("import waits until Pi has saved the session file", t => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pi-saved-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const sessionFile = path.join(directory, "session.jsonl");
+  assert.equal(sessionFileSaved(sessionFile), false, "a new session has no file yet");
+  mkdirSync(path.join(directory, "folder.jsonl"));
+  assert.equal(sessionFileSaved(path.join(directory, "folder.jsonl")), false);
+  writeFileSync(sessionFile, "{\"type\":\"session\"}\n");
+  assert.equal(sessionFileSaved(sessionFile), true);
 });
 
 test("automatic import retry delays are bounded", () => {

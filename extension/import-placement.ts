@@ -1,10 +1,20 @@
 import { createHash } from "node:crypto";
+import * as fs from "node:fs";
 
 export function paseoImportArgs(input: {
   sessionFile: string; cwd: string; host?: string;
 }): string[] {
   return ["import", "--provider", "pi", input.sessionFile, "--cwd", input.cwd, "--json",
     ...(input.host ? ["--host", input.host] : [])];
+}
+
+/** Whether Pi has written the session file that Paseo reads on import. */
+export function sessionFileSaved(sessionFile: string): boolean {
+  try {
+    return fs.statSync(sessionFile).isFile();
+  } catch {
+    return false;
+  }
 }
 
 export function importRetryDelay(failures: number): number | undefined {

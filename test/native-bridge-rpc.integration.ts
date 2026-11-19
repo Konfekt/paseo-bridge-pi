@@ -212,7 +212,8 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       assert.match(image.error, /do not accept image attachments/);
       const connecting = extensionNotices.length;
       await ok("prompt", { message: "/paseo-bridge connect" });
-      assert.ok(extensionNotices.slice(connecting).includes("Connecting session to Paseo..."));
+      // This session has no saved message, so Pi has not written its file yet.
+      assert.ok(extensionNotices.slice(connecting).includes("Connecting session to Paseo once Pi saves its first message..."));
       await ok("prompt", { message: "/paseo-bridge auto off" });
       const autoOff = extensionNotices.length;
       await ok("prompt", { message: "/paseo-bridge status" });
