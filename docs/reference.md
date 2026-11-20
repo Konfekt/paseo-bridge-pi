@@ -92,7 +92,7 @@ Each imported session gets its own Paseo workspace in the session's directory, b
 
 ## Configuration
 
-The `paseo` CLI must be on `PATH`, or set `PASEO_CLI` to its executable path. Registration requires writable Paseo configuration. Existing unrelated configuration is preserved; symlinked or immutable configuration is not rewritten.
+Local TCP and socket connections import, inspect and reattach through Paseo's WebSocket API without requiring its CLI on the terminal's `PATH`. For relay or SSH targets, put `paseo` on `PATH` or set `PASEO_CLI` to its executable path. Failed imports retry with backoff capped at one minute, including when the daemon starts after Pi. Registration requires writable Paseo configuration. Existing unrelated configuration is preserved; symlinked or immutable configuration is not rewritten. Reinstalling a moved checkout updates a recognized bridge shim command to its current path.
 
 | Variable | Effect |
 | --- | --- |
@@ -104,7 +104,7 @@ The `paseo` CLI must be on `PATH`, or set `PASEO_CLI` to its executable path. Re
 | `PI_PASEO_BRIDGE_FORCE=1` | Permit activation outside terminal UI mode for tests. |
 | `PASEO_CLI` | Select the Paseo CLI executable. |
 | `PASEO_HOME` | Select the local daemon's home, as for Paseo itself. Registration writes `$PASEO_HOME/config.json`. |
-| `PASEO_HOST` | Select the daemon for import. Only a TCP `host:port` gets direct WebSocket state sync and its own workspace; other targets import through the CLI into the folder workspace. |
+| `PASEO_HOST` | Select the daemon for import. TCP `host:port`, `unix://` paths, and local sockets/pipes get direct WebSocket state sync and a session workspace. Relay and SSH targets import through the CLI into the folder workspace. |
 | `PASEO_PASSWORD` / `PASEO_PASSWORD_FILE` | Supply the password for a protected daemon that is not the local one. The local daemon admits the bridge with its local credential. |
 | `PI_REAL_BIN` | Select the Pi executable, or its `cli.js`, for ordinary shim-launched RPC sessions. |
 
@@ -116,20 +116,22 @@ Without `PASEO_HOST`, the bridge connects to the address the local daemon publis
 
 Pi and the daemon importing its sessions must run on the same machine under the same user: Paseo reads the session file by path, and the daemon's shim attaches to the Pi terminal through a local socket recorded under `~/.pi/paseo-bridge`. Pointing `PASEO_HOST` at a daemon on another machine cannot import a session. To use Pi on another machine, install Paseo and the bridge there and add that daemon as a host in the Paseo app, for example with `paseo host add` or by pairing the app with it; its sessions then appear under that host.
 
-A daemon that listens only on a Unix socket, and `PASEO_HOST` values that are relay or pairing URLs, SSH targets or sockets, can still import through the CLI, which honors `PASEO_HOST`, `PASEO_HOME` and `PASEO_PASSWORD`. Paseo's CLI cannot choose a workspace, so such sessions land in the folder workspace and model, thinking-level and title changes are not synced.
+A daemon that listens only on a Unix socket or Windows named pipe uses the same direct WebSocket requests as TCP, preserving separate workspaces and settings sync. Its local credential is sent only when the selected socket matches the listener in the local daemon's pid file. Relay or pairing URLs and SSH targets use the CLI, which honors `PASEO_HOST`, `PASEO_HOME` and `PASEO_PASSWORD`. Paseo's CLI cannot choose a workspace, so those sessions land in the folder workspace and model, thinking-level and title changes are not synced.
+
+The saved session-to-agent map is a cache. If it is lost or an import response is lost, a direct connection recovers an existing Pi agent by its full native session-file path in Paseo's directory. The search checks up to 10,000 entries or 200 pages, rejects repeated cursors, and ignores archived agents. An already-attached controller is reused without refreshing it, because Paseo refresh interrupts an active turn. Previously imported sessions keep their existing workspace.
 
 ## Compatibility
 
-The bridge pins no Pi or Paseo version and never refuses one. It relies only on public interfaces that both projects keep stable, so newer releases keep working. A Pi or Paseo release newer than the latest verified minor line, a pre-release, or one older than the minimum produces a one-time warning in the terminal (Pi at session start, Paseo when the daemon first admits the bridge's WebSocket connection); `/paseo-bridge status` shows both versions. `extension/version-support.ts` holds the verified range. Pi packages are declared as `"*"` peer dependencies, as Pi requires for host-provided packages.
+The bridge does not enforce a Pi or Paseo runtime version. It uses public interfaces, but a newer release can still change their behavior. A Pi or Paseo release newer than the reviewed minor line, a pre-release, or one older than the minimum produces a one-time warning in the terminal (Pi at session start, Paseo when the daemon first admits the bridge's WebSocket connection); `/paseo-bridge status` shows both versions. `extension/version-support.ts` holds this range. Pi packages are declared as `"*"` peer dependencies, as Pi requires for host-provided packages; development dependencies are pinned for reproducible checks.
 
-| Component | Minimum | Latest verified |
+| Component | Minimum | Latest reviewed/tested target |
 | --- | --- | --- |
-| Pi (`@earendil-works/pi-coding-agent`) | 1.0.0 | 1.5.2 |
+| Pi (`@earendil-works/pi-coding-agent`) | 1.0.0 | 1.6.0 |
 | Paseo (`@getpaseo/server`, `@getpaseo/cli`) | 0.13.0 | 0.16.2 |
 
 How the latest releases compare with the minimums:
 
-- **Pi 1.5.2:** every extension event, `ctx.ui` method, and SDK export the bridge uses is unchanged. Pi now treats a starting run as busy and requires `deliverAs` for `sendUserMessage` while busy; the bridge already sends `followUp` whenever Pi is not idle. `agent_settled` now carries `aborted`; the bridge does not depend on it. No deprecations affect the bridge.
+- **Pi 1.6.0:** the [release changelog](https://github.com/earendil-works/pi/blob/v1.6.0/packages/coding-agent/CHANGELOG.md) changes TUI rendering to readonly buffers; the bridge does not render custom components. The public extension events, ordinary dialog methods and SDK exports used here still typecheck. Native RPC session replacements no longer emit duplicate `session_start` events, and SDK reload emits the missing startup event. Pi still creates a new session file only after its first user or assistant message; the bridge waits for that file instead of creating one itself.
 - **Paseo 0.16.2:** the Pi provider sends the same RPC commands and accepts the same capture markers, WebSocket requests, CLI commands (`import`, `inspect`, `agent reload`), and `agents.providers.pi.command` configuration. It reads `isStreaming`, `isCompacting`, and `pendingMessageCount` from `get_state` before stopping an idle runtime, which the bridge reports, and it extracts images from forwarded tool results itself. It reads history from the `sessionFile` that `get_state` reports rather than calling `get_messages`, and uses only `treeEntries` from entry captures; the bridge still answers `get_messages` and sends `contextEntries` for earlier releases. Because import reads the session file, which Pi creates only once the conversation starts, the bridge imports a new session after Pi saves its first message. Reading the timeline of an agent the daemon has not loaded opens a short-lived history-only session; when it closes, the bridge has Paseo reload the agent so the terminal session stays attached.
 
 ### Checking a new release
@@ -144,7 +146,7 @@ For a new Paseo release:
 
 1. Compare `dist/server/server/agent/providers/pi/cli-runtime.js` and `rpc-types.d.ts` with the previous release. Every RPC command it sends must be handled in `handleCommand` or answered with Pi's `Unknown command` error.
 2. Check that `agent.js` still uses the `PASEO_ENTRY_CAPTURE`, `PASEO_SUBMITTED_USER_ENTRY`, and `PASEO_COMMAND_RESULT` markers and the `paseo_capture_entries` and `paseo_tree` commands.
-3. Check the CLI's `import`, `inspect --json` (`Archived` field), and `agent reload` commands, the WebSocket `hello` handshake and the `workspace.create.request` (with `workspaceId`), `import_agent_request` (with `workspaceId`), `workspace.title.set.request`, `set_agent_model_request`, `set_agent_thinking_request`, `update_agent_request`, and `agent_permission_response` messages, and the `agents.providers.pi.command` configuration schema.
+3. Check the CLI's `import`, `inspect --json` (`Archived` field), and `agent reload` commands, the WebSocket `hello` handshake and the `workspace.create.request` (with `workspaceId`), `import_agent_request` (with `workspaceId`), `fetch_agent_request`, `fetch_agents_request`, `refresh_agent_request`, `workspace.title.set.request`, `set_agent_model_request`, `set_agent_thinking_request`, `update_agent_request`, and `agent_permission_response` messages, and the `agents.providers.pi.command` configuration schema.
 4. Run `npm run test:native` against the new server and CLI, as described below.
 5. If everything passes, raise `PASEO_TESTED_VERSION` in `extension/version-support.ts`.
 
@@ -161,5 +163,7 @@ BRIDGE_NATIVE_PI="$(command -v pi)" TEST_PI_BIN="$(command -v pi)" \
 ```
 
 The stock-daemon test runs a published Paseo server of version 0.13.0 or newer in-process, with the CLI of the same version. It uses the real Pi SDK extension runner with a controlled terminal renderer, ordinary `ctx.ui` calls, and the production shim. It checks import, a separate workspace for each session in one folder, deferred import of a new session until Pi saves it, reattachment after a history-only read of an unloaded agent, app and terminal choices, cancellation, timeout, reload, pending-question cleanup, and callback delivery after the actual controller response. It uses the development Pi SDK by default; set `BRIDGE_PI_SDK` to another installed package's absolute `dist/index.js` to check that SDK. Tests requiring an executable or provider path are skipped when that environment variable is absent.
+
+The Pi 1.6.0 review passed typechecking, 37 focused helper checks and the real Pi RPC `/remote-reload` fixture. A separate TCP wire-contract smoke test against published Paseo 0.16.2, with its fake Pi runtime fixture, verified two separate session workspaces, native-handle lookup, reload and reuse without duplicate agents. The full `npm test` run reported 99 passes, 12 socket-dependent failures and 2 skipped native-executable tests. The new stock-daemon regressions cover import and resume without a terminal-side CLI, recovery after losing the local agent map, and separate workspaces through a password-protected Unix listener. This review environment rejects Unix-socket listeners with `EPERM`, including the terminal controller socket, so those regressions and the full native attachment suite still require a run on a normal local host. This is not a claim of completed Pi 1.6.0/Paseo 0.16.2 end-to-end acceptance.
 
 Desktop and Android use stock Paseo interfaces; backend callback delivery and native provider tests do not prove Android layout, gestures, or visual acceptance. No Android visual acceptance is claimed.

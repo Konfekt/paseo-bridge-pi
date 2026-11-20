@@ -5,14 +5,85 @@ import path from "node:path";
 import test from "node:test";
 import {
   firstUserPrompt,
+  fetchPaseoAgent,
+  findImportedPiAgent,
   importIntoSessionWorkspace,
   importRetryDelay,
   paseoImportArgs,
+  reloadPaseoAgent,
+  reusePaseoAgent,
   sessionFileSaved,
   sessionWorkspaceId,
   sessionWorkspaceTitle,
   workspaceTitleRequest,
 } from "../extension/import-placement.ts";
+
+test("known agents are inspected and reloaded through the stock WebSocket protocol", async () => {
+  const sent: any[] = [];
+  const conn = { async request(build: (id: string) => Record<string, unknown>) {
+    const message = build("r");
+    sent.push(message);
+    return message.type === "fetch_agent_request"
+      ? { agent: { id: "existing", archivedAt: null }, error: null }
+      : { status: "agent_refreshed", agentId: "existing" };
+  } };
+  assert.equal((await fetchPaseoAgent(conn, "existing"))?.id, "existing");
+  await reloadPaseoAgent(conn, "existing");
+  assert.deepEqual(sent, [
+    { type: "fetch_agent_request", agentId: "existing", requestId: "r" },
+    { type: "refresh_agent_request", agentId: "existing", requestId: "r" },
+  ]);
+  assert.equal(await fetchPaseoAgent({ request: async () => ({ agent: null, error: null }) }, "missing"), null);
+  await assert.rejects(reloadPaseoAgent({ request: async () => ({ error: "daemon busy" }) }, "existing"), /daemon busy/);
+});
+
+test("a lost local agent map is recovered by full native path across directory pages", async () => {
+  const pages: any[] = [];
+  const agent = (id: string, handle: string, extra = {}) => ({ id, provider: "pi", persistence: { nativeHandle: handle, sessionId: "same-uuid" }, ...extra });
+  const conn = { async request(build: (id: string) => Record<string, unknown>) {
+    const request: any = build("r");
+    pages.push(request.page);
+    assert.deepEqual(request.filter, { includeArchived: false });
+    return !request.page.cursor
+      ? { entries: [
+        { agent: agent("copy", "/other/session.jsonl") },
+        { agent: agent("archived", "/wanted.jsonl", { archivedAt: "2026-11-20" }) },
+        { agent: agent("other-provider", "/wanted.jsonl", { provider: "codex" }) },
+      ], pageInfo: { hasMore: true, nextCursor: "page-2" } }
+      : { entries: [{ agent: agent("existing", "/wanted.jsonl") }], pageInfo: { hasMore: false } };
+  } };
+  assert.equal(await findImportedPiAgent(conn, "/wanted.jsonl"), "existing");
+  assert.deepEqual(pages, [{ limit: 200 }, { limit: 200, cursor: "page-2" }]);
+  assert.equal(await findImportedPiAgent({ request: async () => ({ entries: [], pageInfo: { hasMore: false } }) }, "/missing"), undefined);
+});
+
+test("recovery does not reload a live controller or one that attaches during lookup", async () => {
+  for (const initiallyAttached of [false, true]) {
+    let attached = initiallyAttached;
+    const requests: string[] = [];
+    const conn = { async request(build: (id: string) => Record<string, unknown>) {
+      const request = build("r");
+      requests.push(String(request.type));
+      // Covers a provider reconnecting before the lookup reply arrives.
+      attached = true;
+      return { agent: { id: "existing", archivedAt: null }, error: null };
+    } };
+    assert.equal(await reusePaseoAgent(conn, "existing", () => !attached), true);
+    assert.deepEqual(requests, ["fetch_agent_request"], "refresh would cancel the active native turn");
+  }
+  assert.equal(await reusePaseoAgent({ request: async () => ({ agent: { archivedAt: "now" } }) }, "archived", () => true), false);
+});
+
+test("directory recovery rejects invalid and non-advancing responses instead of looping", async () => {
+  await assert.rejects(findImportedPiAgent({ request: async () => ({ error: "denied" }) }, "/session"), /denied/);
+  await assert.rejects(findImportedPiAgent({ request: async () => ({ entries: null }) }, "/session"), /invalid/);
+  let requests = 0;
+  await assert.rejects(findImportedPiAgent({ request: async () => {
+    requests += 1;
+    return { entries: [], pageInfo: { hasMore: true, nextCursor: "same" } };
+  } }, "/session"), /did not advance/);
+  assert.equal(requests, 2);
+});
 
 test("import command names the native session and its working directory", () => {
   assert.deepEqual(paseoImportArgs({ sessionFile: "/session.jsonl", cwd: "/repo", host: "host" }),

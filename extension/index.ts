@@ -13,8 +13,10 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as crypto from "node:crypto";
+import * as net from "node:net";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import WebSocket from "ws";
 import {
   buildSessionProjection,
   type ExtensionAPI,
@@ -40,9 +42,11 @@ import {
 } from "../scripts/config.js";
 import {
   firstUserPrompt,
+  findImportedPiAgent,
   importIntoSessionWorkspace,
   importRetryDelay,
   paseoImportArgs,
+  reusePaseoAgent,
   sessionFileSaved,
   sessionWorkspaceId,
   sessionWorkspaceTitle,
@@ -258,11 +262,24 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     onError: (error) => debugLog(`paseo provider reattach failed: ${String(error)}`),
   });
 
-  function reloadCurrentPaseoProvider(): Promise<void> {
+  async function reloadCurrentPaseoProvider(): Promise<void> {
+    if (remoteUiConnected()) return;
     const agentId = currentAgentId;
+    if (!agentId) throw new Error("Paseo agent ID is unavailable");
+    const conn = openPaseoWs(IMPORT_TIMEOUT_MS);
+    if (conn) {
+      try {
+        if (!await reusePaseoAgent(conn, agentId, () => currentAgentId === agentId && !remoteUiConnected())) {
+          throw new Error(`Paseo agent is missing or archived: ${agentId}`);
+        }
+        debugLog("paseo provider reattach reload exited 0 (WebSocket)");
+        return;
+      } finally {
+        conn.close();
+      }
+    }
     const cli = resolvePaseoCli();
-    if (!agentId) return Promise.reject(new Error("Paseo agent ID is unavailable"));
-    if (!cli) return Promise.reject(new Error("paseo CLI is unavailable"));
+    if (!cli) throw new Error("paseo CLI is unavailable for this host");
     return new Promise((resolve, reject) => {
       runPaseoCli(cli, ["agent", "reload", agentId, "--json", ...paseoHostArgs()], (code, output) => {
         debugLog(`paseo provider reattach reload exited ${code}: ${output.slice(0, 200)}`);
@@ -387,23 +404,20 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     requestWithId: (requestId: string, message: Record<string, unknown>) => Promise<any>;
     close: () => void;
   } | null {
-    // Relay/pairing URLs, SSH and socket-only daemons are reachable only
+    // Relay/pairing URLs and SSH targets are reachable only
     // through the CLI; imports then land in the folder workspace.
     const target = resolvePaseoWsTarget();
     if (!target) return null;
-    const { url, localCredential } = target;
-    const WebSocketCtor = (globalThis as any).WebSocket;
-    if (typeof WebSocketCtor !== "function") {
-      debugLog("global WebSocket unavailable; cannot sync state to Paseo");
-      return null;
-    }
+    const { url, socketPath, localCredential } = target;
     // The local daemon's credential admits the bridge without a configured
     // password, as it does Paseo's own CLI. Otherwise PASEO_PASSWORD goes in
     // the hello and, for hosts predating hello auth, the bearer subprotocol.
     const password = localCredential ? null : readPaseoPassword();
     const protocols = password ? [`paseo.bearer.${password}`] : undefined;
-    const ws = new WebSocketCtor(url, protocols);
-    debugLog(`paseo sync websocket connecting to ${url}`);
+    const ws = new WebSocket(url, protocols, socketPath
+      ? { createConnection: () => net.createConnection(socketPath) }
+      : undefined);
+    debugLog(`paseo sync websocket connecting to ${socketPath ?? url}`);
     return createPaseoWsConnection(ws, {
       type: "hello",
       clientId: `pi-paseo-bridge-${process.pid}`,
@@ -916,13 +930,10 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     // that file on import. The import timer retries once the file exists.
     if (!sessionFileSaved(sessionFile)) return;
     const isCurrent = () => !lifecycleClosed && currentSessionFile === sessionFile;
-    importAttempted.add(sessionFile);
     if (!isImportEnabled()) return;
+    importAttempted.add(sessionFile);
     const cli = resolvePaseoCli();
-    if (!cli) {
-      debugLog("paseo CLI not found; session will not auto-appear (set PASEO_CLI)");
-      return;
-    }
+    const knownAgentId = readAgentMap()[sessionKey(sessionFile)];
     const hostArgs = paseoHostArgs();
     const retryImport = () => {
       // Keep retries slow while the local daemon is unavailable.
@@ -933,35 +944,61 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     const runImport = () => {
       const conn = openPaseoWs(IMPORT_TIMEOUT_MS);
       if (!conn) {
-        runCliImport();
+        runCliRestore();
         return;
       }
-      const sm = latestCtx?.sessionManager;
-      const title = sessionWorkspaceTitle(sm?.getSessionName(), firstUserPrompt(sm?.getEntries() ?? []));
-      importIntoSessionWorkspace(
-        conn,
-        { sessionFile, cwd, workspaceId: sessionWorkspaceId(sessionKey(sessionFile)), ...(title ? { title } : {}) },
-        (err) => debugLog(`session workspace unavailable; importing into the folder workspace: ${String(err)}`),
-      )
+      void (async () => {
+        if (knownAgentId) {
+          const reused = await reusePaseoAgent(conn, knownAgentId, () => isCurrent() && !remoteUiConnected());
+          if (!isCurrent()) return undefined;
+          if (reused) {
+            return { agentId: knownAgentId, workspaceId: undefined, untitled: false, reused: true };
+          }
+        }
+        const sm = latestCtx?.sessionManager;
+        const title = sessionWorkspaceTitle(sm?.getSessionName(), firstUserPrompt(sm?.getEntries() ?? []));
+        try {
+          const result = await importIntoSessionWorkspace(
+            conn,
+            { sessionFile, cwd, workspaceId: sessionWorkspaceId(sessionKey(sessionFile)), ...(title ? { title } : {}) },
+            (err) => debugLog(`session workspace unavailable; importing into the folder workspace: ${String(err)}`),
+          );
+          return { ...result, reused: false };
+        } catch (error) {
+          if (!String((error as Error)?.message ?? error).startsWith("Provider session is already imported:")) throw error;
+          // The map is a local cache: another terminal may have overwritten it,
+          // or import may have succeeded before its response was lost.
+          const existingId = await findImportedPiAgent(conn, sessionFile);
+          if (!isCurrent()) return undefined;
+          if (!existingId) throw error;
+          if (!await reusePaseoAgent(conn, existingId, () => isCurrent() && !remoteUiConnected())) throw error;
+          return { agentId: existingId, workspaceId: undefined, untitled: false, reused: true };
+        }
+      })()
         .then((result) => {
-          if (!isCurrent()) return;
+          if (!result || !isCurrent()) return;
           debugLog(`paseo import placed ${result.agentId} in ${result.workspaceId ?? "the folder workspace"}`);
           workspaceAwaitingTitle = result.untitled ? result.workspaceId : undefined;
           writeAgentMapEntry(sessionFile, result.agentId);
-          adoptAgent(result.agentId, false);
+          adoptAgent(result.agentId, result.reused);
         })
         .catch((err) => {
           if (!isCurrent()) return;
           const message = String(err?.message ?? err);
           debugLog(`paseo import failed: ${message}`);
           // A daemon that refuses this WebSocket client may still accept the CLI.
-          if (PASEO_WS_UNREACHABLE.has(message)) runCliImport();
+          if (PASEO_WS_UNREACHABLE.has(message)) runCliRestore();
           else retryImport();
         })
         .finally(() => conn.close());
     };
     // Relay hosts are reachable only through the CLI.
     const runCliImport = () => {
+      if (!cli) {
+        debugLog("paseo CLI not found for this host; retrying (set PASEO_CLI for relay/SSH)");
+        retryImport();
+        return;
+      }
       const args = paseoImportArgs({ sessionFile, cwd, host: process.env.PASEO_HOST });
       runPaseoCli(cli, args, (code, output) => {
         if (!isCurrent()) return;
@@ -972,52 +1009,56 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         }
         try {
           const jsonStart = output.indexOf("{");
-          if (jsonStart === -1) return;
+          if (jsonStart === -1) throw new Error("import returned no JSON result");
           const result = JSON.parse(output.slice(jsonStart));
           if (typeof result.agentId === "string" && result.agentId) {
             writeAgentMapEntry(sessionFile, result.agentId);
             adoptAgent(result.agentId, false);
+          } else {
+            throw new Error("import returned no agent ID");
           }
         } catch (err) {
           debugLog(`could not parse import output: ${String(err)}`);
+          retryImport();
         }
       });
     };
-    // Re-importing a session Paseo already knows creates a duplicate agent,
-    // so check the last known agent for this session file first.
-    const knownAgentId = readAgentMap()[sessionKey(sessionFile)];
-    if (!knownAgentId) {
-      runImport();
-      return;
-    }
-    runPaseoCli(cli, ["inspect", knownAgentId, "--json", ...hostArgs], (code, output) => {
-      if (!isCurrent()) return;
-      let exists = false;
-      try {
-        if (code === 0) {
-          const jsonStart = output.indexOf("{");
-          const info = jsonStart === -1 ? null : JSON.parse(output.slice(jsonStart));
-          exists = Boolean(info) && info.Archived !== true;
-        }
-      } catch (err) {
-        debugLog(`inspect of known agent failed: ${String(err)}`);
-      }
-      if (!exists) {
-        runImport();
+    const runCliRestore = () => {
+      if (!knownAgentId || !cli) {
+        runCliImport();
         return;
       }
-      // The daemon's provider session for this agent died with the previous
-      // TUI process; reload restarts it so it reattaches to the new pipe.
-      runPaseoCli(cli, ["agent", "reload", knownAgentId, "--json", ...hostArgs], (reloadCode, reloadOutput) => {
+      runPaseoCli(cli, ["inspect", knownAgentId, "--json", ...hostArgs], (code, output) => {
         if (!isCurrent()) return;
-        debugLog(`paseo agent reload exited ${reloadCode}: ${reloadOutput.slice(0, 200)}`);
-        if (reloadCode === 0) {
-          adoptAgent(knownAgentId, true);
-        } else {
-          runImport();
+        let exists = false;
+        try {
+          if (code === 0) {
+            const jsonStart = output.indexOf("{");
+            const info = jsonStart === -1 ? null : JSON.parse(output.slice(jsonStart));
+            exists = Boolean(info) && info.Archived !== true;
+          }
+        } catch (err) {
+          debugLog(`inspect of known agent failed: ${String(err)}`);
         }
+        if (!exists) {
+          runCliImport();
+          return;
+        }
+        if (remoteUiConnected()) {
+          adoptAgent(knownAgentId, true);
+          return;
+        }
+        // Only a disconnected controller needs a reload: refreshing a live
+        // provider would interrupt its active turn.
+        runPaseoCli(cli, ["agent", "reload", knownAgentId, "--json", ...hostArgs], (reloadCode, reloadOutput) => {
+          if (!isCurrent()) return;
+          debugLog(`paseo agent reload exited ${reloadCode}: ${reloadOutput.slice(0, 200)}`);
+          if (reloadCode === 0) adoptAgent(knownAgentId, true);
+          else retryImport();
+        });
       });
-    });
+    };
+    runImport();
   }
 
   function connectSession(ctx: ExtensionContext): string {
@@ -1256,7 +1297,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     return [
       "Paseo bridge status",
       `shim: ${shimInstalled ? "installed" : "not installed (run /paseo-bridge install)"}`,
-      `paseo CLI: ${cli ?? "not found (add paseo to PATH or set PASEO_CLI)"}`,
+      `paseo CLI: ${cli ?? "not found (optional for local TCP/socket connections; set PASEO_CLI for relay/SSH)"}`,
       `auto-connect: ${isAutoEnabled() ? "on" : "off"}`,
       `settings: ${bridgeSettingsFile()}`,
       `session import: ${isImportEnabled() ? "on" : "off"}`,

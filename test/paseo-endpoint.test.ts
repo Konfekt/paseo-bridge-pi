@@ -41,11 +41,21 @@ test("without a published listener the default endpoint is used", () => {
   assert.deepEqual(resolvePaseoWsTarget({ PASEO_HOME: home(undefined) }), { url: "ws://127.0.0.1:6767/ws" });
 });
 
-test("socket-only daemons, relay and SSH targets are left to the CLI", () => {
-  assert.equal(resolvePaseoWsTarget({ PASEO_HOME: home("/run/paseo.sock") }), undefined);
-  assert.equal(resolvePaseoWsTarget({ PASEO_HOME: home("unix:///run/paseo.sock") }), undefined);
+test("socket-only daemons keep direct state sync and the local credential", () => {
+  for (const listen of ["/run/paseo.sock", "unix:///run/paseo.sock"]) {
+    const local = home(listen);
+    const target = { url: "ws://localhost/ws", socketPath: "/run/paseo.sock", localCredential: credential };
+    assert.deepEqual(resolvePaseoWsTarget({ PASEO_HOME: local }), target);
+    assert.deepEqual(resolvePaseoWsTarget({ PASEO_HOME: local, PASEO_HOST: "unix:///run/paseo.sock" }), target);
+    assert.deepEqual(resolvePaseoWsTarget({ PASEO_HOME: local, PASEO_HOST: "/run/other.sock" }), {
+      url: "ws://localhost/ws", socketPath: "/run/other.sock",
+    });
+  }
+});
+
+test("relay and SSH targets are left to the CLI", () => {
   const local = home("127.0.0.1:6767");
-  for (const host of ["https://app.paseo.sh/#offer=x", "ssh://me@box", "unix:///run/paseo.sock", "/run/paseo.sock"]) {
+  for (const host of ["https://app.paseo.sh/#offer=x", "ssh://me@box"]) {
     assert.equal(resolvePaseoWsTarget({ PASEO_HOME: local, PASEO_HOST: host }), undefined, host);
   }
 });

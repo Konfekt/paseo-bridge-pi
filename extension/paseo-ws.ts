@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 export interface PaseoSocket {
   send(data: string): void;
   close(): void;
-  onopen: (() => void) | null;
+  onopen: ((event: any) => void) | null;
   onerror: ((event: any) => void) | null;
   onclose: ((event: any) => void) | null;
   onmessage: ((event: { data: unknown }) => void) | null;

@@ -58,6 +58,56 @@ export interface PaseoRequester {
   request(build: (requestId: string) => Record<string, unknown>): Promise<any>;
 }
 
+export async function fetchPaseoAgent(conn: PaseoRequester, agentId: string): Promise<any | null> {
+  const payload = await conn.request(requestId => ({ type: "fetch_agent_request", agentId, requestId }));
+  if (payload?.error) throw new Error(String(payload.error));
+  return payload?.agent ?? null;
+}
+
+export async function reloadPaseoAgent(conn: PaseoRequester, agentId: string): Promise<void> {
+  const payload = await conn.request(requestId => ({ type: "refresh_agent_request", agentId, requestId }));
+  if (payload?.status !== "agent_refreshed" || payload?.agentId !== agentId) {
+    throw new Error(typeof payload?.error === "string" ? payload.error : "Paseo agent reload failed");
+  }
+}
+
+/** Reuse a saved agent without interrupting a controller that is already attached. */
+export async function reusePaseoAgent(conn: PaseoRequester, agentId: string, needsReload: () => boolean): Promise<boolean> {
+  const agent = await fetchPaseoAgent(conn, agentId);
+  if (!agent || agent.archivedAt) return false;
+  // Check after admission/lookup: the controller may have connected while they waited.
+  if (needsReload()) await reloadPaseoAgent(conn, agentId);
+  return true;
+}
+
+/** Recover a lost local agent-map entry using Paseo's persisted native handle. */
+export async function findImportedPiAgent(conn: PaseoRequester, sessionFile: string): Promise<string | undefined> {
+  let cursor: string | undefined;
+  let count = 0;
+  const seen = new Set<string>();
+  for (let page = 0; page < 200; page += 1) {
+    const payload = await conn.request(requestId => ({
+      type: "fetch_agents_request", requestId, filter: { includeArchived: false },
+      sort: [{ key: "created_at", direction: "asc" }],
+      page: { limit: 200, ...(cursor ? { cursor } : {}) },
+    }));
+    if (payload?.error) throw new Error(String(payload.error));
+    if (!Array.isArray(payload?.entries)) throw new Error("Paseo agent directory response is invalid");
+    count += payload.entries.length;
+    if (count > 10_000) throw new Error("Paseo agent directory exceeds the bridge's 10000-entry limit");
+    for (const { agent } of payload.entries) {
+      const handle = agent?.persistence?.nativeHandle ?? agent?.persistence?.sessionId;
+      if (agent?.provider === "pi" && !agent.archivedAt && handle === sessionFile && typeof agent.id === "string") return agent.id;
+    }
+    if (!payload.pageInfo?.hasMore) return undefined;
+    const next = payload.pageInfo.nextCursor;
+    if (typeof next !== "string" || !next || seen.has(next)) throw new Error("Paseo agent directory pagination did not advance");
+    seen.add(next);
+    cursor = next;
+  }
+  throw new Error("Paseo agent directory exceeds the bridge's 200-page limit");
+}
+
 export interface SessionImport {
   agentId: string;
   /** The session's own workspace, or undefined when it joined the folder workspace. */

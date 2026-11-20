@@ -49,13 +49,15 @@ export function isOurShimCommand(command) {
 
 /**
  * Point Paseo's pi provider at the shim. Mutates config only when it changes;
+ * Refreshes this bridge's command when its checkout or Node executable moves;
  * never replaces another provider command.
  * @returns {"installed" | "already-installed" | "conflict"}
  */
 export function addShimToPaseoConfig(config, command) {
   const current = config.agents?.providers?.pi?.command;
-  if (isOurShimCommand(current)) return "already-installed";
-  if (current) return "conflict";
+  if (current && !isOurShimCommand(current)) return "conflict";
+  if (Array.isArray(current) && current.length === command.length &&
+      current.every((part, index) => part === command[index])) return "already-installed";
   config.agents ??= {};
   config.agents.providers ??= {};
   config.agents.providers.pi = { ...config.agents.providers.pi, command };

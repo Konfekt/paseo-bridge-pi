@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -20,7 +21,7 @@ const skip = !executable || !providerEntry || !paseoCli;
  * `password` protects the daemon; `selectHost: false` leaves PASEO_HOST unset,
  * so pi and the shim find the daemon as Paseo's own CLI does.
  */
-async function stockPaseo(t: TestContext, options: { password?: string; selectHost?: boolean } = {}) {
+async function stockPaseo(t: TestContext, options: { password?: string; selectHost?: boolean; socketOnly?: boolean; cli?: boolean } = {}) {
   const providerUrl = pathToFileURL(await realpath(providerEntry!));
   const hostPackage = JSON.parse(await readFile(new URL("../../../../../../package.json", providerUrl), "utf8"));
   assert.equal(hostPackage.name, "@getpaseo/server");
@@ -39,7 +40,7 @@ async function stockPaseo(t: TestContext, options: { password?: string; selectHo
     PATH: [path.dirname(executable!), path.dirname(process.execPath)].join(path.delimiter),
     HOME: home, TMPDIR: temporary, XDG_RUNTIME_DIR: runtime, PI_CODING_AGENT_DIR: agentDir,
     PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0",
-    PASEO_CLI: paseoCli!, PASEO_HOME: paseoHome,
+    PASEO_CLI: options.cli === false ? "" : paseoCli!, PASEO_HOME: paseoHome,
     BRIDGE_NATIVE_EXTENSION: process.env.BRIDGE_NATIVE_EXTENSION ?? path.join(root, "extension/index.ts"),
     BRIDGE_PI_SDK: sdkPath,
     DIALOG_RECEIPT_FILE: path.join(temporary, "receipts.jsonl"), DIALOG_RELEASE_FILE: path.join(temporary, "release"),
@@ -62,7 +63,8 @@ async function stockPaseo(t: TestContext, options: { password?: string; selectHo
   }, logger);
   const children: ReturnType<typeof spawn>[] = [];
   const stderr: string[] = [];
-  let daemon: any = await createDaemon("127.0.0.1:0");
+  const socketPath = path.join(temporary, "paseo.sock");
+  let daemon: any = await createDaemon(options.socketOnly ? socketPath : "127.0.0.1:0");
   let client: any;
   t.after(async () => {
     for (const child of children) child.kill();
@@ -85,7 +87,7 @@ async function stockPaseo(t: TestContext, options: { password?: string; selectHo
   }));
   await daemon.start();
   const port = daemon.getListenTarget().port;
-  target = `127.0.0.1:${port}`;
+  target = options.socketOnly ? socketPath : `127.0.0.1:${port}`;
   if (options.selectHost !== false) env.PASEO_HOST = target;
   await publishListener();
   await connect();
@@ -110,9 +112,9 @@ async function stockPaseo(t: TestContext, options: { password?: string; selectHo
     async piAgents() {
       return (await client.fetchAgents()).entries.map((entry: any) => entry.agent).filter((agent: any) => agent.provider === "pi");
     },
-    async waitForPiAgents(count: number) {
+    async waitForPiAgents(count: number, attempts = 120) {
       let agents: any[] = [];
-      for (let attempt = 0; attempt < 120 && agents.length < count; attempt += 1) {
+      for (let attempt = 0; attempt < attempts && agents.length < count; attempt += 1) {
         await delay(250);
         agents = await this.piAgents();
       }
@@ -209,6 +211,44 @@ test("pi finds a local daemon on a non-default port without PASEO_HOST", { skip,
 test("pi imports into its own workspace on a password-protected daemon", { skip, timeout: 90_000 }, async t => {
   const paseo = await stockPaseo(t, { password: "correct horse battery staple" });
   await assertImportsIntoSessionWorkspace(paseo, "66666666-6666-4666-8666-666666666666");
+});
+
+test("pi imports and resumes without a Paseo CLI, including after losing its agent map", { skip, timeout: 90_000 }, async t => {
+  const paseo = await stockPaseo(t, { selectHost: false, cli: false });
+  const sessionFile = paseo.sessionFile("77777777-7777-4777-8777-777777777777");
+  let child = paseo.startSession(sessionFile, { DIALOG_FRESH: "1", PI_PASEO_BRIDGE_DEBUG: "1" });
+  child.stdin!.write(`${JSON.stringify({ id: "first", type: "append_user", message: "Find the local daemon" })}\n`);
+  const [first] = await paseo.waitForPiAgents(1, 40);
+  assert.ok(first, `the session imports without the CLI; stderr: ${paseo.stderr()}`);
+  const debugLog = path.join(paseo.home, ".pi/paseo-bridge/debug.log");
+  for (const loseMap of [false, true]) {
+    const exited = once(child, "close");
+    child.stdin!.end();
+    await exited;
+    if (loseMap) await rm(path.join(paseo.home, ".pi/paseo-bridge/agents.json"));
+    await writeFile(debugLog, "");
+    child = paseo.startSession(sessionFile, { PI_PASEO_BRIDGE_DEBUG: "1" });
+    let log = "";
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      await delay(250);
+      log = await readFile(debugLog, "utf8");
+      if (log.includes(`paseo agent id: ${first.id} (reused)`)) break;
+    }
+    assert.ok(log.includes(`paseo agent id: ${first.id} (reused)`), `the saved agent reattaches without a CLI (lost map: ${loseMap}); stderr: ${paseo.stderr()}`);
+    assert.deepEqual((await paseo.piAgents()).map((agent: any) => agent.id), [first.id], "resume preserves the original agent");
+  }
+});
+
+test("a Unix-socket daemon gives each pi session its own workspace", {
+  skip: skip || process.platform === "win32", timeout: 90_000,
+}, async t => {
+  const paseo = await stockPaseo(t, { selectHost: false, socketOnly: true, cli: false, password: "local socket fixture" });
+  for (const uuid of ["88888888-8888-4888-8888-888888888888", "99999999-9999-4999-8999-999999999999"]) {
+    paseo.startSession(paseo.sessionFile(uuid));
+  }
+  const agents = await paseo.waitForPiAgents(2, 40);
+  assert.equal(agents.length, 2, `both sessions import over the Unix socket; stderr: ${paseo.stderr()}`);
+  assert.equal(new Set(agents.map((agent: any) => agent.workspaceId)).size, 2, "sessions in the same directory have separate workspaces");
 });
 
 async function assertImportsIntoSessionWorkspace(paseo: Awaited<ReturnType<typeof stockPaseo>>, uuid: string) {

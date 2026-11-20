@@ -26,6 +26,12 @@ paseo restart
 
 Start a terminal Pi session. Auto-connect is enabled by default; `/paseo-bridge status` reports the connection state. No additional Paseo plugin, custom application build, or package compiler is required.
 
+Each session appears in its own Paseo workspace once Pi saves its first message. An empty start screen has no session file yet. Local TCP and Unix-socket daemons are discovered automatically, even when `paseo` is absent from the terminal's `PATH`; the CLI remains necessary for relay or SSH targets. The bridge retries while the daemon starts and reuses existing imports after a terminal restart.
+
+After updating or moving the bridge checkout, register its current location in Pi, replacing the old package entry if the path changed. In each already-open idle Pi session, run `/reload` first, then `/paseo-bridge install`, so installation uses the updated extension. Apply the configuration with `paseo reload` while idle, or `paseo restart` to replace running shim processes. Reinstallation refreshes a previous bridge shim path while preserving unrelated provider settings.
+
+Pi's `/reload` updates resources, including extensions; it does not replace the running Pi executable. After upgrading Pi to 1.6.0, exit the old process while idle and reopen or resume its session with the updated executable.
+
 ## Controls
 
 | Command | Effect |

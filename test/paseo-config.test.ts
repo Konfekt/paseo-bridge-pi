@@ -18,6 +18,25 @@ test("installing never replaces another pi provider command", () => {
   assert.deepEqual(config.agents.providers.pi.command, ["/opt/pi-wrapper"]);
 });
 
+test("reinstalling refreshes a moved bridge without losing provider settings", () => {
+  const config: any = { agents: { providers: { pi: {
+    command: ["/old/node", "/old/checkout/shim/pi-paseo-shim.js"],
+    env: { PI_REAL_BIN: "/opt/pi" },
+  } } }, pluginsEnabled: true };
+  assert.equal(addShimToPaseoConfig(config, shim), "installed");
+  assert.deepEqual(config, { agents: { providers: { pi: {
+    command: shim,
+    env: { PI_REAL_BIN: "/opt/pi" },
+  } } }, pluginsEnabled: true });
+  assert.equal(addShimToPaseoConfig(config, shim), "already-installed");
+});
+
+test("reinstalling refreshes only a changed Node executable", () => {
+  const config: any = { agents: { providers: { pi: { command: ["/old/node", shim[1]] } } } };
+  assert.equal(addShimToPaseoConfig(config, shim), "installed");
+  assert.deepEqual(config.agents.providers.pi.command, shim);
+});
+
 test("uninstalling removes only the shim and prunes empty containers", () => {
   const empty: any = { agents: { providers: { pi: { command: shim } } }, other: true };
   assert.equal(removeShimFromPaseoConfig(empty), "removed");

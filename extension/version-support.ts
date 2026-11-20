@@ -1,8 +1,9 @@
 import * as piSdk from "@earendil-works/pi-coding-agent";
 
-// Verified releases. Newer releases and pre-releases keep working, with a one-time warning.
+// Reviewed/tested targets; docs/reference.md records verification limits.
+// Newer releases and pre-releases are attempted with a one-time warning.
 export const PI_MIN_VERSION = "1.0.0";
-export const PI_TESTED_VERSION = "1.5.2";
+export const PI_TESTED_VERSION = "1.6.0";
 export const PASEO_MIN_VERSION = "0.13.0";
 export const PASEO_TESTED_VERSION = "0.16.2";
 
