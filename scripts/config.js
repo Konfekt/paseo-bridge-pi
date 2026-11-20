@@ -7,9 +7,16 @@ export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 export const extensionDir = norm(path.join(repoRoot, "extension"));
 export const shimPath = norm(path.join(repoRoot, "shim", "pi-paseo-shim.js"));
 export const piSettingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
-export const paseoConfigPath = path.join(os.homedir(), ".paseo", "config.json");
+export const paseoConfigPath = path.join(resolvePaseoHome(), "config.json");
 export const RPIV_INCOMPATIBILITY_WARNING =
   "Compatibility warning: @juicesharp/rpiv-ask-user-question is incompatible with terminal-attached sessions in stock Paseo. App submissions do not reach its custom terminal widget. If installed, disable its extensions with pi config, then reload idle Pi sessions. See docs/reference.md#incompatible-question-package.";
+
+/** Paseo's home, as Paseo resolves it: `PASEO_HOME` with `~` expanded, else `~/.paseo`. */
+export function resolvePaseoHome(env = process.env) {
+  const raw = env.PASEO_HOME?.trim() || "~/.paseo";
+  const expanded = raw === "~" ? os.homedir() : raw.startsWith("~/") ? path.join(os.homedir(), raw.slice(2)) : raw;
+  return path.resolve(expanded);
+}
 
 export function norm(p) {
   return p.replaceAll("\\", "/");
