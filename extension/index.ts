@@ -51,6 +51,7 @@ import {
 import { BridgeTransport, retainBridgeForReload, takeBridgeAfterReload, discardRetainedBridge } from "./bridge-transport.js";
 import { isRuntimeReloadCommand, requireIdleReload, validateReloadPrompt } from "./reload-command.js";
 import { abortAndWaitForIdle } from "./abort-dispatch.js";
+import { resolvePaseoWsTarget } from "./paseo-endpoint.js";
 import { dispatchPaseoPrompt } from "./prompt-dispatch.js";
 import { remoteUserContent } from "./remote-user-content.js";
 import { coordinateMirroredSelect } from "./mirrored-select.js";
@@ -376,13 +377,6 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     };
   }
 
-  function paseoWsUrl(): string | null {
-    const host = process.env.PASEO_HOST?.trim();
-    if (!host) return "ws://127.0.0.1:6767/ws";
-    if (host.includes("://")) return null; // relay/offer URLs not supported for state sync
-    return `ws://${host}/ws`;
-  }
-
   // Opens a connection to the Paseo daemon's WS API (hello handshake, then
   // session-wrapped request/response correlated by requestId). Used for
   // state the daemon only accepts as client requests (it caches
@@ -393,14 +387,20 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     requestWithId: (requestId: string, message: Record<string, unknown>) => Promise<any>;
     close: () => void;
   } | null {
-    const url = paseoWsUrl();
-    if (!url) return null;
+    // Relay/pairing URLs, SSH and socket-only daemons are reachable only
+    // through the CLI; imports then land in the folder workspace.
+    const target = resolvePaseoWsTarget();
+    if (!target) return null;
+    const { url, localCredential } = target;
     const WebSocketCtor = (globalThis as any).WebSocket;
     if (typeof WebSocketCtor !== "function") {
       debugLog("global WebSocket unavailable; cannot sync state to Paseo");
       return null;
     }
-    const password = readPaseoPassword();
+    // The local daemon's credential admits the bridge without a configured
+    // password, as it does Paseo's own CLI. Otherwise PASEO_PASSWORD goes in
+    // the hello and, for hosts predating hello auth, the bearer subprotocol.
+    const password = localCredential ? null : readPaseoPassword();
     const protocols = password ? [`paseo.bearer.${password}`] : undefined;
     const ws = new WebSocketCtor(url, protocols);
     debugLog(`paseo sync websocket connecting to ${url}`);
@@ -409,6 +409,9 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       clientId: `pi-paseo-bridge-${process.pid}`,
       clientType: "cli",
       protocolVersion: 1,
+      ...(localCredential
+        ? { auth: { kind: "localCredential", token: localCredential } }
+        : password ? { auth: { kind: "password", password } } : {}),
       // Stock Paseo sends direct permission acknowledgements only to sources
       // declaring owned subscriptions. No observation subscription is needed.
       capabilities: { owned_subscriptions: true, all_providers: true },

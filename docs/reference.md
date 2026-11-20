@@ -88,7 +88,7 @@ On stock Pi, submission confirms acceptance only. It does not prove that a comma
 
 Retained history comes from Pi. Timeline rewind from Paseo is not supported for attached terminal sessions. Paseo's MCP injection applies to its ordinary RPC sessions, not an already-running terminal session. The bridge does not convert native text-history forks into interactive terminals.
 
-Each imported session gets its own Paseo workspace in the session's directory, because Paseo's sidebar lists workspaces rather than agents and sessions sharing the folder's workspace look like one entry. The workspace ID derives from the session file, so retries and later terminal starts reuse it. Its title is the Pi session name, else the first prompt, and renaming the Pi session renames the workspace. A new session is imported once Pi has saved its first message, since Pi creates the session file only then and Paseo reads it on import. A host that cannot create the workspace, a session whose workspace was archived, and a relay `PASEO_HOST` import into the folder workspace instead. Sessions imported before this behavior keep their existing workspace.
+Each imported session gets its own Paseo workspace in the session's directory, because Paseo's sidebar lists workspaces rather than agents and sessions sharing the folder's workspace look like one entry. The workspace ID derives from the session file, so retries and later terminal starts reuse it. Its title is the Pi session name, else the first prompt, and renaming the Pi session renames the workspace. A new session is imported once Pi has saved its first message, since Pi creates the session file only then and Paseo reads it on import. A host that cannot create the workspace, a session whose workspace was archived, and a daemon reachable only through the CLI (see [Daemon selection and remote hosts](#daemon-selection-and-remote-hosts)) import into the folder workspace instead. Sessions imported before this behavior keep their existing workspace.
 
 ## Configuration
 
@@ -103,11 +103,20 @@ The `paseo` CLI must be on `PATH`, or set `PASEO_CLI` to its executable path. Re
 | `PI_PASEO_BRIDGE_DEBUG=1` | Write bridge debug logs. |
 | `PI_PASEO_BRIDGE_FORCE=1` | Permit activation outside terminal UI mode for tests. |
 | `PASEO_CLI` | Select the Paseo CLI executable. |
-| `PASEO_HOST` | Select the daemon for import. URL/relay targets import through the CLI into the folder workspace and skip direct WebSocket state sync. |
-| `PASEO_PASSWORD` / `PASEO_PASSWORD_FILE` | Supply credentials for an authenticated daemon. |
+| `PASEO_HOME` | Select the local daemon's home, as for Paseo itself. Registration writes `$PASEO_HOME/config.json`. |
+| `PASEO_HOST` | Select the daemon for import. Only a TCP `host:port` gets direct WebSocket state sync and its own workspace; other targets import through the CLI into the folder workspace. |
+| `PASEO_PASSWORD` / `PASEO_PASSWORD_FILE` | Supply the password for a protected daemon that is not the local one. The local daemon admits the bridge with its local credential. |
 | `PI_REAL_BIN` | Select the Pi executable, or its `cli.js`, for ordinary shim-launched RPC sessions. |
 
 Saved auto-connect preferences live under Pi's configured agent directory in `paseo-bridge/settings.json`.
+
+### Daemon selection and remote hosts
+
+Without `PASEO_HOST`, the bridge connects to the address the local daemon publishes in `$PASEO_HOME/paseo.pid`, as Paseo's CLI does, so a non-default port or listen address needs no extra setting. It falls back to `127.0.0.1:6767` when no daemon has published an address. A password-protected local daemon admits the bridge with `$PASEO_HOME/local-credential`, so `PASEO_PASSWORD` is not needed. The credential is sent only to the address in that pid file.
+
+Pi and the daemon importing its sessions must run on the same machine under the same user: Paseo reads the session file by path, and the daemon's shim attaches to the Pi terminal through a local socket recorded under `~/.pi/paseo-bridge`. Pointing `PASEO_HOST` at a daemon on another machine cannot import a session. To use Pi on another machine, install Paseo and the bridge there and add that daemon as a host in the Paseo app, for example with `paseo host add` or by pairing the app with it; its sessions then appear under that host.
+
+A daemon that listens only on a Unix socket, and `PASEO_HOST` values that are relay or pairing URLs, SSH targets or sockets, can still import through the CLI, which honors `PASEO_HOST`, `PASEO_HOME` and `PASEO_PASSWORD`. Paseo's CLI cannot choose a workspace, so such sessions land in the folder workspace and model, thinking-level and title changes are not synced.
 
 ## Compatibility
 
