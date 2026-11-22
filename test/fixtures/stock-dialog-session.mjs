@@ -1,13 +1,22 @@
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import readline from "node:readline";
 const { createAgentSession, DefaultResourceLoader, SessionManager } = await import(process.env.BRIDGE_PI_SDK);
+const { createAssistantMessageEventStream } = await import("@earendil-works/pi-ai");
 
 const sessionFile = process.env.DIALOG_SESSION_FILE;
 const receipt = value => appendFileSync(process.env.DIALOG_RECEIPT_FILE, JSON.stringify(value) + "\n");
 const fixture = pi => {
   pi.registerProvider("bridge-offline", {
     api: "bridge-offline-never-stream", baseUrl: "http://127.0.0.1:1", apiKey: "offline-fixture-not-a-secret",
-    streamSimple() { throw new Error("Dialog fixture must not call a model"); },
+    // Only Paseo's /btw side question may reach this model.
+    streamSimple(model, context) {
+      if (!JSON.stringify(context.messages).includes("<side_question>")) throw new Error("Dialog fixture must not call a model");
+      const stream = createAssistantMessageEventStream();
+      const usage = {input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0}};
+      queueMicrotask(() => stream.push({type: "done", reason: "stop", message: {role: "assistant", content: [{type: "text", text: "fixture side answer"}],
+        api: model.api, provider: model.provider, model: model.id, usage, stopReason: "stop", timestamp: Date.now()}}));
+      return stream;
+    },
     models: [{id: "fixture", name: "Fixture", reasoning: false, input: ["text"],
       cost: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0}, contextWindow: 32768, maxTokens: 1024}],
   });
@@ -18,6 +27,9 @@ const fixture = pi => {
     }
     writeFileSync(process.env.DIALOG_READY_FILE, event.reason);
   });
+  pi.registerCommand("stock-notify", {description: "Ordinary extension notification", handler: async (args, ctx) => {
+    ctx.ui.notify(args.trim(), "warning");
+  }});
   pi.registerCommand("stock-dialog", {description: "Ordinary stock Pi UI fixture", handler: async (args, ctx) => {
     const [method, key] = args.trim().split(" ");
     const aborter = new AbortController();
@@ -68,7 +80,7 @@ function localDialog(title, _options, settings) {
 }
 const ui = {select: localDialog, input: localDialog,
   confirm: async (title, message, settings) => (await localDialog(title, ["Yes", "No"], settings)) === "Yes",
-  notify() {}};
+  notify(message) { if (process.env.DIALOG_NOTIFY_FILE) appendFileSync(process.env.DIALOG_NOTIFY_FILE, JSON.stringify(message) + "\n"); }};
 await session.bindExtensions({mode: "tui", uiContext: ui});
 const reply = (id, data) => process.stdout.write(JSON.stringify({id, type: "response", success: true, data}) + "\n");
 const lines = readline.createInterface({input: process.stdin});

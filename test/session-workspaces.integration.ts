@@ -263,3 +263,52 @@ async function assertImportsIntoSessionWorkspace(paseo: Awaited<ReturnType<typeo
   assert.deepEqual(agents.map((entry: any) => [entry.id, entry.workspaceId]), [[agent.id, agent.workspaceId]], "the import stays put");
   assert.ok((await paseo.client.fetchWorkspaces()).entries.some((entry: any) => entry.id === agent.workspaceId), "its workspace stays listed");
 }
+
+// Paseo's built-in slash commands: bridge-run Pi built-ins answer in the chat,
+// terminal-only ones are refused, /btw answers without entering Pi's session,
+// and other extensions' notifications reach Paseo while it is attached.
+test("stock Paseo runs Pi built-ins, /btw and extension notices through the bridge", { skip, timeout: 90_000 }, async t => {
+  const paseo = await stockPaseo(t);
+  const sessionFile = paseo.sessionFile("77777777-7777-4777-8777-777777777777");
+  const notifyFile = path.join(paseo.home, "terminal-notify.jsonl");
+  const child = paseo.startSession(sessionFile, { DIALOG_NOTIFY_FILE: notifyFile });
+  const [agent] = await paseo.waitForPiAgents(1);
+  assert.ok(agent, `the session imports; stderr: ${paseo.stderr()}`);
+  const commands = await paseo.client.listCommands({ agentId: agent.id });
+  const names = (commands.commands ?? commands.payload?.commands ?? []).map((command: any) => command.name);
+  for (const name of ["name", "model", "thinking", "session", "export", "btw", "new", "resume", "clone", "compact", "autocompact"]) {
+    assert.ok(names.includes(name), `Paseo lists /${name}: ${names.join(", ")}`);
+  }
+  const items = async () => {
+    const timeline = await paseo.client.fetchAgentTimeline(agent.id, { direction: "tail", limit: 200 });
+    return (timeline.entries ?? []).map((entry: any) => entry.item ?? entry);
+  };
+  const run = async (text: string) => {
+    await paseo.client.sendAgentMessage(agent.id, text);
+    return paseo.client.waitForFinish(agent.id, 20_000);
+  };
+  const waitForItem = async (predicate: (item: any) => boolean, label: string) => {
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      const found = (await items()).find(predicate);
+      if (found) return found;
+      await delay(250);
+    }
+    assert.fail(`${label}: ${JSON.stringify(await items()).slice(-3000)}`);
+  };
+  const finished = await run("/session");
+  assert.notEqual(finished.status, "error", JSON.stringify(finished));
+  await waitForItem(item => item.type === "assistant_message" && /^Session info/.test(item.text), "/session answers in the chat");
+  await run("/name Release plan");
+  await waitForItem(item => item.type === "assistant_message" && item.text === "Session name set: Release plan", "/name answers in the chat");
+  const refused = await run("/settings");
+  assert.match(JSON.stringify(refused), /not available from Paseo/);
+  await run("/model bridge-offline/fixture");
+  await waitForItem(item => item.type === "assistant_message" && item.text === "Model set to bridge-offline/fixture.", "/model answers in the chat");
+  await run("/btw what is next?");
+  await waitForItem(item => item.type === "assistant_message" && item.text === "btw: what is next?\n\nfixture side answer", "/btw answers in the chat");
+  const saved = await readFile(sessionFile, "utf8").catch(() => "");
+  assert.doesNotMatch(saved, /what is next|fixture side answer/, "the side exchange never enters Pi's session");
+  child.stdin!.write(`${JSON.stringify({ id: "notify", type: "prompt", message: "/stock-notify Build finished" })}\n`);
+  await waitForItem(item => item.type === "notification" && item.message === "Build finished", "extension notices reach Paseo");
+  assert.match(await readFile(notifyFile, "utf8"), /"Build finished"/, "the terminal still shows the notice");
+});
