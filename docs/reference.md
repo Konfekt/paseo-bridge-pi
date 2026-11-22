@@ -8,13 +8,15 @@ The [installation guide](../README.md#install) covers the Pi package and provide
 | --- | --- |
 | Terminal session starts with auto-connect enabled | Register the session with Paseo and accept its provider connection. |
 | Send text or an image in Paseo | Deliver it to the attached Pi session through Pi's input path. |
-| Stop in Paseo | Request cancellation in Pi; do not terminate the terminal process. |
+| Stop in Paseo, or a new message that interrupts the turn | Request cancellation in Pi and answer Paseo within its two-second limit; do not terminate the terminal process. |
 | Change model or thinking in Paseo | Apply the native Pi setting. Reconnection preserves the existing thinking level. |
 | Disconnect the bridge | Leave Pi and its session running. |
 | Paseo restarts while Pi remains open | Reconnect the existing attachment with bounded retries. |
 | Terminal Pi exits | Report the resume command in Paseo; do not silently create a replacement writer for that attachment. |
 | Resume the session in a terminal | Attach to the existing Paseo agent when it can be identified. |
 | Paseo starts a session without a live terminal owner | Run ordinary Pi RPC through the shim. |
+
+Paseo refuses to stop or replace an agent whose provider does not answer Stop within two seconds, and shows "active run cancellation was not acknowledged". Pi stops a turn only after its running tool exits, which can take longer, for example when a shell command keeps running after Stop. The bridge therefore answers Paseo after at most 1.5 seconds and, if Pi is still stopping, shows "Pi is still stopping the previous turn" in Paseo. The stopped turn's remaining events stay out of Paseo, and the next message from Paseo starts once Pi is idle. If Pi is still busy after 20 seconds, that message fails with an explanation; press Escape in the Pi terminal or wait for the tool, then send it again.
 
 The shim refuses to start another Pi writer when a matching recorded terminal owner may still be alive, even if its endpoint is unavailable. This does not prevent independently launched Pi processes from opening the same file. Do not run a second terminal Pi on a session that Paseo already owns through ordinary RPC.
 
@@ -188,7 +190,7 @@ BRIDGE_NATIVE_PI="$(command -v pi)" TEST_PI_BIN="$(command -v pi)" \
   npm run test:native
 ```
 
-The stock-daemon test runs a published Paseo server of version 0.13.0 or newer in-process, with the CLI of the same version. It uses the real Pi SDK extension runner with a controlled terminal renderer, ordinary `ctx.ui` calls, and the production shim. It checks import, a separate workspace for each session in one folder, deferred import of a new session until Pi saves it, reattachment after a history-only read of an unloaded agent, app and terminal choices, cancellation, timeout, reload, pending-question cleanup, and callback delivery after the actual controller response. It uses the development Pi SDK by default; set `BRIDGE_PI_SDK` to another installed package's absolute `dist/index.js` to check that SDK. Tests requiring an executable or provider path are skipped when that environment variable is absent.
+The stock-daemon test runs a published Paseo server of version 0.13.0 or newer in-process, with the CLI of the same version. It uses the real Pi SDK extension runner with a controlled terminal renderer, ordinary `ctx.ui` calls, and the production shim. It checks import, a separate workspace for each session in one folder, deferred import of a new session until Pi saves it, reattachment after a history-only read of an unloaded agent, app and terminal choices, cancellation, Stop and replacement of a turn whose tool ignores cancellation, timeout, reload, pending-question cleanup, and callback delivery after the actual controller response. It uses the development Pi SDK by default; set `BRIDGE_PI_SDK` to another installed package's absolute `dist/index.js` to check that SDK. Tests requiring an executable or provider path are skipped when that environment variable is absent.
 
 With Pi 1.6.0, `npm test` and `npm run typecheck` pass, and `npm run test:native` passes against Paseo 0.17.1 and 0.16.2 except one test: "reading an unloaded agent's history leaves the terminal session attached" fails with both, unrelated to the command handling. `test/session-switch.integration.ts` runs a standalone `pi --mode rpc` for `/new`, `/resume` and `/clone`, because a session seeded with a very large history exceeds Paseo's 16 MiB capture frame when the switch test attaches to it.
 

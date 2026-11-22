@@ -5,16 +5,36 @@ const { createAssistantMessageEventStream } = await import("@earendil-works/pi-a
 
 const sessionFile = process.env.DIALOG_SESSION_FILE;
 const receipt = value => appendFileSync(process.env.DIALOG_RECEIPT_FILE, JSON.stringify(value) + "\n");
+// DIALOG_SLOW_TOOL_MS: a tool whose cleanup ignores cancellation for that long,
+// like a shell command that keeps running after Stop.
+const slowToolMs = Number(process.env.DIALOG_SLOW_TOOL_MS || 0);
 const fixture = pi => {
+  if (slowToolMs) pi.registerTool({name: "slow_cleanup", label: "Slow cleanup", description: "Fixture tool with slow cleanup",
+    parameters: {type: "object", properties: {}}, async execute() {
+      receipt({key: "slow-tool", value: "started"});
+      await new Promise(resolve => setTimeout(resolve, slowToolMs));
+      receipt({key: "slow-tool", value: "finished"});
+      return {content: [{type: "text", text: "slow tool output"}], details: {}};
+    }});
   pi.registerProvider("bridge-offline", {
     api: "bridge-offline-never-stream", baseUrl: "http://127.0.0.1:1", apiKey: "offline-fixture-not-a-secret",
     // Only Paseo's /btw side question may reach this model.
+    // Only Paseo's /btw side question, or the opt-in slow-tool turns, may reach this model.
     streamSimple(model, context) {
-      if (!JSON.stringify(context.messages).includes("<side_question>")) throw new Error("Dialog fixture must not call a model");
+      const side = JSON.stringify(context.messages).includes("<side_question>");
+      if (!side && !slowToolMs) throw new Error("Dialog fixture must not call a model");
+      const last = context.messages.at(-1);
+      const lastText = JSON.stringify(last?.content ?? "");
+      const content = side ? [{type: "text", text: "fixture side answer"}]
+        : last?.role === "toolResult" ? [{type: "text", text: "slow tool finished"}]
+        : lastText.includes("run the slow tool") ? [{type: "toolCall", id: `slow-${Date.now()}`, name: "slow_cleanup", arguments: {}}]
+        : [{type: "text", text: `answered: ${lastText.slice(0, 80)}`}];
+      if (slowToolMs) receipt({key: "model", value: lastText.slice(0, 120)});
+      const stopReason = content[0].type === "toolCall" ? "toolUse" : "stop";
       const stream = createAssistantMessageEventStream();
       const usage = {input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0}};
-      queueMicrotask(() => stream.push({type: "done", reason: "stop", message: {role: "assistant", content: [{type: "text", text: "fixture side answer"}],
-        api: model.api, provider: model.provider, model: model.id, usage, stopReason: "stop", timestamp: Date.now()}}));
+      queueMicrotask(() => stream.push({type: "done", reason: stopReason, message: {role: "assistant", content,
+        api: model.api, provider: model.provider, model: model.id, usage, stopReason, timestamp: Date.now()}}));
       return stream;
     },
     models: [{id: "fixture", name: "Fixture", reasoning: false, input: ["text"],
@@ -53,7 +73,8 @@ await loader.reload();
 // DIALOG_FRESH keeps the file absent, like a new Pi session before its first message.
 if (!existsSync(sessionFile) && process.env.DIALOG_FRESH !== "1") writeFileSync(sessionFile, "");
 const {session} = await createAgentSession({cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR,
-  resourceLoader: loader, sessionManager: SessionManager.open(sessionFile, undefined, process.cwd()), noTools: "all"});
+  resourceLoader: loader, sessionManager: SessionManager.open(sessionFile, undefined, process.cwd()), noTools: "all",
+  ...(slowToolMs ? {tools: ["slow_cleanup"]} : {})});
 
 // The SDK owns the real extension runner. This controlled UI replaces only the
 // terminal renderer, so standard ctx.ui calls can race genuine Paseo decisions.
