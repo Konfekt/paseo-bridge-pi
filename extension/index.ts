@@ -55,7 +55,7 @@ import {
 } from "./import-placement.js";
 import { BridgeTransport, retainBridgeForReload, takeBridgeAfterReload, discardRetainedBridge } from "./bridge-transport.js";
 import { isRuntimeReloadCommand, requireIdleReload, validateReloadPrompt } from "./reload-command.js";
-import { abortAndWaitForIdle } from "./abort-dispatch.js";
+import { abortAndAcknowledge, waitForSettlement } from "./abort-dispatch.js";
 import { resolvePaseoWsTarget } from "./paseo-endpoint.js";
 import { dispatchPaseoPrompt } from "./prompt-dispatch.js";
 import { remoteUserContent } from "./remote-user-content.js";
@@ -101,6 +101,9 @@ const SESSION_SWITCH_SUBCOMMAND = "session-switch";
 const BRIDGE_USAGE = "Usage: /paseo-bridge install | uninstall | auto [on|off] | connect | disconnect | status";
 const DEBUG = environmentBoolean("PI_PASEO_BRIDGE_DEBUG", false);
 const FORWARD_NOTIFICATIONS = environmentBoolean("PI_PASEO_BRIDGE_NOTIFICATIONS", true);
+// Paseo fails a prompt that gets no answer within 30 seconds.
+const STOPPED_TURN_WAIT_MS = 20_000;
+const STOPPED_TURN_SETTLE_GRACE_MS = 1000;
 const debugLogFile = path.join(bridgeStateDirectory(), "debug.log");
 
 function debugLog(message: string): void {
@@ -263,6 +266,10 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   void loadPiBuiltinNames().then(names => { piBuiltins = names; }, () => {});
   // A Paseo /btw side question in flight; Stop cancels it, not Pi's own turn.
   let sideQuestion: { controller: AbortController; requestId: unknown } | null = null;
+  // A turn Paseo stopped before Pi finished stopping it. Paseo has already
+  // ended that turn, so its remaining events are not forwarded, and the next
+  // Paseo prompt waits until Pi has settled it.
+  let stoppedTurn: { done: Promise<void>; finish(): void } | null = null;
   const importAttempted = new Set<string>();
   let importFailures = 0;
   let importRetryAt = 0;
@@ -894,6 +901,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       return;
     }
     if (await handleBridgeManagement(cmd, send)) return;
+    await waitForStoppedTurn();
     const route = routePaseoCommand(message, pi.getCommands(), piBuiltins);
     if (route.kind === "reject") throw new Error(route.message);
     if (route.kind === "bridge") {
@@ -905,6 +913,18 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     const streaming = latestCtx ? !latestCtx.isIdle() : false;
     const result = await dispatchPaseoPrompt(pi, content, message, streaming);
     send(success(cmd.id, "prompt", result));
+  }
+
+  /**
+   * Paseo sends its replacement prompt as soon as Stop is acknowledged. Start it
+   * only once Pi has stopped, so it begins a new turn instead of queueing behind
+   * the stopped one, and fail it within Paseo's prompt deadline otherwise.
+   */
+  async function waitForStoppedTurn(): Promise<void> {
+    const turn = stoppedTurn;
+    if (!turn) return;
+    if (await waitForSettlement(turn.done, STOPPED_TURN_WAIT_MS)) return;
+    throw new Error("Pi is still stopping the previous turn: a running tool has not exited. Wait for it or press Escape in the Pi terminal, then send again.");
   }
 
   async function handleBridgeManagement(cmd: any, send: (frame: unknown) => void): Promise<boolean> {
@@ -978,7 +998,24 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
           cancelPendingRemoteUiRequests();
           // Capture this lifecycle's context and signal. Never use ctx.signal:
           // that signal belongs to turn work, not the lifetime of this waiter.
-          await abortAndWaitForIdle(latestCtx, { signal: lifecycleAbortController.signal });
+          {
+            const outcome = await abortAndAcknowledge(latestCtx, { signal: lifecycleAbortController.signal });
+            if (!outcome.settled) {
+              let finished!: () => void;
+              const turn = {
+                done: new Promise<void>(resolve => { finished = resolve; }),
+                finish() {
+                  if (stoppedTurn === turn) stoppedTurn = null;
+                  finished();
+                },
+              };
+              stoppedTurn = turn;
+              // agent_settled normally ends it; the grace covers a Pi that skips that event.
+              outcome.idle.then(() => setTimeout(() => turn.finish(), STOPPED_TURN_SETTLE_GRACE_MS), () => turn.finish());
+              debugLog("abort acknowledged while Pi is still stopping");
+              notifyEvent("Pi is still stopping the previous turn; a running tool has not exited yet.");
+            }
+          }
           send(success(id, type));
           return;
         case "get_state":
@@ -1447,9 +1484,13 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     (pi as any).on(eventName, async (event: unknown, ctx: ExtensionContext) => {
       latestCtx = ctx;
       const normalized = normalizePiEventForPaseo(event);
-      for (const visible of turnVisibility.project(normalized as Record<string, any>)) {
-        send(visible);
+      const visible = turnVisibility.project(normalized as Record<string, any>);
+      if (stoppedTurn) {
+        // Paseo has already ended this turn; its late events would end the next one.
+        if (eventName === "agent_settled") stoppedTurn.finish();
+        return;
       }
+      for (const frame of visible) send(frame);
     });
   }
 
@@ -1488,7 +1529,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
 
   pi.on("turn_end", async (event, ctx) => {
     latestCtx = ctx;
-    send(event);
+    if (!stoppedTurn) send(event);
     emitSubmittedUserEntries(ctx);
     emitEntryCapture(ctx, "turn_end");
     titleWorkspaceFromPrompt(ctx);

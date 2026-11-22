@@ -312,3 +312,58 @@ test("stock Paseo runs Pi built-ins, /btw and extension notices through the brid
   await waitForItem(item => item.type === "notification" && item.message === "Build finished", "extension notices reach Paseo");
   assert.match(await readFile(notifyFile, "utf8"), /"Build finished"/, "the terminal still shows the notice");
 });
+
+// Paseo waits about two seconds for a provider to acknowledge an interrupt
+// before it refuses to replace or stop the agent. A tool that keeps running
+// after Stop, like a shell command still cleaning up, must not wedge the agent.
+test("a new Paseo message replaces a turn whose tool ignores cancellation", { skip, timeout: 90_000 }, async t => {
+  const paseo = await stockPaseo(t);
+  const sessionFile = paseo.sessionFile("88888888-8888-4888-8888-888888888888");
+  paseo.startSession(sessionFile, { DIALOG_SLOW_TOOL_MS: "6000" });
+  const [agent] = await paseo.waitForPiAgents(1);
+  assert.ok(agent, `the session imports; stderr: ${paseo.stderr()}`);
+  const receipts = async () => (await readFile(path.join(paseo.home, "..", "receipts.jsonl"), "utf8").catch(() => ""))
+    .split("\n").filter(Boolean).map(line => JSON.parse(line));
+  const modelInputs = async () => (await receipts()).filter(value => value.key === "model").map(value => value.value);
+  const items = async () => {
+    const timeline = await paseo.client.fetchAgentTimeline(agent.id, { direction: "tail", limit: 200 });
+    return (timeline.entries ?? []).map((entry: any) => entry.item ?? entry);
+  };
+  const until = async (check: () => Promise<boolean>, label: string) => {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      if (await check()) return;
+      await delay(100);
+    }
+    assert.fail(`${label}: ${JSON.stringify(await receipts())} ${JSON.stringify(await items()).slice(-2000)}`);
+  };
+  await paseo.client.sendAgentMessage(agent.id, "/model bridge-offline/fixture");
+  await paseo.client.waitForFinish(agent.id, 20_000);
+  await paseo.client.sendAgentMessage(agent.id, "run the slow tool");
+  await until(async () => (await receipts()).some(value => value.value === "started"), "the slow tool runs");
+  // The app's default: a new message interrupts the running turn.
+  const started = Date.now();
+  await paseo.client.sendAgentMessage(agent.id, "replacement question", { activeTurnBehavior: "interrupt" });
+  assert.ok(Date.now() - started < 15_000, "Paseo accepts the replacement without waiting for the tool");
+  await until(async () => (await modelInputs()).some(input => input.includes("replacement question")), "the replacement turn reaches the model");
+  const order = (await receipts()).map(value => value.value);
+  assert.ok(order.indexOf("finished") < order.findIndex(value => String(value).includes("replacement question")),
+    "the replacement starts only after Pi let the stopped tool settle");
+  assert.ok(!(await modelInputs()).some(input => input.includes("slow tool output")),
+    "the stopped turn does not continue after its tool");
+  const finished = await paseo.client.waitForFinish(agent.id, 20_000);
+  assert.notEqual(finished.status, "error", JSON.stringify(finished));
+  const timeline = JSON.stringify(await items());
+  assert.match(timeline, /still stopping the previous turn/, "Paseo is told that Pi is still stopping");
+  assert.doesNotMatch(timeline, /System Error/, "the stopped turn's late abort does not end the replacement turn");
+  // Stop during the same kind of tool, then send at once: Stop succeeds and the
+  // message waits for Pi instead of queueing behind the stopped turn.
+  await paseo.client.sendAgentMessage(agent.id, "run the slow tool");
+  await until(async () => (await receipts()).filter(value => value.value === "started").length === 2, "the slow tool runs again");
+  // Paseo's client throws when Stop is refused.
+  await paseo.client.cancelAgent(agent.id);
+  await paseo.client.sendAgentMessage(agent.id, "next question");
+  await until(async () => (await modelInputs()).some(input => input.includes("next question")), "a message after Stop reaches the model");
+  const after = (await receipts()).map(value => value.value);
+  assert.ok(after.lastIndexOf("finished") < after.findIndex(value => String(value).includes("next question")),
+    "the message after Stop starts once Pi has stopped");
+});
