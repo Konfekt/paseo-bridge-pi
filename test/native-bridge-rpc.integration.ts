@@ -15,6 +15,7 @@ import { setTimeout as delay } from "node:timers/promises";
 const executable = process.env.BRIDGE_NATIVE_PI;
 const root = fileURLToPath(new URL("../", import.meta.url));
 const fixtureProvider = `import { appendFileSync, writeFileSync, existsSync } from "node:fs";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 export default function(pi) {
   let syntheticCompactionAttempt = 0;
   pi.on("session_start", event => {
@@ -49,6 +50,35 @@ export default function(pi) {
       input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 32768, maxTokens: 1024 }))
   });
+  // Answers Paseo's /btw side questions; records the request it received.
+  pi.registerProvider("bridge-btw", {
+    api: "bridge-btw-answer", baseUrl: "http://127.0.0.1:1",
+    apiKey: "offline-fixture-not-a-secret",
+    streamSimple(model, context, options) {
+      const stream = createAssistantMessageEventStream();
+      const question = JSON.stringify(context.messages);
+      writeFileSync(process.env.OFFLINE_LIFECYCLE_FILE + ".btw", JSON.stringify({ systemPrompt: context.systemPrompt, messages: context.messages, reasoning: options?.reasoning ?? null }));
+      const message = (text, stopReason) => ({ role: "assistant", content: text ? [{ type: "text", text }] : [], api: model.api, provider: model.provider, model: model.id,
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason, timestamp: Date.now() });
+      if (question.includes("slow side question")) {
+        options?.signal?.addEventListener("abort", () => stream.push({ type: "error", reason: "aborted", error: message("", "aborted") }), { once: true });
+      } else {
+        queueMicrotask(() => stream.push({ type: "done", reason: "stop", message: message("offline side answer", "stop") }));
+      }
+      return stream;
+    },
+    models: [{ id: "answer", name: "answer", reasoning: true, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 1024 }],
+  });
+  pi.registerCommand("offline-fixture-seed-assistant", { description: "seed a saved exchange", handler: async (_args, ctx) => {
+    const sm = ctx.sessionManager;
+    sm.appendMessage({ role: "user", content: "side context question", timestamp: Date.now() });
+    sm.appendMessage({ role: "assistant", content: [{ type: "text", text: "side context answer" }], api: "bridge-offline-never-stream", provider: "bridge-offline", model: "first",
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "stop", timestamp: Date.now() });
+    writeFileSync(process.env.OFFLINE_LIFECYCLE_FILE + ".assistant", "seeded");
+  }});
   pi.registerCommand("offline-fixture-seed-compaction", { description: "seed compactable local history", handler: async (_args, ctx) => {
     const huge = "local compaction fixture ".repeat(60000);
     ctx.sessionManager.appendMessage({ role: "user", content: huge, timestamp: Date.now() });
@@ -161,6 +191,8 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
     }
     const extensionNotices: string[] = [];
     const compactionEvents: any[] = [];
+    const commandOutputs: string[] = [];
+    const promptResults: any[] = [];
     let dialogBuffer = "";
     socket.on("data", chunk => {
       dialogBuffer += chunk.toString();
@@ -172,6 +204,8 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
           const event = JSON.parse(line);
           if (event.type === "extension_ui_request" && event.method === "notify" && typeof event.message === "string") extensionNotices.push(event.message);
           if (event.type === "compaction_start" || event.type === "compaction_end") compactionEvents.push(event);
+          if (event.type === "command_output") commandOutputs.push(event.text);
+          if (event.type === "prompt_result") promptResults.push(event);
         } catch { /* Other protocol traffic is owned by the RPC fixture. */ }
       }
     });
@@ -242,18 +276,21 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
     });
     await t.test("native and bridge compaction semantics and explicit capabilities", async () => {
       const state = await ok("get_state");
-      assert.equal(Object.hasOwn(state, "autoCompactionEnabled"), false, "unknown runtime setting must be omitted");
-      assert.deepEqual(state.bridgeCapabilities, { supportsRewindConversation: false, supportsAutoCompactionControl: false });
+      assert.equal(state.autoCompactionEnabled, true, "Pi's default setting");
+      assert.deepEqual(state.bridgeCapabilities, { supportsRewindConversation: false, supportsAutoCompactionControl: true });
       const nativeCompact = await native("compact");
       const bridgeCompact = await bridge("compact");
       assert.equal(nativeCompact.success, false, JSON.stringify(nativeCompact));
       assert.match(nativeCompact.error, /Nothing to compact/i);
       assert.equal(bridgeCompact.success, false, JSON.stringify(bridgeCompact));
       assert.match(bridgeCompact.error, /Nothing to compact/i);
-      const setter = await bridge("set_auto_compaction", { enabled: true });
-      assert.equal(setter.success, false, JSON.stringify(setter));
-      assert.match(setter.error, /unsupported/i);
-      assert.equal((await ok("get_state")).autoCompactionEnabled, undefined);
+      // Paseo's /autocompact: off cancels this session's threshold compactions.
+      await ok("set_auto_compaction", { enabled: false });
+      assert.equal((await ok("get_state")).autoCompactionEnabled, false);
+      await ok("set_auto_compaction", { enabled: true });
+      assert.equal((await ok("get_state")).autoCompactionEnabled, true);
+      const invalid = await bridge("set_auto_compaction", { enabled: "yes" });
+      assert.equal(invalid.success, false);
     });
     await t.test("native bridge routes session stats", async () => {
       const stats = await ok("get_session_stats");
@@ -451,6 +488,118 @@ test("actual Pi executable and production bridge RPC", { skip: !executable, time
       assert.ok(compactionEvents.some(event => event.type === "compaction_end" && event.reason === "manual" && event.aborted === true));
 
       assert.ok(compactionEvents.some(event => event.type === "compaction_end" && event.reason === "manual" && /Nothing to compact/i.test(event.errorMessage ?? "") && event.aborted === false));
+      assert.ok(!(await readFile(path.join(temporary, "lifecycle"), "utf8")).includes("PROVIDER_CALLED"));
+    });
+    const waitFor = async (condition: () => boolean | Promise<boolean>, message: string) => {
+      const deadline = Date.now() + 4000;
+      while (!(await condition())) {
+        assert.ok(Date.now() < deadline, message);
+        await delay(10);
+      }
+    };
+    const runLocal = async (message: string) => {
+      const before = commandOutputs.length;
+      const result = await ok("prompt", { message });
+      assert.equal(result.agentInvoked, false, `${message} completes without a model turn`);
+      return commandOutputs.slice(before).join("\n");
+    };
+    await t.test("Pi built-ins run in the bridge for Paseo and never reach the model", async () => {
+      const messageCount = (await ok("get_session_stats")).totalMessages;
+      const { commands } = await ok("get_commands");
+      for (const name of ["name", "model", "thinking", "session", "export", "btw", "new", "resume", "clone"]) {
+        assert.ok(commands.some((command: any) => command.name === name && command.source === "extension" && command.description), `${name} is listed`);
+      }
+      assert.equal(commands.filter((command: any) => command.name === "btw").length, 1);
+      assert.match(await runLocal("/name Release plan"), /Session name set: Release plan/);
+      assert.equal((await native("get_state")).data.sessionName, "Release plan");
+      assert.match(await runLocal("/name"), /Session name: Release plan/);
+      const models = await runLocal("/model");
+      assert.match(models, /Current model: bridge-offline\/second/);
+      assert.match(models, /- bridge-offline\/first/);
+      assert.match(await runLocal("/model first"), /Model set to bridge-offline\/first/);
+      assert.equal((await native("get_state")).data.model.id, "first");
+      await runLocal("/model bridge-offline/second");
+      assert.equal((await native("get_state")).data.model.id, "second");
+      const unknownModel = await bridge("prompt", { message: "/model nowhere/none" });
+      assert.equal(unknownModel.success, false);
+      assert.match(unknownModel.error, /No available model matches/);
+      assert.match(await runLocal("/thinking medium"), /Thinking level set to medium/);
+      assert.equal((await native("get_state")).data.thinkingLevel, "medium");
+      assert.match(await runLocal("/thinking"), /Thinking level: medium/);
+      const badLevel = await bridge("prompt", { message: "/thinking loud" });
+      assert.equal(badLevel.success, false);
+      assert.match(badLevel.error, /Unknown thinking level/);
+      const info = await runLocal("/session");
+      assert.match(info, /Session info/);
+      assert.match(info, /Name: Release plan/);
+      assert.ok(info.includes(String((await native("get_state")).data.sessionId)));
+      const image = await bridge("prompt", { message: "/session", images: [{ type: "image", data: "a", mimeType: "image/png" }] });
+      assert.equal(image.success, false);
+      assert.match(image.error, /does not accept image attachments/);
+      for (const name of ["settings", "scoped-models", "hotkeys", "changelog", "login", "logout", "trust", "quit", "copy", "import", "share", "bug", "fork", "tree", "arminsayshi"]) {
+        const rejected = await bridge("prompt", { message: `/${name} now` });
+        assert.equal(rejected.success, false, `/${name} is refused`);
+        assert.match(rejected.error, new RegExp(`^/${name} is a Pi terminal command and is not available from Paseo`));
+      }
+      const reload = await bridge("prompt", { message: "/reload" });
+      assert.match(reload.error, /Use \/remote-reload/);
+      for (const type of ["steer", "follow_up"]) {
+        const steered = await bridge(type, { message: "/settings" });
+        assert.match(steered.error, /not available from Paseo/);
+        const local = await bridge(type, { message: "/session" });
+        assert.match(local.error, /ordinary prompt/);
+      }
+      const usage = await bridge("prompt", { message: "/new" });
+      assert.match(usage.error, /Usage: \/new <first prompt>/);
+      assert.match(await runLocal("/resume"), /No saved Pi sessions|Recent Pi sessions/);
+      assert.equal((await ok("get_session_stats")).totalMessages, messageCount, "nothing entered Pi's session");
+      const lifecycle = await readFile(path.join(temporary, "lifecycle"), "utf8");
+      assert.ok(!lifecycle.includes("PROVIDER_CALLED"));
+      assert.ok(!lifecycle.includes("AGENT_STARTED"));
+    });
+    await t.test("/export and /btw use the saved session without changing it", async () => {
+      await seedHistory("/offline-fixture-seed-assistant");
+      await waitFor(async () => { try { await readFile(session, "utf8"); return true; } catch { return false; } }, "Pi saves the seeded exchange");
+      const jsonl = await runLocal("/export exported/branch.jsonl");
+      assert.match(jsonl, /Session exported to: .*exported\/branch\.jsonl/);
+      const lines = (await readFile(path.join(cwd, "exported/branch.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
+      assert.equal(lines[0].type, "session");
+      assert.ok(lines.some(line => line.message?.content?.[0]?.text === "side context answer"));
+      const html = await runLocal("/export exported/session.html");
+      assert.match(html, /Session exported to: .*exported\/session\.html/);
+      assert.match(await readFile(path.join(cwd, "exported/session.html"), "utf8"), /<title>Session Export<\/title>/);
+
+      const messagesBefore = (await ok("get_messages")).messages.length;
+      const statsBefore = await ok("get_session_stats");
+      await ok("set_model", { provider: "bridge-btw", modelId: "answer" });
+      const outputs = commandOutputs.length;
+      const accepted = await bridge("prompt", { message: "/btw what comes next?" });
+      assert.equal(accepted.success, true, JSON.stringify(accepted));
+      assert.equal(accepted.data.agentInvoked, true, "the turn stays open until the answer arrives");
+      await waitFor(() => promptResults.some(result => result.id === accepted.id), "the side answer completes the prompt");
+      assert.deepEqual(promptResults.find(result => result.id === accepted.id), { type: "prompt_result", id: accepted.id, agentInvoked: false });
+      assert.match(commandOutputs.slice(outputs).join("\n"), /^btw: what comes next\?\n\noffline side answer$/m);
+      const request = JSON.parse(await readFile(path.join(temporary, "lifecycle.btw"), "utf8"));
+      // Providers get the system prompt inside Pi's normalized transcript.
+      const sent = JSON.stringify(request);
+      assert.match(sent, /You answer a quick side question/);
+      assert.match(sent, /side context answer[\s\S]*<side_question>\\nwhat comes next\?/);
+      assert.equal(request.reasoning, (await native("get_state")).data.thinkingLevel, "the side question uses the session's thinking level");
+      assert.equal((await ok("get_messages")).messages.length, messagesBefore, "the side exchange never enters Pi's session");
+      assert.deepEqual(await ok("get_session_stats"), statsBefore);
+
+      // Paseo's Stop cancels the side question, not Pi's own turn.
+      const slow = await bridge("prompt", { message: "/btw slow side question" });
+      assert.equal(slow.success, true);
+      const busy = await bridge("prompt", { message: "/btw another" });
+      assert.match(busy.error, /already running/);
+      const notices = extensionNotices.length;
+      await ok("abort");
+      await waitFor(() => promptResults.some(result => result.id === slow.id), "a cancelled side question completes the prompt");
+      assert.ok(extensionNotices.slice(notices).includes("Side question cancelled."));
+      const usage = await bridge("prompt", { message: "/btw" });
+      assert.match(usage.error, /Usage: \/btw <question>/);
+      await ok("set_model", { provider: "bridge-offline", modelId: "first" });
       assert.ok(!(await readFile(path.join(temporary, "lifecycle"), "utf8")).includes("PROVIDER_CALLED"));
     });
     await t.test("bridge-owned disconnect acknowledges acceptance, then closes only bridge transport", async () => {

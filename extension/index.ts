@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 import {
   buildSessionProjection,
+  SessionManager,
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ExtensionContext,
@@ -62,6 +63,12 @@ import { coordinateMirroredSelect } from "./mirrored-select.js";
 import { createProviderReconnectLoop } from "./provider-reconnect.js";
 import { unknownRpcCommandError } from "./rpc-compat.js";
 import { buildSessionStats } from "./session-stats.js";
+import { bridgeCommandEntries, KNOWN_PI_BUILTINS, loadPiBuiltinNames, routePaseoCommand, type BridgeHandledCommand } from "./builtin-commands.js";
+import {
+  assistantText, formatModelList, formatResumeList, formatSessionInfo, modelReference, parsePathArgument,
+  parseThinkingLevel, pickResumeTarget, resolveModelArgument, serializeBranchJsonl, SIDE_QUESTION_SYSTEM_PROMPT,
+  sideQuestionContext, sideQuestionPrompt, THINKING_LEVELS,
+} from "./paseo-commands.js";
 import { compactWithResult } from "./compaction-command.js";
 import { projectedUserCaptures, readTextContent } from "./session-projection.js";
 import { createPaseoWsConnection } from "./paseo-ws.js";
@@ -87,9 +94,13 @@ const SUBMITTED_USER_ENTRY_MARKER = "PASEO_SUBMITTED_USER_ENTRY";
 const COMMAND_RESULT_MARKER = "PASEO_COMMAND_RESULT";
 const CAPTURE_COMMAND = "paseo_capture_entries";
 const TREE_COMMAND = "paseo_tree";
+// Session replacement needs Pi's command context: the bridge re-enters its own
+// command with this subcommand and an encoded request.
+const SESSION_SWITCH_SUBCOMMAND = "session-switch";
 
 const BRIDGE_USAGE = "Usage: /paseo-bridge install | uninstall | auto [on|off] | connect | disconnect | status";
 const DEBUG = environmentBoolean("PI_PASEO_BRIDGE_DEBUG", false);
+const FORWARD_NOTIFICATIONS = environmentBoolean("PI_PASEO_BRIDGE_NOTIFICATIONS", true);
 const debugLogFile = path.join(bridgeStateDirectory(), "debug.log");
 
 function debugLog(message: string): void {
@@ -241,9 +252,17 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   let lifecycleAbortController = new AbortController();
   let latestCtx: ExtensionContext | null = null;
   let restoreTerminalUi: (() => void) | undefined;
+  // The terminal's own notify, bypassing forwarding to Paseo.
+  let terminalNotify: ((message: string, type?: NotifyType) => void) | undefined;
   let isCompacting = false;
-  // The extension API cannot read or change Pi's live auto-compaction setting.
-  // Do not invent a separate bridge-local setting.
+  // The extension API cannot change Pi's auto-compaction setting. Paseo's
+  // /autocompact off instead cancels threshold compactions of this session;
+  // overflow recovery still compacts so the retried turn can succeed.
+  let autoCompactionSuppressed = false;
+  let piBuiltins: ReadonlySet<string> = new Set<string>(KNOWN_PI_BUILTINS);
+  void loadPiBuiltinNames().then(names => { piBuiltins = names; }, () => {});
+  // A Paseo /btw side question in flight; Stop cancels it, not Pi's own turn.
+  let sideQuestion: { controller: AbortController; requestId: unknown } | null = null;
   const importAttempted = new Set<string>();
   let importFailures = 0;
   let importRetryAt = 0;
@@ -338,7 +357,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     restoreTerminalUi = undefined;
     if (ctx.mode !== "tui") return;
     const ui = ctx.ui;
-    const original = { select: ui.select, input: ui.input, confirm: ui.confirm };
+    const original = { select: ui.select, input: ui.input, confirm: ui.confirm, notify: ui.notify };
 
     async function mirror(
       request: Parameters<typeof startRemoteDialog>[0],
@@ -384,13 +403,24 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         signal => original.select.call(ui, `${title}\n${message}`, ["Yes", "No"], { ...settings, signal }), settings);
       return value === "Yes";
     };
+    // Other extensions' notifications also reach Paseo while it is attached.
+    const notify: typeof ui.notify = (message, type) => {
+      if (FORWARD_NOTIFICATIONS && remoteUiConnected() && typeof message === "string" && message.trim()) {
+        send(notifyFrame(message, type ?? "info"));
+      }
+      return original.notify.call(ui, message, type);
+    };
     ui.select = select;
     ui.input = input;
     ui.confirm = confirm;
+    ui.notify = notify;
+    terminalNotify = (message, type) => original.notify.call(ui, message, type);
     restoreTerminalUi = () => {
       if (ui.select === select) ui.select = original.select;
       if (ui.input === input) ui.input = original.input;
       if (ui.confirm === confirm) ui.confirm = original.confirm;
+      if (ui.notify === notify) ui.notify = original.notify;
+      terminalNotify = undefined;
     };
   }
 
@@ -506,7 +536,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   function notifyTui(message: string, notifyType: NotifyType = "info"): void {
     if (latestCtx?.mode !== "tui") return;
     try {
-      latestCtx.ui.notify(message, notifyType);
+      (terminalNotify ?? latestCtx.ui.notify.bind(latestCtx.ui))(message, notifyType);
     } catch (err) {
       debugLog(`notifyTui failed: ${String(err)}`);
     }
@@ -593,7 +623,8 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       sessionFile: sm?.getSessionFile(),
       sessionId: sm?.getSessionId(),
       sessionName: sm?.getSessionName(),
-      bridgeCapabilities: { supportsRewindConversation: false, supportsAutoCompactionControl: false },
+      autoCompactionEnabled: autoCompactionEnabled(),
+      bridgeCapabilities: { supportsRewindConversation: false, supportsAutoCompactionControl: true },
       messageCount,
       pendingMessageCount: ctx?.hasPendingMessages() ? 1 : 0,
       contextUsage: ctx?.getContextUsage(),
@@ -602,6 +633,227 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
 
   function commandNotices(reply: (frame: unknown) => void) {
     return (message: string, notifyType: NotifyType) => reply(notifyFrame(message, notifyType));
+  }
+
+
+  function nativeAutoCompactionEnabled(): boolean {
+    try {
+      const enabled = (pi as any).getSettings?.()?.compaction?.enabled;
+      return typeof enabled === "boolean" ? enabled : true;
+    } catch {
+      return true;
+    }
+  }
+
+  function autoCompactionEnabled(): boolean {
+    return nativeAutoCompactionEnabled() && !autoCompactionSuppressed;
+  }
+
+  /** Run a Pi built-in for Paseo. Output goes to Paseo's chat, never into Pi's session. */
+  async function runPaseoBuiltin(name: BridgeHandledCommand, args: string, cmd: any, reply: (frame: unknown) => void): Promise<void> {
+    const ctx = latestCtx;
+    if (!ctx) throw new Error("Pi session is not ready.");
+    const output = (text: string) => reply({ type: "command_output", text });
+    const done = () => reply(success(cmd.id, "prompt", { agentInvoked: false }));
+    switch (name) {
+      case "name": {
+        if (!args) {
+          const current = pi.getSessionName();
+          output(current ? `Session name: ${current}` : "This session has no name. Set one with /name <name>.");
+          break;
+        }
+        pi.setSessionName(args);
+        output(`Session name set: ${pi.getSessionName() ?? args}`);
+        break;
+      }
+      case "model": {
+        const available = ctx.modelRegistry.getAvailable();
+        if (!args) {
+          output(formatModelList(available, ctx.model));
+          break;
+        }
+        const model = resolveModelArgument(args, available);
+        if (typeof model === "string") throw new Error(model);
+        if (!await pi.setModel(model)) throw new Error(`No API key available for ${modelReference(model)}`);
+        output(`Model set to ${modelReference(model)}.`);
+        break;
+      }
+      case "thinking": {
+        if (!args) {
+          output(`Thinking level: ${pi.getThinkingLevel()}. Set it with /thinking <${THINKING_LEVELS.join("|")}>.`);
+          break;
+        }
+        const level = parseThinkingLevel(args);
+        if (!level) throw new Error(`Unknown thinking level "${args}". Use one of: ${THINKING_LEVELS.join(", ")}.`);
+        pi.setThinkingLevel(level as any);
+        const applied = pi.getThinkingLevel();
+        output(applied === level ? `Thinking level set to ${applied}.` : `Thinking level set to ${applied}; ${modelReference(ctx.model)} does not support ${level}.`);
+        break;
+      }
+      case "session":
+        output(formatSessionInfo(buildSessionStats(ctx) as any, {
+          name: pi.getSessionName(), model: ctx.model, thinking: pi.getThinkingLevel(),
+        }));
+        break;
+      case "export":
+        output(`Session exported to: ${await exportSession(ctx, parsePathArgument(args))}`);
+        break;
+      case "btw":
+        await askSideQuestion(ctx, args, cmd, reply);
+        return;
+      case "new":
+      case "resume":
+      case "clone":
+        await requestSessionSwitch(name, args, ctx, output);
+        break;
+    }
+    done();
+  }
+
+  async function exportSession(ctx: ExtensionContext, requested: string | undefined): Promise<string> {
+    const sm = ctx.sessionManager;
+    const sessionFile = sm.getSessionFile();
+    if (!sessionFile || !sessionFileSaved(sessionFile)) throw new Error("Nothing to export yet: Pi has not saved this session.");
+    if (requested?.endsWith(".jsonl")) {
+      const target = path.resolve(ctx.cwd, requested);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      const header: any = sm.getHeader?.() ?? {};
+      fs.writeFileSync(target, serializeBranchJsonl(
+        { version: header.version, id: sm.getSessionId(), cwd: header.cwd ?? ctx.cwd },
+        sm.getBranch() as any,
+      ));
+      return target;
+    }
+    // HTML rendering is not in the extension API; Pi's own CLI renders it.
+    // A JavaScript runtime runs Pi's CLI script; a compiled Pi is its own executable.
+    const entry = process.argv[1];
+    const runtime = /^(?:node|nodejs|bun|deno)(?:\.exe)?$/i.test(path.basename(process.execPath));
+    const script = runtime && entry && fs.existsSync(entry) ? [entry] : [];
+    const outputArgs = requested ? [path.resolve(ctx.cwd, requested)] : [];
+    const result = await pi.exec(process.execPath, [...script, "--export", sessionFile, ...outputArgs], { cwd: ctx.cwd, timeout: 60_000 } as any);
+    if (result.code !== 0) throw new Error(`Export failed: ${(result.stderr || result.stdout || `exit ${result.code}`).trim().slice(0, 500)}`);
+    const reported = /(?:exported to|written to|saved to):?\s*(.+)$/im.exec(result.stdout)?.[1]?.trim();
+    return outputArgs[0] ?? reported ?? result.stdout.trim();
+  }
+
+  /**
+   * Answer `/btw <question>` from the session's context without adding either
+   * to Pi's session. The prompt is acknowledged at once and completes through
+   * prompt_result, so a slow answer does not hit Paseo's RPC timeout.
+   */
+  async function askSideQuestion(ctx: ExtensionContext, question: string, cmd: any, reply: (frame: unknown) => void): Promise<void> {
+    if (!question) throw new Error("Usage: /btw <question>");
+    if (sideQuestion) throw new Error("A side question is already running. Wait for its answer or press Stop.");
+    const model = ctx.model;
+    if (!model) throw new Error("No model is selected.");
+    const controller = new AbortController();
+    const current = { controller, requestId: cmd.id };
+    sideQuestion = current;
+    // Frames after the reply belong to the same controller connection only.
+    const owner = transport;
+    const epoch = owner?.connectionEpoch;
+    const later = (frame: unknown) => {
+      if (owner && owner === transport && owner.connected && owner.connectionEpoch === epoch) owner.send(frame);
+    };
+    reply(success(cmd.id, "prompt", { agentInvoked: true }));
+    const finish = (text: string | undefined, error?: string) => {
+      if (sideQuestion === current) sideQuestion = null;
+      if (text) later({ type: "command_output", text });
+      if (error) later(notifyFrame(error, "error"));
+      later({ type: "prompt_result", id: cmd.id, agentInvoked: false });
+    };
+    try {
+      const context = {
+        systemPrompt: SIDE_QUESTION_SYSTEM_PROMPT,
+        messages: [{
+          role: "user" as const,
+          content: [{ type: "text" as const, text: sideQuestionPrompt(question, sideQuestionContext(ctx.sessionManager.getBranch() as any)) }],
+          timestamp: Date.now(),
+        }],
+      };
+      const level = pi.getThinkingLevel();
+      const options: Record<string, unknown> = { signal: controller.signal, sessionId: crypto.randomUUID() };
+      if (level && level !== "off") options.reasoning = level;
+      const registry: any = ctx.modelRegistry;
+      let answer: any;
+      if (typeof registry.streamSimple === "function") {
+        answer = await registry.streamSimple(model, context, options).result();
+      } else {
+        const auth = typeof registry.getApiKeyAndHeaders === "function"
+          ? await registry.getApiKeyAndHeaders(model)
+          : { apiKey: await registry.getApiKey?.(model) };
+        const { completeSimple } = await import("@earendil-works/pi-ai") as any;
+        answer = await completeSimple(model, context, { ...options, apiKey: auth?.apiKey, headers: auth?.headers });
+      }
+      if (controller.signal.aborted || answer?.stopReason === "aborted") return finish(undefined, "Side question cancelled.");
+      if (answer?.stopReason === "error") return finish(undefined, `Side question failed: ${answer.errorMessage ?? "model error"}`);
+      finish(`btw: ${question}\n\n${assistantText(answer) || "(no answer)"}`);
+    } catch (error) {
+      finish(undefined, controller.signal.aborted ? "Side question cancelled." : `Side question failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async function requestSessionSwitch(
+    kind: "new" | "resume" | "clone", args: string, ctx: ExtensionContext, output: (text: string) => void,
+  ): Promise<void> {
+    if (!ctx.isIdle() || ctx.hasPendingMessages() || isCompacting) throw new Error(`Pi must be idle for /${kind}. Wait for the current turn or press Stop.`);
+    let request: Record<string, unknown>;
+    if (kind === "new") {
+      if (!args) throw new Error("Usage: /new <first prompt>. Paseo shows the new session once Pi saves its first reply.");
+      request = { kind, prompt: args };
+      output("Starting a new Pi session in the terminal. It appears in Paseo as a new chat after its first reply; this chat stops following the terminal.");
+    } else if (kind === "resume") {
+      const sessions = await SessionManager.list(ctx.cwd, ctx.sessionManager.getSessionDir?.());
+      sessions.sort((left, right) => right.modified.getTime() - left.modified.getTime());
+      const recent = sessions.slice(0, 20);
+      if (!args) {
+        output(formatResumeList(recent, ctx.sessionManager.getSessionFile()));
+        return;
+      }
+      const target = pickResumeTarget(args, sessions);
+      if (typeof target === "string") throw new Error(target);
+      if (target.path === ctx.sessionManager.getSessionFile()) {
+        output("The terminal is already in that session.");
+        return;
+      }
+      request = { kind, path: target.path };
+      output(`Switching the terminal to "${(target.name || target.firstMessage).slice(0, 70)}". Paseo shows it as its own chat; this chat stops following the terminal.`);
+    } else {
+      const leafId = ctx.sessionManager.getLeafId();
+      if (!leafId) throw new Error("Nothing to clone yet.");
+      request = { kind, leafId };
+      output("Cloning this session in the terminal. Paseo shows the copy as a new chat; this chat stops following the terminal.");
+    }
+    const payload = Buffer.from(JSON.stringify(request)).toString("base64url");
+    // Run after Paseo has the reply: the switch closes this chat's connection.
+    setTimeout(() => {
+      try { pi.sendUserMessage(`/paseo-bridge ${SESSION_SWITCH_SUBCOMMAND} ${payload}`, { expandPromptTemplates: true }); }
+      catch (error) { notifyEvent(`Pi session switch failed: ${String(error).slice(0, 500)}`); }
+    }, 50);
+  }
+
+  async function runSessionSwitch(raw: string, ctx: ExtensionCommandContext): Promise<void> {
+    const request = decodeCommandPayload(raw);
+    const fail = (message: string) => {
+      notifyEvent(message);
+      notifyTui(message, "error");
+    };
+    try {
+      let result: { cancelled: boolean } | undefined;
+      if (request?.kind === "new" && typeof request.prompt === "string") {
+        const prompt = request.prompt;
+        result = await ctx.newSession({ withSession: async next => { await next.sendUserMessage(prompt); } });
+      } else if (request?.kind === "resume" && typeof request.path === "string") {
+        result = await ctx.switchSession(request.path);
+      } else if (request?.kind === "clone" && typeof request.leafId === "string") {
+        result = await ctx.fork(request.leafId, { position: "at" });
+      } else {
+        throw new Error("Invalid session switch request.");
+      }
+      if (result?.cancelled) fail("The Pi session switch was cancelled.");
+    } catch (error) {
+      fail(`Pi session switch failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   async function handlePrompt(cmd: any, send: (frame: unknown) => void): Promise<void> {
@@ -642,6 +894,13 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       return;
     }
     if (await handleBridgeManagement(cmd, send)) return;
+    const route = routePaseoCommand(message, pi.getCommands(), piBuiltins);
+    if (route.kind === "reject") throw new Error(route.message);
+    if (route.kind === "bridge") {
+      if (Array.isArray(cmd.images) && cmd.images.length) throw new Error(`/${route.name} does not accept image attachments.`);
+      await runPaseoBuiltin(route.name, route.args, cmd, send);
+      return;
+    }
     const content = remoteUserContent(message, cmd.images);
     const streaming = latestCtx ? !latestCtx.isIdle() : false;
     const result = await dispatchPaseoPrompt(pi, content, message, streaming);
@@ -701,12 +960,21 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
             throw new Error("Reload must be sent as an ordinary prompt while Pi is idle.");
           }
           if (await handleBridgeManagement(cmd, send)) return;
+          const route = routePaseoCommand(cmd.message, pi.getCommands(), piBuiltins);
+          if (route.kind === "reject") throw new Error(route.message);
+          if (route.kind === "bridge") throw new Error(`/${route.name} must be sent as an ordinary prompt.`);
           const result = await dispatchPaseoPrompt(pi, remoteUserContent(cmd.message, cmd.images),
             cmd.message, false, type === "steer" ? "steer" : "followUp");
           send(success(id, type, result));
           return;
         }
         case "abort":
+          if (sideQuestion) {
+            // Paseo's Stop targets the side question it is waiting for.
+            sideQuestion.controller.abort();
+            send(success(id, type));
+            return;
+          }
           cancelPendingRemoteUiRequests();
           // Capture this lifecycle's context and signal. Never use ctx.signal:
           // that signal belongs to turn work, not the lifetime of this waiter.
@@ -750,9 +1018,12 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         case "get_session_stats":
           send(success(id, type, buildSessionStats(latestCtx)));
           return;
-        case "get_commands":
-          send(success(id, type, { commands: pi.getCommands() }));
+        case "get_commands": {
+          const commands = pi.getCommands();
+          // Paseo keeps the last entry of a name, so bridge entries go last.
+          send(success(id, type, { commands: [...commands.filter(command => command.name !== "btw"), ...bridgeCommandEntries(commands)] }));
           return;
+        }
         case "compact": {
           if (!latestCtx) throw new Error("No active session context");
           if (isCompacting) throw new Error("A Pi compaction is already running");
@@ -766,9 +1037,15 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
           }
           return;
         }
-        case "set_auto_compaction":
-          send(failure(id, type, "Auto-compaction control is unsupported by this Pi extension API"));
+        case "set_auto_compaction": {
+          if (typeof cmd.enabled !== "boolean") throw new Error("enabled must be a boolean");
+          if (cmd.enabled && !nativeAutoCompactionEnabled()) {
+            throw new Error("Auto-compaction is off in Pi's settings. Turn it on with /settings in the terminal.");
+          }
+          autoCompactionSuppressed = !cmd.enabled;
+          send(success(id, type));
           return;
+        }
         case "extension_ui_response": {
           const requestId = String(cmd.id ?? "");
           const pending = pendingRemoteUiRequests.get(requestId);
@@ -1217,8 +1494,13 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     titleWorkspaceFromPrompt(ctx);
   });
 
+  let suppressedCompaction = false;
   pi.on("session_before_compact", async (event: any, ctx) => {
     latestCtx = ctx;
+    if (autoCompactionSuppressed && event?.reason === "threshold") {
+      suppressedCompaction = true;
+      return { cancel: true };
+    }
     isCompacting = true;
     send({ type: "compaction_start", reason: event?.reason });
     return undefined;
@@ -1232,6 +1514,10 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
 
   pi.on("session_compact_failed", async (event: any, ctx) => {
     latestCtx = ctx;
+    if (suppressedCompaction) {
+      suppressedCompaction = false;
+      return;
+    }
     isCompacting = false;
     send({ type: "compaction_end", reason: event?.reason, errorMessage: event?.error?.message ?? event?.errorMessage, aborted: event?.aborted === true });
   });
@@ -1359,6 +1645,10 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   }
   pi.registerCommand("paseo-bridge", {
     description: `Manage the Paseo bridge: ${BRIDGE_USAGE.slice("Usage: /paseo-bridge ".length)}`,
-    handler: (args, ctx) => runBridgeManagement(args, ctx),
+    handler: (args, ctx) => {
+      const [subcommand, payload = ""] = args.trim().split(/\s+/, 2);
+      if (subcommand === SESSION_SWITCH_SUBCOMMAND) return runSessionSwitch(payload, ctx);
+      return runBridgeManagement(args, ctx);
+    },
   });
 }

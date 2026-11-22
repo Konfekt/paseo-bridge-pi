@@ -40,6 +40,31 @@ The first response acknowledges reload acceptance; `Pi runtime reloaded` confirm
 
 Resource reload updates extensions, skills, prompts, themes, and context files. It does not update the Pi executable, replace a running provider shim, or restart Paseo. After package updates that change the shim, restart Paseo after active work finishes. Keep the terminal Pi sessions open for reattachment.
 
+## Pi commands from Paseo
+
+Pi runs its built-in commands, such as `/model` or `/session`, only in its terminal UI. Sent from Paseo as an ordinary prompt, they would reach the model as text. The bridge therefore runs the useful ones itself, lists them in Paseo's command menu, and refuses the rest with a message.
+
+| Command | Result in Paseo |
+| --- | --- |
+| `/name [name]` | Show or set the session name; Paseo's title follows. |
+| `/model [provider/model]` | List the available models, or switch to one (an unambiguous model ID is enough). |
+| `/thinking [level]` | Show or set the thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, as the model supports). |
+| `/session` | Show the session file, ID, name, model, thinking level, message counts, token usage, context use and cost. |
+| `/export [file.html\|file.jsonl]` | Write the session on the Pi host: HTML through Pi's own exporter, or the current branch as JSONL. Without a path, Pi picks the HTML file name. |
+| `/btw <question>` | Answer a side question from the session's context with the current model, without tools. The question and answer are not saved in the session. |
+| `/new <first prompt>` | Start a new Pi session in the terminal with that first prompt; Paseo imports it as its own chat once Pi saves it. |
+| `/resume [number\|id\|name]` | List recent sessions of this folder, or switch the terminal to one. |
+| `/clone` | Duplicate the session at its current position into a new session in the terminal. |
+| `/compact`, `/autocompact` | Run by Paseo. `/autocompact` turns Pi's threshold compaction off or on for this session only; Pi still compacts when the context overflows, and Pi's settings stay unchanged. |
+
+Notes:
+- Answers appear as assistant messages, and refusals as errors, without a model turn.
+- `/new`, `/resume` and `/clone` need an idle session, because they replace the terminal's session. `/new` needs a first prompt, since Paseo can import a session only after Pi saves its first message.
+- An extension, prompt template or skill with the same name as a built-in wins and runs as before, except `/btw`: extensions such as pi-btw open a terminal overlay that Paseo cannot show, so the bridge answers `/btw` itself.
+- Paseo interrupts a turn it started when you send a slash command, so ask `/btw` between turns or during a turn started in the terminal.
+- Every other built-in (`/settings`, `/tree`, `/fork`, `/reload`, `/login`, `/quit` and others) is refused with "`/<name>` is a Pi terminal command and is not available from Paseo", plus the alternative where there is one. The bridge reads the list from the installed Pi, so built-ins that later Pi releases add are refused too.
+- Notifications that extensions show with `ctx.ui.notify` also appear in Paseo while it is attached; set `PI_PASEO_BRIDGE_NOTIFICATIONS=0` to keep them in the terminal only. Status-bar entries and widgets stay in the terminal, as Paseo has no place for them.
+
 ## Remote questions
 
 Ordinary Pi RPC and terminal attachment have different UI boundaries:
@@ -101,6 +126,7 @@ Local TCP and socket connections import, inspect and reattach through Paseo's We
 | `PI_PASEO_BRIDGE_NO_IMPORT=1` | Expose the controller endpoint without automatically importing the session. |
 | `PI_PASEO_BRIDGE_IMPORT_SESSIONS=0` | Disable automatic import. |
 | `PI_PASEO_BRIDGE_DEBUG=1` | Write bridge debug logs. |
+| `PI_PASEO_BRIDGE_NOTIFICATIONS=0` | Keep extension notifications in the terminal instead of also showing them in Paseo. |
 | `PI_PASEO_BRIDGE_FORCE=1` | Permit activation outside terminal UI mode for tests. |
 | `PASEO_CLI` | Select the Paseo CLI executable. |
 | `PASEO_HOME` | Select the local daemon's home, as for Paseo itself. Registration writes `$PASEO_HOME/config.json`. |
@@ -127,12 +153,12 @@ The bridge does not enforce a Pi or Paseo runtime version. It uses public interf
 | Component | Minimum | Latest reviewed/tested target |
 | --- | --- | --- |
 | Pi (`@earendil-works/pi-coding-agent`) | 1.0.0 | 1.6.0 |
-| Paseo (`@getpaseo/server`, `@getpaseo/cli`) | 0.13.0 | 0.16.2 |
+| Paseo (`@getpaseo/server`, `@getpaseo/cli`) | 0.13.0 | 0.17.1 |
 
 How the latest releases compare with the minimums:
 
 - **Pi 1.6.0:** the [release changelog](https://github.com/earendil-works/pi/blob/v1.6.0/packages/coding-agent/CHANGELOG.md) changes TUI rendering to readonly buffers; the bridge does not render custom components. The public extension events, ordinary dialog methods and SDK exports used here still typecheck. Native RPC session replacements no longer emit duplicate `session_start` events, and SDK reload emits the missing startup event. Pi still creates a new session file only after its first user or assistant message; the bridge waits for that file instead of creating one itself.
-- **Paseo 0.16.2:** the Pi provider sends the same RPC commands and accepts the same capture markers, WebSocket requests, CLI commands (`import`, `inspect`, `agent reload`), and `agents.providers.pi.command` configuration. It reads `isStreaming`, `isCompacting`, and `pendingMessageCount` from `get_state` before stopping an idle runtime, which the bridge reports, and it extracts images from forwarded tool results itself. It reads history from the `sessionFile` that `get_state` reports rather than calling `get_messages`, and uses only `treeEntries` from entry captures; the bridge still answers `get_messages` and sends `contextEntries` for earlier releases. Because import reads the session file, which Pi creates only once the conversation starts, the bridge imports a new session after Pi saves its first message. Reading the timeline of an agent the daemon has not loaded opens a short-lived history-only session; when it closes, the bridge has Paseo reload the agent so the terminal session stays attached.
+- **Paseo 0.17.1:** the Pi provider sends the same RPC commands and accepts the same capture markers, WebSocket requests, CLI commands (`import`, `inspect`, `agent reload`), and `agents.providers.pi.command` configuration. It reads `isStreaming`, `isCompacting`, and `pendingMessageCount` from `get_state` before stopping an idle runtime, which the bridge reports, and it extracts images from forwarded tool results itself. It reads history from the `sessionFile` that `get_state` reports rather than calling `get_messages`, and uses only `treeEntries` from entry captures; the bridge still answers `get_messages` and sends `contextEntries` for earlier releases. Because import reads the session file, which Pi creates only once the conversation starts, the bridge imports a new session after Pi saves its first message. Reading the timeline of an agent the daemon has not loaded opens a short-lived history-only session; when it closes, the bridge has Paseo reload the agent so the terminal session stays attached. The provider also shows `command_output` frames, completes prompts that start no model turn, and lists the commands `get_commands` returns, which the bridge uses for the commands above.
 
 ### Checking a new release
 
@@ -164,6 +190,6 @@ BRIDGE_NATIVE_PI="$(command -v pi)" TEST_PI_BIN="$(command -v pi)" \
 
 The stock-daemon test runs a published Paseo server of version 0.13.0 or newer in-process, with the CLI of the same version. It uses the real Pi SDK extension runner with a controlled terminal renderer, ordinary `ctx.ui` calls, and the production shim. It checks import, a separate workspace for each session in one folder, deferred import of a new session until Pi saves it, reattachment after a history-only read of an unloaded agent, app and terminal choices, cancellation, timeout, reload, pending-question cleanup, and callback delivery after the actual controller response. It uses the development Pi SDK by default; set `BRIDGE_PI_SDK` to another installed package's absolute `dist/index.js` to check that SDK. Tests requiring an executable or provider path are skipped when that environment variable is absent.
 
-The Pi 1.6.0 review passed typechecking, 37 focused helper checks and the real Pi RPC `/remote-reload` fixture. A separate TCP wire-contract smoke test against published Paseo 0.16.2, with its fake Pi runtime fixture, verified two separate session workspaces, native-handle lookup, reload and reuse without duplicate agents. The full `npm test` run reported 99 passes, 12 socket-dependent failures and 2 skipped native-executable tests. The new stock-daemon regressions cover import and resume without a terminal-side CLI, recovery after losing the local agent map, and separate workspaces through a password-protected Unix listener. This review environment rejects Unix-socket listeners with `EPERM`, including the terminal controller socket, so those regressions and the full native attachment suite still require a run on a normal local host. This is not a claim of completed Pi 1.6.0/Paseo 0.16.2 end-to-end acceptance.
+With Pi 1.6.0, `npm test` and `npm run typecheck` pass, and `npm run test:native` passes against Paseo 0.17.1 and 0.16.2 except one test: "reading an unloaded agent's history leaves the terminal session attached" fails with both, unrelated to the command handling. `test/session-switch.integration.ts` runs a standalone `pi --mode rpc` for `/new`, `/resume` and `/clone`, because a session seeded with a very large history exceeds Paseo's 16 MiB capture frame when the switch test attaches to it.
 
 Desktop and Android use stock Paseo interfaces; backend callback delivery and native provider tests do not prove Android layout, gestures, or visual acceptance. No Android visual acceptance is claimed.

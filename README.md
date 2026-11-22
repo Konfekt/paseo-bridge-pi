@@ -42,6 +42,8 @@ Pi's `/reload` updates resources, including extensions; it does not replace the 
 | `/paseo-bridge status` | Inspect configuration and connection state. |
 | `/remote-reload` | Reload Pi resources while idle, including from Paseo. |
 
+From Paseo, `/name`, `/model`, `/thinking`, `/session`, `/export`, `/btw`, `/new`, `/resume`, `/clone` and `/autocompact` work as in the terminal; other Pi built-ins are refused with a message instead of reaching the model. See [Pi commands from Paseo](docs/reference.md#pi-commands-from-paseo).
+
 Paseo uses its native chat and question interfaces. Attached terminal sessions mirror ordinary Pi select, input, and confirmation dialogs. Respond in either interface; the result returns to the original Pi callback once. Extensions using these ordinary dialogs need no bridge-specific integration; custom terminal widgets remain local. See the [reference](docs/reference.md) for lifecycle limits.
 
 The bridge preserves Pi's permission enforcement. It adds no permission-mode control, account dashboard, subagent projection, terminal orchestration, or automatic title-generation request. Android visual acceptance remains unverified.
