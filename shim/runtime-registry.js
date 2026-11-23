@@ -27,6 +27,24 @@ export function pipePathForSession(sessionFile) {
   return path.join(directory, `${hash}.sock`);
 }
 
+/**
+ * Private socket of a shim that runs Pi in the background for Paseo. A terminal
+ * Pi resuming the same session asks it to hand the session over.
+ */
+export function handoffPathForSession(sessionFile) {
+  const hash = sha256(`handoff:${sessionKey(sessionFile)}`).slice(0, 20);
+  if (process.platform === "win32") return `\\\\.\\pipe\\pi-paseo-handoff-${hash}`;
+  const directory = process.env.XDG_RUNTIME_DIR
+    ? path.join(process.env.XDG_RUNTIME_DIR, "pi-paseo")
+    : bridgeStateDirectory();
+  return path.join(directory, `${hash}.handoff.sock`);
+}
+
+/** A record published by a shim running Pi without a terminal for Paseo. */
+export function isHeadlessRecord(record) {
+  return record?.kind === "headless";
+}
+
 export function runtimeRecordFile(sessionFile, directory = runtimeRegistryDirectory()) {
   return path.join(directory, `${sha256(sessionKey(sessionFile))}.json`);
 }
@@ -53,6 +71,9 @@ export function readRuntimeRecords(directory = runtimeRegistryDirectory()) {
     }
     if (record.agentId != null && (typeof record.agentId !== "string" || !record.agentId)) {
       throw new Error("Invalid Pi runtime registry record: agent ID must be nonempty");
+    }
+    if (record.kind != null && record.kind !== "terminal" && record.kind !== "headless") {
+      throw new Error("Invalid Pi runtime registry record: unknown owner kind");
     }
     if (record.processStartToken != null && !/^[a-f0-9-]+:\d+$/.test(record.processStartToken)) {
       throw new Error("Invalid Pi runtime registry record: malformed process start token");
@@ -93,4 +114,25 @@ export function assertNoLiveRuntimeOwner(sessionFile, options = {}) {
   const owner = records.find(record => record.pid !== options.ignorePid
     && runtimeOwnerMayBeAlive(record, options));
   if (owner) throw new Error(`Pi session already has a live or unresolved runtime owner (PID ${owner.pid}); bridge unavailable. Refusing to launch a second Pi. Reconnect to the existing runtime first.`);
+}
+
+/** Atomically publish a record; a later owner of the same session replaces it. */
+export function writeRuntimeRecordFile(record, directory = runtimeRegistryDirectory()) {
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(directory, 0o700); } catch {}
+  const destination = runtimeRecordFile(record.sessionFile, directory);
+  const temporary = `${destination}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(temporary, destination);
+}
+
+/** Remove a session's record only while it still names this process. */
+export function removeRuntimeRecordFile(sessionFile, pid = process.pid, directory = runtimeRegistryDirectory()) {
+  try {
+    const destination = runtimeRecordFile(sessionFile, directory);
+    const record = JSON.parse(fs.readFileSync(destination, "utf8"));
+    if (record?.pid === pid) fs.unlinkSync(destination);
+  } catch {
+    // absent, stale, or replaced by a newer owner
+  }
 }

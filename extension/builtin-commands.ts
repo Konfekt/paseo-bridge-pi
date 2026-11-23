@@ -17,6 +17,12 @@ export const BRIDGE_HANDLED_COMMANDS = [
 
 export type BridgeHandledCommand = (typeof BRIDGE_HANDLED_COMMANDS)[number]["name"];
 
+/** Built-ins that replace the session; Paseo cannot follow that in a chat it started. */
+export const SESSION_SWITCH_COMMANDS: ReadonlySet<string> = new Set(["new", "resume", "clone"]);
+
+/** The bridge's commands in a Pi that Paseo runs in the background (RPC mode). */
+export const HEADLESS_HANDLED_COMMANDS = BRIDGE_HANDLED_COMMANDS.filter(command => !SESSION_SWITCH_COMMANDS.has(command.name));
+
 const HANDLED = new Set<string>(BRIDGE_HANDLED_COMMANDS.map(command => command.name));
 
 /**
@@ -69,7 +75,7 @@ export function routePaseoCommand(
   message: string,
   piCommands: ReadonlyArray<{ name: string; source?: string }>,
   builtins: ReadonlySet<string>,
-  options: { nativeBtw?: boolean } = {},
+  options: { nativeBtw?: boolean; headless?: boolean } = {},
 ): CommandRoute {
   const parsed = parseSlashInvocation(message);
   if (!parsed) return { kind: "pass" };
@@ -78,9 +84,14 @@ export function routePaseoCommand(
   if (name === "btw" && options.nativeBtw !== false) return { kind: "bridge", name, args };
   if (piCommands.some(command => command.name === name)) return { kind: "pass" };
   if (name.startsWith("skill:")) return { kind: "pass" };
+  if (options.headless && SESSION_SWITCH_COMMANDS.has(name)) {
+    return { kind: "reject", message: `/${name} replaces the session, which Paseo cannot follow in a chat it started. Start a new chat in Paseo, or take this session over in a terminal with pi --session <id> and run /${name} there.` };
+  }
   if (HANDLED.has(name)) return { kind: "bridge", name: name as BridgeHandledCommand, args };
   if (name === "compact" || !builtins.has(name)) return { kind: "pass" };
-  const hint = TERMINAL_HINTS[name] ?? "Run it in the attached terminal.";
+  const hint = TERMINAL_HINTS[name] ?? (options.headless
+    ? "Take this session over in a terminal with pi --session <id> and run it there."
+    : "Run it in the attached terminal.");
   return { kind: "reject", message: `/${name} is a Pi terminal command and is not available from Paseo. ${hint}` };
 }
 

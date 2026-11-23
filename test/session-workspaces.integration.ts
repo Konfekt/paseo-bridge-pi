@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { hostname, tmpdir } from "node:os";
 import path from "node:path";
@@ -95,7 +95,7 @@ async function stockPaseo(t: TestContext, options: { password?: string; selectHo
   const sessions = path.join(agentDir, "sessions", "--project--");
   await mkdir(sessions, { recursive: true });
   return {
-    cwd, home,
+    cwd, home, agentDir,
     get client() { return client; },
     version: hostPackage.version as string,
     sessionFile: (uuid: string) => path.join(sessions, `2026-01-01T00-00-00-000Z_${uuid}.jsonl`),
@@ -366,4 +366,89 @@ test("a new Paseo message replaces a turn whose tool ignores cancellation", { sk
   const after = (await receipts()).map(value => value.value);
   assert.ok(after.lastIndexOf("finished") < after.findIndex(value => String(value).includes("next question")),
     "the message after Stop starts once Pi has stopped");
+});
+
+// A chat started in Paseo runs Pi in the background. Resuming its session in a
+// terminal moves it there without closing the chat; closing the terminal moves
+// it back, so either side can continue the same session.
+test("a chat started in Paseo moves to a terminal Pi and back", { skip, timeout: 120_000 }, async t => {
+  const paseo = await stockPaseo(t);
+  // The background Pi loads the bridge and an offline model from Pi's settings.
+  await writeFile(path.join(paseo.agentDir, "settings.json"), JSON.stringify({
+    extensions: [path.join(root, "extension/index.ts"), path.join(root, "test/fixtures/offline-provider.ts")],
+  }));
+  const agent = await paseo.client.createAgent({ provider: "pi", cwd: paseo.cwd, model: "bridge-offline/fixture", title: "From Paseo" });
+  const items = async () => {
+    const timeline = await paseo.client.fetchAgentTimeline(agent.id, { direction: "tail", limit: 200 });
+    return (timeline.entries ?? []).map((entry: any) => entry.item ?? entry);
+  };
+  const waitForItem = async (predicate: (item: any) => boolean, label: string) => {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const found = (await items()).find(predicate);
+      if (found) return found;
+      await delay(250);
+    }
+    assert.fail(`${label}: ${JSON.stringify(await items()).slice(-3000)} ${paseo.stderr()}`);
+  };
+  const run = async (text: string) => {
+    await paseo.client.sendAgentMessage(agent.id, text);
+    const finished = await paseo.client.waitForFinish(agent.id, 30_000);
+    assert.notEqual(finished.status, "error", `${text}: ${JSON.stringify(finished)}`);
+    return finished;
+  };
+  const records = async () => {
+    const directory = path.join(paseo.home, ".pi", "paseo-bridge", "runtimes");
+    const files = await readdir(directory).catch(() => [] as string[]);
+    return Promise.all(files.filter(file => file.endsWith(".json")).map(async file => JSON.parse(await readFile(path.join(directory, file), "utf8"))));
+  };
+
+  // Chat-only: the bridge's commands answer in the chat.
+  await run("hello from the app");
+  await run("/name Shared plan");
+  await waitForItem(item => item.type === "assistant_message" && item.text === "Session name set: Shared plan", "/name in a Paseo chat");
+  await run("/session");
+  await waitForItem(item => item.type === "assistant_message" && /^Session info/.test(item.text), "/session in a Paseo chat");
+  await run("/btw what next?");
+  await waitForItem(item => item.type === "assistant_message" && item.text === "btw: what next?\n\nbackground side answer", "/btw in a Paseo chat");
+  await paseo.client.sendAgentMessage(agent.id, "/new elsewhere");
+  const refused = await paseo.client.waitForFinish(agent.id, 20_000);
+  assert.equal(refused.status, "error");
+  assert.match(JSON.stringify(refused) + JSON.stringify(await items()), /cannot follow/);
+  const background = (await records()).find(record => record.kind === "headless");
+  assert.ok(background, "the background Pi is published for a terminal takeover");
+  assert.equal(background.agentId, agent.id);
+  const sessionFile = background.sessionFile;
+  assert.match(await readFile(sessionFile, "utf8"), /background answered[\s\S]*Shared plan/);
+
+  // The terminal resumes the same session and takes it over.
+  const notifyFile = path.join(paseo.home, "terminal-notify.jsonl");
+  const terminal = paseo.startSession(sessionFile, { DIALOG_NOTIFY_FILE: notifyFile });
+  const notices = async () => readFile(notifyFile, "utf8").catch(() => "");
+  for (let attempt = 0; attempt < 120 && !/Took this session over from Paseo/.test(await notices()); attempt += 1) await delay(250);
+  assert.match(await notices(), /Took this session over from Paseo/, paseo.stderr());
+  for (let attempt = 0; attempt < 120 && !(await records()).some(record => record.kind === "terminal"); attempt += 1) await delay(250);
+  assert.ok(!(await records()).some(record => record.kind === "headless"), "only the terminal writes the session now");
+  // The same Paseo chat now reaches the terminal Pi.
+  let reached = false;
+  for (let attempt = 0; attempt < 40 && !reached; attempt += 1) {
+    await paseo.client.sendAgentMessage(agent.id, `/stock-notify From the app ${attempt}`);
+    await paseo.client.waitForFinish(agent.id, 10_000).catch(() => undefined);
+    reached = /From the app/.test(await notices());
+    if (!reached) await delay(250);
+  }
+  assert.ok(reached, `the chat reaches the terminal Pi: ${await notices()} ${paseo.stderr()}`);
+  assert.equal((await paseo.piAgents()).length, 1, "Paseo keeps one chat for the session");
+
+  // Closing the terminal hands the session back to a background Pi.
+  terminal.stdin!.end();
+  await once(terminal, "exit");
+  let back = false;
+  for (let attempt = 0; attempt < 80 && !back; attempt += 1) {
+    back = (await records()).some(record => record.kind === "headless" && record.sessionFile === sessionFile);
+    if (!back) await delay(250);
+  }
+  assert.ok(back, `a background Pi resumes the session: ${paseo.stderr()}`);
+  await run("/name Back in Paseo");
+  await waitForItem(item => item.type === "assistant_message" && item.text === "Session name set: Back in Paseo", "the chat continues in Paseo");
+  assert.match(await readFile(sessionFile, "utf8"), /Back in Paseo/);
 });

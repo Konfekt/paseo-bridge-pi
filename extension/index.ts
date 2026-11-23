@@ -34,6 +34,8 @@ import {
   runtimeRegistryDirectory,
   sessionKey,
 } from "../shim/runtime-registry.js";
+import { FRAME_MARKER, SHIM_PROTOCOL_ENV } from "../shim/protocol.js";
+import { jsonLine, lineReader } from "../shim/jsonl.js";
 import {
   addShimToPaseoConfig,
   isOurShimCommand,
@@ -63,7 +65,10 @@ import { coordinateMirroredSelect } from "./mirrored-select.js";
 import { createProviderReconnectLoop } from "./provider-reconnect.js";
 import { unknownRpcCommandError } from "./rpc-compat.js";
 import { buildSessionStats } from "./session-stats.js";
-import { bridgeCommandEntries, KNOWN_PI_BUILTINS, loadPiBuiltinNames, routePaseoCommand, type BridgeHandledCommand } from "./builtin-commands.js";
+import {
+  bridgeCommandEntries, HEADLESS_HANDLED_COMMANDS, KNOWN_PI_BUILTINS, loadPiBuiltinNames, routePaseoCommand, type BridgeHandledCommand,
+} from "./builtin-commands.js";
+import { liveHeadlessOwner, sessionChangedOnDisk } from "./session-takeover.js";
 import {
   assistantText, formatModelList, formatResumeList, formatSessionInfo, modelReference, parsePathArgument,
   parseThinkingLevel, pickResumeTarget, resolveModelArgument, serializeBranchJsonl, SIDE_QUESTION_SYSTEM_PROMPT,
@@ -98,7 +103,9 @@ const TREE_COMMAND = "paseo_tree";
 // command with this subcommand and an encoded request.
 const SESSION_SWITCH_SUBCOMMAND = "session-switch";
 
-const BRIDGE_USAGE = "Usage: /paseo-bridge install | uninstall | auto [on|off] | connect | disconnect | status";
+const BRIDGE_USAGE = "Usage: /paseo-bridge install | uninstall | auto [on|off] | connect | disconnect | takeover | status";
+// Pi runs under the provider shim, which turns the extension's frames into Paseo RPC events.
+const UNDER_SHIM = process.env[SHIM_PROTOCOL_ENV] === "1";
 const DEBUG = environmentBoolean("PI_PASEO_BRIDGE_DEBUG", false);
 const FORWARD_NOTIFICATIONS = environmentBoolean("PI_PASEO_BRIDGE_NOTIFICATIONS", true);
 // Paseo fails a prompt that gets no answer within 30 seconds.
@@ -270,6 +277,13 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
   // ended that turn, so its remaining events are not forwarded, and the next
   // Paseo prompt waits until Pi has settled it.
   let stoppedTurn: { done: Promise<void>; finish(): void } | null = null;
+  // A side question asked in a Paseo chat that Pi runs in the background.
+  let headlessSideQuestion: AbortController | null = null;
+  // Taking a session over from a Pi that Paseo runs in the background. Until it
+  // is released, this terminal must not write the session.
+  let takeover: { file: string; socket: net.Socket; released: boolean } | null = null;
+  let takeoverBlockedFile: string | null = null;
+  let takeoverPendingInput: string | undefined;
   const importAttempted = new Set<string>();
   let importFailures = 0;
   let importRetryAt = 0;
@@ -520,9 +534,8 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       .finally(() => conn.close());
   }
 
-  function pushAgentConfigToPaseo(kind: "model" | "thinking", value: string | null): void {
-    if (!currentAgentId) return;
-    const agentId = currentAgentId;
+  function pushAgentConfigToPaseo(kind: "model" | "thinking", value: string | null, agentId = currentAgentId): void {
+    if (!agentId) return;
     paseoSessionRequest(
       (requestId) =>
         kind === "model"
@@ -661,7 +674,23 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     const ctx = latestCtx;
     if (!ctx) throw new Error("Pi session is not ready.");
     const output = (text: string) => reply({ type: "command_output", text });
-    const done = () => reply(success(cmd.id, "prompt", { agentInvoked: false }));
+    switch (name) {
+      case "btw":
+        await askSideQuestion(ctx, args, cmd, reply);
+        return;
+      case "new":
+      case "resume":
+      case "clone":
+        await requestSessionSwitch(name, args, ctx, output);
+        break;
+      default:
+        await runSessionBuiltin(name, args, ctx, output);
+    }
+    reply(success(cmd.id, "prompt", { agentInvoked: false }));
+  }
+
+  /** Built-ins that read or change only the current session, in any Pi mode. */
+  async function runSessionBuiltin(name: BridgeHandledCommand, args: string, ctx: ExtensionContext, output: (text: string) => void): Promise<void> {
     switch (name) {
       case "name": {
         if (!args) {
@@ -705,16 +734,9 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       case "export":
         output(`Session exported to: ${await exportSession(ctx, parsePathArgument(args))}`);
         break;
-      case "btw":
-        await askSideQuestion(ctx, args, cmd, reply);
-        return;
-      case "new":
-      case "resume":
-      case "clone":
-        await requestSessionSwitch(name, args, ctx, output);
-        break;
+      default:
+        throw new Error(`/${name} is not available here.`);
     }
-    done();
   }
 
   async function exportSession(ctx: ExtensionContext, requested: string | undefined): Promise<string> {
@@ -763,12 +785,17 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       if (owner && owner === transport && owner.connected && owner.connectionEpoch === epoch) owner.send(frame);
     };
     reply(success(cmd.id, "prompt", { agentInvoked: true }));
-    const finish = (text: string | undefined, error?: string) => {
-      if (sideQuestion === current) sideQuestion = null;
-      if (text) later({ type: "command_output", text });
-      if (error) later(notifyFrame(error, "error"));
-      later({ type: "prompt_result", id: cmd.id, agentInvoked: false });
-    };
+    const result = await answerSideQuestion(ctx, model, question, controller.signal);
+    if (sideQuestion === current) sideQuestion = null;
+    if ("text" in result) later({ type: "command_output", text: result.text });
+    else later(notifyFrame(result.error, "error"));
+    later({ type: "prompt_result", id: cmd.id, agentInvoked: false });
+  }
+
+  /** The side question's answer, never added to Pi's session. */
+  async function answerSideQuestion(ctx: ExtensionContext, model: NonNullable<ExtensionContext["model"]>, question: string, signal: AbortSignal,
+  ): Promise<{ text: string } | { error: string }> {
+    const finish = (text: string | undefined, error?: string) => text !== undefined ? { text } : { error: error ?? "Side question failed." };
     try {
       const context = {
         systemPrompt: SIDE_QUESTION_SYSTEM_PROMPT,
@@ -779,7 +806,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         }],
       };
       const level = pi.getThinkingLevel();
-      const options: Record<string, unknown> = { signal: controller.signal, sessionId: crypto.randomUUID() };
+      const options: Record<string, unknown> = { signal: signal, sessionId: crypto.randomUUID() };
       if (level && level !== "off") options.reasoning = level;
       const registry: any = ctx.modelRegistry;
       let answer: any;
@@ -792,11 +819,11 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         const { completeSimple } = await import("@earendil-works/pi-ai") as any;
         answer = await completeSimple(model, context, { ...options, apiKey: auth?.apiKey, headers: auth?.headers });
       }
-      if (controller.signal.aborted || answer?.stopReason === "aborted") return finish(undefined, "Side question cancelled.");
+      if (signal.aborted || answer?.stopReason === "aborted") return finish(undefined, "Side question cancelled.");
       if (answer?.stopReason === "error") return finish(undefined, `Side question failed: ${answer.errorMessage ?? "model error"}`);
-      finish(`btw: ${question}\n\n${assistantText(answer) || "(no answer)"}`);
+      return finish(`btw: ${question}\n\n${assistantText(answer) || "(no answer)"}`);
     } catch (error) {
-      finish(undefined, controller.signal.aborted ? "Side question cancelled." : `Side question failed: ${error instanceof Error ? error.message : String(error)}`);
+      return finish(undefined, signal.aborted ? "Side question cancelled." : `Side question failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -851,7 +878,10 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         const prompt = request.prompt;
         result = await ctx.newSession({ withSession: async next => { await next.sendUserMessage(prompt); } });
       } else if (request?.kind === "resume" && typeof request.path === "string") {
-        result = await ctx.switchSession(request.path);
+        const prompt = typeof request.prompt === "string" ? request.prompt : undefined;
+        result = await ctx.switchSession(request.path, prompt
+          ? { withSession: async next => { await next.sendUserMessage(prompt); } }
+          : undefined);
       } else if (request?.kind === "clone" && typeof request.leafId === "string") {
         result = await ctx.fork(request.leafId, { position: "at" });
       } else {
@@ -861,6 +891,189 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     } catch (error) {
       fail(`Pi session switch failed: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+
+  // ------------------------------------------------------------------
+  // Pi that Paseo runs in the background (RPC mode). Pi runs its interactive
+  // built-ins only in a terminal; sent from Paseo they would reach the model.
+  // The bridge answers them from an input handler. Under the provider shim,
+  // frames become Paseo's own command output and prompt results.
+
+  function shimFrame(ctx: ExtensionContext, frame: Record<string, unknown>): void {
+    ctx.ui.notify(`${FRAME_MARKER} ${JSON.stringify(frame)}`, "info");
+  }
+
+  function headlessOutput(ctx: ExtensionContext, text: string): void {
+    if (UNDER_SHIM) shimFrame(ctx, { op: "output", text });
+    else ctx.ui.notify(text, "info");
+  }
+
+  /** Fail the Paseo prompt `message` with `error`. */
+  function headlessFailure(ctx: ExtensionContext, message: string, error: string): void {
+    if (UNDER_SHIM) shimFrame(ctx, { op: "fail", message, error });
+    else ctx.ui.notify(error, "error");
+  }
+
+  function announceHeadlessCommands(ctx: ExtensionContext): void {
+    if (!UNDER_SHIM) return;
+    shimFrame(ctx, {
+      op: "commands",
+      commands: HEADLESS_HANDLED_COMMANDS.map(({ name, description }) => ({ name, description })),
+      capabilities: { autocompact: true },
+    });
+  }
+
+  /** Mirror a change made by a command into Paseo's cached agent state. */
+  function syncHeadlessAgent(ctx: ExtensionContext, change: "model" | "thinking" | "name"): void {
+    const agentId = process.env.PASEO_AGENT_ID?.trim();
+    if (!agentId) return;
+    if (change === "model") pushAgentConfigToPaseo("model", modelToId(ctx.model), agentId);
+    else if (change === "thinking") pushAgentConfigToPaseo("thinking", pi.getThinkingLevel() ?? null, agentId);
+    else {
+      const name = pi.getSessionName();
+      if (name) paseoSessionRequest(requestId => ({ type: "update_agent_request", agentId, name, requestId }), "session name");
+    }
+  }
+
+  async function runHeadlessBuiltin(name: BridgeHandledCommand, args: string, message: string, ctx: ExtensionContext): Promise<void> {
+    if (name !== "btw") {
+      await runSessionBuiltin(name, args, ctx, text => headlessOutput(ctx, text));
+      if (name === "model" || name === "thinking" || name === "name") {
+        if (args) syncHeadlessAgent(ctx, name);
+      }
+      return;
+    }
+    if (!args) throw new Error("Usage: /btw <question>");
+    if (headlessSideQuestion) throw new Error("A side question is already running. Wait for its answer or press Stop.");
+    const model = ctx.model;
+    if (!model) throw new Error("No model is selected.");
+    const controller = new AbortController();
+    headlessSideQuestion = controller;
+    const answer = answerSideQuestion(ctx, model, args, controller.signal).then(result => {
+      if (headlessSideQuestion === controller) headlessSideQuestion = null;
+      if ("text" in result) headlessOutput(ctx, result.text);
+      else ctx.ui.notify(result.error, "error");
+    });
+    if (!UNDER_SHIM) return answer;
+    // Answer the prompt now and finish it once the answer arrives, so a slow
+    // model does not hit Paseo's prompt deadline.
+    shimFrame(ctx, { op: "defer", message });
+    void answer.finally(() => shimFrame(ctx, { op: "done", message }));
+  }
+
+  pi.on("input", async (event, ctx) => {
+    if (ctx.mode === "tui") {
+      if (event.source !== "interactive" || !takeoverBlockedFile
+        || takeoverBlockedFile !== ctx.sessionManager.getSessionFile()) return { action: "continue" };
+      if (!event.images?.length) takeoverPendingInput = event.text;
+      ctx.ui.notify(event.images?.length
+        ? "Paseo still runs this session in the background. Send images once this terminal has taken it over."
+        : "Paseo still runs this session in the background. Your message is sent once this terminal has taken it over; /paseo-bridge takeover stops Paseo's work now.",
+      "warning");
+      return { action: "handled" };
+    }
+    if (ctx.mode !== "rpc" || event.source !== "rpc") return { action: "continue" };
+    const route = routePaseoCommand(event.text, pi.getCommands(), piBuiltins, { headless: true });
+    if (route.kind === "pass") return { action: "continue" };
+    if (route.kind === "reject") {
+      headlessFailure(ctx, event.text, route.message);
+      return { action: "handled" };
+    }
+    try {
+      if (event.images?.length) throw new Error(`/${route.name} does not accept image attachments.`);
+      await runHeadlessBuiltin(route.name, route.args, event.text, ctx);
+    } catch (error) {
+      headlessFailure(ctx, event.text, error instanceof Error ? error.message : String(error));
+    }
+    return { action: "handled" };
+  });
+
+  /** Shim requests in a background Pi: per-session auto-compaction and Stop for /btw. */
+  function runHeadlessControl(subcommand: string, args: string[], ctx: ExtensionContext): void {
+    if (subcommand === "headless-cancel") {
+      headlessSideQuestion?.abort();
+      return;
+    }
+    const [value, token] = args;
+    const reply = (frame: Record<string, unknown>) => { if (UNDER_SHIM) shimFrame(ctx, { op: "reply", token, ...frame }); };
+    const enabled = value === "on";
+    if (enabled && !nativeAutoCompactionEnabled()) {
+      reply({ ok: false, error: "Auto-compaction is off in Pi's settings. Turn it on with /settings in a terminal Pi." });
+      return;
+    }
+    autoCompactionSuppressed = !enabled;
+    if (UNDER_SHIM) shimFrame(ctx, { op: "autocompact", enabled });
+    reply({ ok: true });
+  }
+
+  // ------------------------------------------------------------------
+  // Taking a session over from a background Pi. A terminal resuming a
+  // session Paseo runs asks the shim to stop its Pi once idle, then loads what
+  // that Pi wrote and attaches to the same Paseo chat.
+
+  function startTakeover(ctx: ExtensionContext, file: string, owner: { bridgeSocket: string }, force: boolean): void {
+    takeoverBlockedFile = file;
+    if (takeover?.file === file && !takeover.socket.destroyed) {
+      if (force) takeover.socket.write(jsonLine({ type: "force" }));
+      return;
+    }
+    takeover?.socket.destroy();
+    const socket = net.connect(owner.bridgeSocket);
+    const attempt = { file, socket, released: false };
+    takeover = attempt;
+    let lastWaiting: string | undefined;
+    socket.once("connect", () => socket.write(jsonLine({ type: "takeover", force, pid: process.pid })));
+    lineReader(socket, (_line: string, msg: any) => {
+      if (takeover !== attempt) return;
+      if (msg?.type === "waiting" && msg.reason !== lastWaiting) {
+        lastWaiting = msg.reason;
+        notifyTui(`Paseo is still using this session (${msg.reason}). This terminal takes it over when Pi there is idle; /paseo-bridge takeover stops that work now.`, "warning");
+      } else if (msg?.type === "refused") {
+        notifyTui(`Paseo refused the takeover: ${msg.reason}. Retry with /paseo-bridge takeover.`, "error");
+      } else if (msg?.type === "released") {
+        attempt.released = true;
+        takeover = null;
+        socket.end();
+        completeTakeover(file, typeof msg.agentId === "string" ? msg.agentId : undefined);
+      }
+    });
+    const failed = (error?: Error) => {
+      if (attempt.released || takeover !== attempt) return;
+      takeover = null;
+      debugLog(`takeover failed: ${String(error ?? "closed")}`);
+      if (liveHeadlessOwner(file)) {
+        notifyTui("Could not take this session over from Paseo, which still runs it. Do not type here: retry with /paseo-bridge takeover, or quit this Pi.", "error");
+      } else {
+        takeoverBlockedFile = null;
+        if (!lifecycleClosed && latestCtx?.sessionManager.getSessionFile() === file) connectSession(latestCtx);
+      }
+    };
+    socket.once("error", failed);
+    socket.once("close", () => failed());
+  }
+
+  function completeTakeover(file: string, agentId: string | undefined): void {
+    const ctx = latestCtx;
+    if (lifecycleClosed || !ctx || ctx.sessionManager.getSessionFile() !== file) return;
+    if (agentId) writeAgentMapEntry(file, agentId);
+    takeoverBlockedFile = null;
+    const prompt = takeoverPendingInput;
+    takeoverPendingInput = undefined;
+    if (sessionChangedOnDisk(file, ctx.sessionManager.getEntries() as any)) {
+      // Reopen the session so this Pi has what the background Pi wrote. The
+      // reopened session attaches to the same Paseo chat when it starts.
+      notifyTui("Took this session over from Paseo; loading its latest messages.");
+      const payload = Buffer.from(JSON.stringify({ kind: "resume", path: file, ...(prompt ? { prompt } : {}) })).toString("base64url");
+      setTimeout(() => {
+        try { pi.sendUserMessage(`/paseo-bridge ${SESSION_SWITCH_SUBCOMMAND} ${payload}`, { expandPromptTemplates: true }); }
+        catch (error) { notifyTui(`Could not reload the session: ${String(error)}. Run /resume and pick it again.`, "error"); }
+      }, 0);
+      return;
+    }
+    notifyTui("Took this session over from Paseo.");
+    connectSession(ctx);
+    if (prompt) pi.sendUserMessage(prompt);
   }
 
   async function handlePrompt(cmd: any, send: (frame: unknown) => void): Promise<void> {
@@ -1166,7 +1379,8 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       const destination = runtimeRecordFile(sessionFile);
       const temporary = `${destination}.${process.pid}.tmp`;
       fs.writeFileSync(temporary, `${JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
+        kind: "terminal",
         processStartToken: processStartToken(),
         sessionFile: path.resolve(sessionFile),
         bridgeSocket: pipePathForSession(sessionFile),
@@ -1382,6 +1596,12 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       debugLog(message);
       notifyTui(message, "warning");
     });
+    const background = liveHeadlessOwner(file);
+    if (background) {
+      if (file !== currentSessionFile) stopServer();
+      startTakeover(ctx, file, background, false);
+      return "This session is open in Paseo; this terminal takes it over once Pi there is idle...";
+    }
     if (file !== currentSessionFile) {
       workspaceAwaitingTitle = undefined;
       stopServer();
@@ -1412,6 +1632,7 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       const force = environmentBoolean("PI_PASEO_BRIDGE_FORCE", false);
       if (ctx.mode !== "tui" && !force) {
         retained?.transport.close();
+        if (ctx.mode === "rpc") announceHeadlessCommands(ctx);
         if (event.reason === "reload" && ctx.hasUI) ctx.ui.notify("Pi runtime reloaded.", "info");
         return;
       }
@@ -1431,7 +1652,10 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
           registerWithPaseo(currentSessionFile, ctx.cwd);
         }
       } else {
-        if (!isAutoEnabled()) return;
+        // A session Paseo runs in the background must be taken over before
+        // this terminal writes it, even without auto-connect.
+        const file = ctx.sessionManager.getSessionFile();
+        if (!isAutoEnabled() && !(file && liveHeadlessOwner(file))) return;
         connectSession(ctx);
       }
       if (event.reason === "reload") notifyEvent("Pi runtime reloaded. Background jobs were not cancelled.");
@@ -1450,6 +1674,10 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
         : "Pi session closed before the command completed; its outcome is unknown.");
     }
     lifecycleClosed = true;
+    takeover?.socket.destroy();
+    takeover = null;
+    takeoverBlockedFile = null;
+    headlessSideQuestion?.abort();
     restoreTerminalUi?.();
     restoreTerminalUi = undefined;
     lifecycleAbortController.abort();
@@ -1618,9 +1846,11 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
       // unreadable config counts as not installed
     }
     const cli = resolvePaseoCli();
-    const session = transport
-      ? currentAgentId ? `bridged as Paseo agent ${currentAgentId}` : "bridged (not yet imported)"
-      : "not bridged";
+    const session = takeover
+      ? "taking over from the Pi that Paseo runs in the background"
+      : transport
+        ? currentAgentId ? `bridged as Paseo agent ${currentAgentId}` : "bridged (not yet imported)"
+        : "not bridged";
     return [
       "Paseo bridge status",
       `shim: ${shimInstalled ? "installed" : "not installed (run /paseo-bridge install)"}`,
@@ -1672,6 +1902,17 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
           stopServer();
           notify("Bridge disconnected. Use /paseo-bridge connect to reattach.", "info");
           return;
+        case "takeover": {
+          const file = ctx.sessionManager.getSessionFile();
+          const background = file ? liveHeadlessOwner(file) : undefined;
+          if (!file || !background) {
+            notify("Paseo does not run this session in the background; nothing to take over.", "info");
+            return;
+          }
+          startTakeover(ctx, file, background, true);
+          notify("Stopping Paseo's work in this session and taking it over...", "info");
+          return;
+        }
         case "status":
           notify(bridgeStatus(), "info");
           return;
@@ -1689,6 +1930,10 @@ export default function piPaseoBridge(pi: ExtensionAPI) {
     handler: (args, ctx) => {
       const [subcommand, payload = ""] = args.trim().split(/\s+/, 2);
       if (subcommand === SESSION_SWITCH_SUBCOMMAND) return runSessionSwitch(payload, ctx);
+      if (ctx.mode === "rpc" && (subcommand === "headless-autocompact" || subcommand === "headless-cancel")) {
+        runHeadlessControl(subcommand, args.trim().split(/\s+/).slice(1), ctx);
+        return Promise.resolve();
+      }
       return runBridgeManagement(args, ctx);
     },
   });
