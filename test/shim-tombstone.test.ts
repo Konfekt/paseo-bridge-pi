@@ -13,7 +13,7 @@ const shim = join(dirname(fileURLToPath(import.meta.url)), "..", "shim", "pi-pas
 
 async function attachedShim() {
   const root = await mkdtemp(join(tmpdir(), "pi-shim-tombstone-"));
-  const env = { ...process.env, HOME: root, XDG_RUNTIME_DIR: root };
+  const env = { ...process.env, HOME: root, XDG_RUNTIME_DIR: root, PI_PASEO_BRIDGE_HEADLESS_RESUME: "0" };
   const sessionFile = join(root, "2026_0123456789abcdef0123.jsonl");
   const previous = process.env.XDG_RUNTIME_DIR;
   process.env.XDG_RUNTIME_DIR = root;

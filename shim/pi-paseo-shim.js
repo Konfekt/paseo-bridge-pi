@@ -1,19 +1,17 @@
 #!/usr/bin/env node
 // pi-paseo-shim: configured as Paseo's `pi` provider command. If the session
 // Paseo is resuming has a live TUI process (detected via the bridge pipe the
-// pi-paseo-bridge extension opens), bridge stdio to that pipe. Otherwise spawn
-// the real pi with unchanged argv so Paseo-native behaviour is preserved.
-import net from "node:net";
+// pi-paseo-bridge extension opens), bridge stdio to that pipe. Otherwise run
+// the real pi in RPC mode in the background. Either way the session can later
+// move between the terminal and the background Pi; see session-host.js.
 import path from "node:path";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
-import { StringDecoder } from "node:string_decoder";
 import {
 	assertNoLiveRuntimeOwner,
 	matchingRuntimeRecords,
-	pipePathForSession,
 } from "./runtime-registry.js";
-const CONNECT_TIMEOUT_MS = 500;
+import { createSessionHost, terminalEndpoints, tryConnect } from "./session-host.js";
 const args = process.argv.slice(2);
 
 function extractSessionArg(argv) {
@@ -23,89 +21,6 @@ function extractSessionArg(argv) {
 			return argv[i].slice("--session=".length);
 	}
 	return null;
-}
-
-function tryConnect(pipePath) {
-	return new Promise((resolve) => {
-		const socket = net.connect(pipePath);
-		const fail = () => {
-			socket.destroy();
-			resolve(null);
-		};
-		const timer = setTimeout(fail, CONNECT_TIMEOUT_MS);
-		socket.once("error", () => {
-			clearTimeout(timer);
-			fail();
-		});
-		socket.once("connect", () => {
-			clearTimeout(timer);
-			resolve(socket);
-		});
-	});
-}
-
-function writeJsonLine(obj) {
-	process.stdout.write(`${JSON.stringify(obj)}\n`);
-}
-
-function sessionIdFromFile(sessionFile) {
-	const base = path.basename(sessionFile, ".jsonl");
-	const idx = base.lastIndexOf("_");
-	const id = idx >= 0 ? base.slice(idx + 1) : "";
-	return /^[0-9a-f-]{16,}$/i.test(id) ? id : null;
-}
-
-function bridge(socket, sessionFile) {
-	socket.setNoDelay?.(true);
-	let tombstone = false;
-	process.stdin.pipe(socket);
-	socket.pipe(process.stdout);
-	process.stdin.on("end", () => {
-		if (tombstone) process.exit(0);
-		else socket.end();
-	});
-	// When the terminal pi dies, stay alive and answer RPC commands with a
-	// helpful error instead of exiting - a dead child would make Paseo show a
-	// bare "Pi RPC session is closed" with no way forward.
-	const enterTombstone = () => {
-		if (tombstone) return;
-		tombstone = true;
-		const resumeRef = sessionIdFromFile(sessionFile) ?? sessionFile;
-		const message = `The terminal pi session has ended. Resume it from the project directory with: pi --session ${resumeRef}.`;
-		process.stdin.unpipe(socket);
-		// Fails any in-flight turn: Paseo treats process_exit as a fatal runtime event.
-		writeJsonLine({ type: "process_exit", error: message });
-		const decoder = new StringDecoder("utf8");
-		let buffer = "";
-		process.stdin.on("data", (chunk) => {
-			buffer += decoder.write(chunk);
-			for (;;) {
-				const newline = buffer.indexOf("\n");
-				if (newline === -1) break;
-				const line = buffer.slice(0, newline).replace(/\r$/, "");
-				buffer = buffer.slice(newline + 1);
-				if (!line.trim()) continue;
-				let parsed;
-				try {
-					parsed = JSON.parse(line);
-				} catch {
-					continue;
-				}
-				if (parsed && typeof parsed === "object" && parsed.id != null) {
-					writeJsonLine({
-						type: "response",
-						id: parsed.id,
-						command: typeof parsed.type === "string" ? parsed.type : "unknown",
-						success: false,
-						error: message,
-					});
-				}
-			}
-		});
-		process.stdin.resume();
-	};
-	socket.on("close", enterTombstone);
-	socket.on("error", enterTombstone);
 }
 
 function resolveRealPi() {
@@ -158,7 +73,7 @@ function resolveRealPi() {
 	return null;
 }
 
-/** Native RPC sessions belong to the Pi child, never a bridge-managed TUI. */
+/** Paseo's metadata helpers run a plain Pi child, never a shared session. */
 function passthrough() {
 	const real = resolveRealPi();
 	if (!real)
@@ -200,6 +115,16 @@ function passthrough() {
 	});
 }
 
+function spawnPi(childArgs, env) {
+	const real = resolveRealPi();
+	if (!real)
+		throw new Error("Could not locate the real Pi executable. Set PI_REAL_BIN to its executable or cli.js.");
+	return spawn(real.command, [...real.prefix, ...childArgs], {
+		stdio: ["pipe", "pipe", "pipe"],
+		env,
+	});
+}
+
 async function main() {
 	// Paseo marks internal metadata generation with --no-session. Check before
 	// attachment lookup so a helper cannot connect to an interactive session.
@@ -212,29 +137,27 @@ async function main() {
 	const runtimeRecords = matchingRuntimeRecords(sessionFile, assignedAgentId);
 	if (!sessionFile && runtimeRecords.length)
 		sessionFile = runtimeRecords[0].sessionFile;
+	let terminal = null;
 	if (sessionFile) {
-		const candidatePaths = [
-			...runtimeRecords
-				.filter((record) => typeof record.bridgeSocket === "string")
-				.map((record) => record.bridgeSocket),
-			pipePathForSession(sessionFile),
-		];
-		for (const pipePath of [...new Set(candidatePaths)]) {
-			const socket = await tryConnect(pipePath);
-			if (socket) {
-				bridge(socket, sessionFile);
-				return;
-			}
+		for (const endpoint of terminalEndpoints(sessionFile, runtimeRecords)) {
+			terminal = await tryConnect(endpoint);
+			if (terminal) break;
 		}
 		// A failed connection can mean startup/reload, permissions, or a live
-		// terminal runtime whose bridge is down. Never unlink another owner's
-		// endpoint or mistake transport failure for permission to spawn a writer.
-		assertNoLiveRuntimeOwner(sessionFile, {
-			agentId: assignedAgentId,
-			records: runtimeRecords,
-		});
+		// runtime (terminal or background) whose endpoint is down. Never unlink
+		// another owner's endpoint or mistake transport failure for permission
+		// to spawn a writer.
+		if (!terminal)
+			assertNoLiveRuntimeOwner(sessionFile, {
+				agentId: assignedAgentId,
+				records: runtimeRecords,
+			});
 	}
-	passthrough();
+	if (!terminal && !resolveRealPi())
+		throw new Error("Could not locate the real Pi executable. Set PI_REAL_BIN to its executable or cli.js.");
+	const host = createSessionHost({ args, spawnPi });
+	if (terminal) host.attachTerminal(terminal, sessionFile);
+	else host.startChild(args);
 }
 
 main().catch((error) => {

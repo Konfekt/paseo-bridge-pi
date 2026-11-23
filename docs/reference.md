@@ -1,6 +1,14 @@
 # Bridge reference
 
-The [installation guide](../README.md#install) covers the Pi package and provider registration. The bridge connects one terminal Pi session to Paseo through a private controller socket or named pipe. Pi remains the session writer; the shim forwards native RPC between Paseo and that controller.
+The [installation guide](../README.md#install) covers the Pi package and provider registration. The bridge connects one terminal Pi session to Paseo through a private controller socket or named pipe. Pi remains the session writer; the shim forwards native RPC between Paseo and that controller. A chat started in Paseo runs Pi in the background instead, and the same session can move between that background Pi and a terminal Pi in either direction without closing the chat.
+
+```text
+chat started in Paseo            pi --session <id> in a terminal
+  Paseo <-> shim <-> background Pi  ==takeover==>  Paseo <-> shim <-> terminal Pi
+                     (pi --mode rpc)  <==terminal closes==
+```
+
+Exactly one Pi writes a session at a time. The shim publishes the background Pi in the runtime registry with a private handoff socket; a terminal Pi resuming that session asks it to stop once idle before writing anything.
 
 ## Session lifecycle
 
@@ -12,13 +20,21 @@ The [installation guide](../README.md#install) covers the Pi package and provide
 | Change model or thinking in Paseo | Apply the native Pi setting. Reconnection preserves the existing thinking level. |
 | Disconnect the bridge | Leave Pi and its session running. |
 | Paseo restarts while Pi remains open | Reconnect the existing attachment with bounded retries. |
-| Terminal Pi exits | Report the resume command in Paseo; do not silently create a replacement writer for that attachment. |
+| Terminal Pi exits, or switches to another session with `/new`, `/resume` or `/clone` | Once its runtime record is gone, continue the session in a background Pi in the same Paseo chat and say so there. A turn the terminal was running ends; unanswered requests fail with an explanation. |
+| Terminal Pi disconnects with `/paseo-bridge disconnect` but keeps running | Report in Paseo that the terminal still owns the session; do not start a second writer. |
 | Resume the session in a terminal | Attach to the existing Paseo agent when it can be identified. |
-| Paseo starts a session without a live terminal owner | Run ordinary Pi RPC through the shim. |
+| Paseo starts a session without a live terminal owner | Run Pi in RPC mode in the background through the shim; the bridge's commands work there (see [Pi commands from Paseo](#pi-commands-from-paseo)). |
+| Resume in a terminal a session that a background Pi runs | Take it over: the background Pi finishes its current turn, stops, and the terminal attaches to the same Paseo chat. Typing in the terminal waits until then; `/paseo-bridge takeover` stops the background turn instead of waiting. |
 
 Paseo refuses to stop or replace an agent whose provider does not answer Stop within two seconds, and shows "active run cancellation was not acknowledged". Pi stops a turn only after its running tool exits, which can take longer, for example when a shell command keeps running after Stop. The bridge therefore answers Paseo after at most 1.5 seconds and, if Pi is still stopping, shows "Pi is still stopping the previous turn" in Paseo. The stopped turn's remaining events stay out of Paseo, and the next message from Paseo starts once Pi is idle. If Pi is still busy after 20 seconds, that message fails with an explanation; press Escape in the Pi terminal or wait for the tool, then send it again.
 
-The shim refuses to start another Pi writer when a matching recorded terminal owner may still be alive, even if its endpoint is unavailable. This does not prevent independently launched Pi processes from opening the same file. Do not run a second terminal Pi on a session that Paseo already owns through ordinary RPC.
+The shim refuses to start another Pi writer when a matching recorded owner, terminal or background, may still be alive, even if its endpoint is unavailable. This does not prevent independently launched Pi processes from opening the same file: a terminal Pi without this bridge, or with `PI_PASEO_BRIDGE=off`, does not take a background session over and must not be run on a session a Paseo chat is using.
+
+### Taking a session over from Paseo
+
+A terminal Pi that resumes a session finds the background Pi's record, connects to its handoff socket, and requests the session. The shim waits until the background Pi is idle (no turn, compaction, queued message or unanswered Paseo prompt), holds Paseo's next messages, stops that Pi, and removes its record. The terminal Pi then compares the session file with what it loaded at startup. If the background Pi wrote more meanwhile, the terminal reopens the session, as `/resume` does, so it continues from the latest entry. It then attaches like any terminal session, and the held messages reach it. Paseo keeps one chat for the session throughout.
+
+While the takeover is pending, the terminal answers typed messages with a notice and sends the last one once it owns the session; images must be sent again. If the terminal does not attach within 30 seconds, the shim resumes the background Pi and reports it in Paseo. Takeover also runs with auto-connect off, because it is the only safe way for the terminal to write the session.
 
 Session names remain native Pi data. The bridge makes no separate model request to generate titles.
 
@@ -31,6 +47,7 @@ Session names remain native Pi data. The bridge makes no separate model request 
 | `/paseo-bridge auto on` / `off` | Save the auto-connect preference; default is on. |
 | `/paseo-bridge connect` | Start attachment work for the current terminal session. |
 | `/paseo-bridge disconnect` | Request bridge teardown without stopping Pi. |
+| `/paseo-bridge takeover` | Take this session over from a background Pi now, stopping its current turn instead of waiting for it. |
 | `/paseo-bridge status` | Show configuration, the Paseo CLI in use, auto-connect, session state, and the Pi and Paseo versions. |
 | `/remote-reload` | Reload extensions and resources while idle. |
 
@@ -58,6 +75,8 @@ Pi runs its built-in commands, such as `/model` or `/session`, only in its termi
 | `/resume [number\|id\|name]` | List recent sessions of this folder, or switch the terminal to one. |
 | `/clone` | Duplicate the session at its current position into a new session in the terminal. |
 | `/compact`, `/autocompact` | Run by Paseo. `/autocompact` turns Pi's threshold compaction off or on for this session only; Pi still compacts when the context overflows, and Pi's settings stay unchanged. |
+
+These commands also work in a chat started in Paseo, which runs Pi in the background. There the bridge answers them from Pi's input handler, and the shim turns its replies into the same chat output and errors, so the chat behaves as for a terminal session. `/new`, `/resume` and `/clone` are refused there, because they replace the session and Paseo cannot follow that in a chat it started; take the session over in a terminal to use them. `/autocompact` applies to the session only, as in a terminal: Pi's own RPC command would change the global setting in Pi's `settings.json`.
 
 Notes:
 - Answers appear as assistant messages, and refusals as errors, without a model turn.
@@ -127,7 +146,9 @@ Local TCP and socket connections import, inspect and reattach through Paseo's We
 | `PI_PASEO_BRIDGE_DEFAULT_AUTO_CONNECT=0` | Disable auto-connect unless overridden by saved preferences. |
 | `PI_PASEO_BRIDGE_NO_IMPORT=1` | Expose the controller endpoint without automatically importing the session. |
 | `PI_PASEO_BRIDGE_IMPORT_SESSIONS=0` | Disable automatic import. |
-| `PI_PASEO_BRIDGE_DEBUG=1` | Write bridge debug logs. |
+| `PI_PASEO_BRIDGE_DEBUG=1` | Write bridge debug logs, and the shim's RPC traffic to `~/.pi/paseo-bridge/shim-debug.log`. |
+| `PI_PASEO_BRIDGE_HEADLESS_RESUME=0` | When the terminal Pi closes, end the Paseo chat with the resume command instead of continuing it in a background Pi. |
+| `PI_PASEO_BRIDGE_TAKEOVER_WAIT_MS` | How long the shim waits for a terminal to attach after a takeover before resuming the background Pi; default 30000. |
 | `PI_PASEO_BRIDGE_NOTIFICATIONS=0` | Keep extension notifications in the terminal instead of also showing them in Paseo. |
 | `PI_PASEO_BRIDGE_FORCE=1` | Permit activation outside terminal UI mode for tests. |
 | `PASEO_CLI` | Select the Paseo CLI executable. |
@@ -189,6 +210,8 @@ BRIDGE_NATIVE_PI="$(command -v pi)" TEST_PI_BIN="$(command -v pi)" \
   BRIDGE_STOCK_PASEO_PI_PROVIDER=/path/to/paseo/server/dist/server/server/agent/providers/pi/agent.js \
   npm run test:native
 ```
+
+`test/session-host.test.ts` checks the shim against a scripted Pi: command frames, deferred `/btw`, per-session `/autocompact`, takeover once idle, continuation after the terminal closes, and refusal while a disconnected terminal still owns the session. `test/headless-commands.test.ts` runs the pinned Pi in RPC mode through the shim. The stock-daemon test "a chat started in Paseo moves to a terminal Pi and back" creates a chat in Paseo, runs the bridge's commands in it, takes it over with a terminal Pi, reaches that Pi from the same chat, closes the terminal, and continues in Paseo.
 
 The stock-daemon test runs a published Paseo server of version 0.13.0 or newer in-process, with the CLI of the same version. It uses the real Pi SDK extension runner with a controlled terminal renderer, ordinary `ctx.ui` calls, and the production shim. It checks import, a separate workspace for each session in one folder, deferred import of a new session until Pi saves it, reattachment after a history-only read of an unloaded agent, app and terminal choices, cancellation, Stop and replacement of a turn whose tool ignores cancellation, timeout, reload, pending-question cleanup, and callback delivery after the actual controller response. It uses the development Pi SDK by default; set `BRIDGE_PI_SDK` to another installed package's absolute `dist/index.js` to check that SDK. Tests requiring an executable or provider path are skipped when that environment variable is absent.
 

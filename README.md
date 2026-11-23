@@ -26,6 +26,8 @@ paseo restart
 
 Start a terminal Pi session. Auto-connect is enabled by default; `/paseo-bridge status` reports the connection state. No additional Paseo plugin, custom application build, or package compiler is required.
 
+A chat is enough to start from the app: tap New agent, pick the folder and choose Pi. Pi then runs in the background on the daemon host. To continue at the computer, run `pi --session <id>` in that folder; the terminal takes the session over once Pi in the background is idle, and the same chat follows it. Closing the terminal hands the session back to a background Pi, so the chat keeps working. Only one Pi writes the session at any time.
+
 Each session appears in its own Paseo workspace once Pi saves its first message. An empty start screen has no session file yet. Local TCP and Unix-socket daemons are discovered automatically, even when `paseo` is absent from the terminal's `PATH`; the CLI remains necessary for relay or SSH targets. The bridge retries while the daemon starts and reuses existing imports after a terminal restart.
 
 After updating or moving the bridge checkout, register its current location in Pi, replacing the old package entry if the path changed. In each already-open idle Pi session, run `/reload` first, then `/paseo-bridge install`, so installation uses the updated extension. Apply the configuration with `paseo reload` while idle, or `paseo restart` to replace running shim processes. Reinstallation refreshes a previous bridge shim path while preserving unrelated provider settings.
@@ -38,11 +40,12 @@ Pi's `/reload` updates resources, including extensions; it does not replace the 
 | --- | --- |
 | `/paseo-bridge connect` | Attach the current session. |
 | `/paseo-bridge disconnect` | Detach without stopping Pi. |
+| `/paseo-bridge takeover` | Take over a session Paseo runs in the background now, stopping its turn. |
 | `/paseo-bridge auto on` / `off` | Set auto-connect for subsequent sessions. |
 | `/paseo-bridge status` | Inspect configuration and connection state. |
 | `/remote-reload` | Reload Pi resources while idle, including from Paseo. |
 
-From Paseo, `/name`, `/model`, `/thinking`, `/session`, `/export`, `/btw`, `/new`, `/resume`, `/clone` and `/autocompact` work as in the terminal; other Pi built-ins are refused with a message instead of reaching the model. See [Pi commands from Paseo](docs/reference.md#pi-commands-from-paseo).
+From Paseo, `/name`, `/model`, `/thinking`, `/session`, `/export`, `/btw`, `/new`, `/resume`, `/clone` and `/autocompact` work as in the terminal; other Pi built-ins are refused with a message instead of reaching the model. In a chat started in Paseo they work too, except `/new`, `/resume` and `/clone`, which need the session in a terminal. See [Pi commands from Paseo](docs/reference.md#pi-commands-from-paseo) and [taking a session over](docs/reference.md#taking-a-session-over-from-paseo).
 
 Paseo uses its native chat and question interfaces. Attached terminal sessions mirror ordinary Pi select, input, and confirmation dialogs. Respond in either interface; the result returns to the original Pi callback once. Extensions using these ordinary dialogs need no bridge-specific integration; custom terminal widgets remain local. See the [reference](docs/reference.md) for lifecycle limits.
 
